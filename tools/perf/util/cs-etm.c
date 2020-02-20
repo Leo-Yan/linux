@@ -17,6 +17,7 @@
 #include <stdlib.h>
 
 #include "auxtrace.h"
+#include "callchain.h"
 #include "color.h"
 #include "cs-etm.h"
 #include "cs-etm-decoder/cs-etm-decoder.h"
@@ -88,6 +89,7 @@ struct cs_etm_traceid_queue {
 	union perf_event *event_buf;
 	struct thread *thread;
 	struct thread *prev_packet_thread;
+	struct ip_callchain *chain;
 	ocsd_ex_level prev_packet_el;
 	ocsd_ex_level el;
 	ocsd_ex_level dec_el;
@@ -96,6 +98,7 @@ struct cs_etm_traceid_queue {
 	struct cs_etm_packet *prev_packet;
 	struct cs_etm_packet *packet;
 	struct cs_etm_packet_queue packet_queue;
+	u64 kernel_start;
 };
 
 enum cs_etm_format {
@@ -629,6 +632,16 @@ static int cs_etm__init_traceid_queue(struct cs_etm_queue *etmq,
 	if (!tidq->prev_packet)
 		goto out_free;
 
+	if (etm->synth_opts.callchain) {
+		size_t sz = sizeof(struct ip_callchain);
+
+		/* Add 1 to callchain_sz for callchain context */
+		sz += (etm->synth_opts.callchain_sz + 1) * sizeof(u64);
+		tidq->chain = zalloc(sz);
+		if (!tidq->chain)
+			goto out_free;
+	}
+
 	if (etm->synth_opts.last_branch) {
 		size_t sz = sizeof(struct branch_stack);
 
@@ -651,6 +664,7 @@ static int cs_etm__init_traceid_queue(struct cs_etm_queue *etmq,
 out_free:
 	zfree(&tidq->last_branch_rb);
 	zfree(&tidq->last_branch);
+	zfree(&tidq->chain);
 	zfree(&tidq->prev_packet);
 	zfree(&tidq->packet);
 out:
@@ -944,6 +958,7 @@ static void cs_etm__free_traceid_queues(struct cs_etm_queue *etmq)
 		zfree(&tidq->event_buf);
 		zfree(&tidq->last_branch);
 		zfree(&tidq->last_branch_rb);
+		zfree(&tidq->chain);
 		zfree(&tidq->prev_packet);
 		zfree(&tidq->packet);
 		zfree(&tidq);
@@ -1525,6 +1540,7 @@ static void cs_etm__set_thread(struct cs_etm_queue *etmq,
 		tidq->thread = machine__idle_thread(machine);
 
 	tidq->el = el;
+	tidq->kernel_start = machine__kernel_start(cs_etm__get_machine(etmq, el));
 }
 
 int cs_etm__etmq_set_tid_el(struct cs_etm_queue *etmq, pid_t tid,
@@ -1610,7 +1626,7 @@ static void cs_etm__add_stack_event(struct cs_etm_queue *etmq,
 	if (!tidq->prev_packet->last_instr_taken_branch)
 		return;
 
-	if (etmq->etm->synth_opts.thread_stack) {
+	if (etmq->etm->synth_opts.callchain || etmq->etm->synth_opts.thread_stack) {
 		from = cs_etm__last_executed_instr(tidq->prev_packet);
 		to = cs_etm__first_executed_instr(tidq->packet);
 
@@ -1668,6 +1684,14 @@ static int cs_etm__synth_instruction_sample(struct cs_etm_queue *etmq,
 	sample.cpumode = event->sample.header.misc;
 
 	cs_etm__copy_insn(etmq, tidq->trace_chan_id, tidq->packet, &sample);
+
+	if (etm->synth_opts.callchain) {
+		thread_stack__sample(tidq->thread, tidq->packet->cpu,
+				     tidq->chain,
+				     etm->synth_opts.callchain_sz + 1,
+				     sample.ip, tidq->kernel_start);
+		sample.callchain = tidq->chain;
+	}
 
 	if (etm->synth_opts.last_branch)
 		sample.branch_stack = tidq->last_branch;
@@ -1835,6 +1859,9 @@ static int cs_etm__synth_events(struct cs_etm_auxtrace *etm,
 		attr.branch_sample_type |= PERF_SAMPLE_BRANCH_HW_INDEX;
 	}
 
+	if (etm->synth_opts.callchain)
+		attr.sample_type |= PERF_SAMPLE_CALLCHAIN;
+
 	if (etm->synth_opts.instructions) {
 		attr.config = PERF_COUNT_HW_INSTRUCTIONS;
 		attr.sample_period = etm->synth_opts.period;
@@ -1872,6 +1899,11 @@ static int cs_etm__sample(struct cs_etm_queue *etmq,
 	    tidq->prev_packet->last_instr_taken_branch)
 		cs_etm__update_last_branch_rb(etmq, tidq);
 
+	/*
+	 * The stack event must be processed prior to synthesizing
+	 * instruction sample; this can ensure the instruction samples
+	 * to generate correct thread stack.
+	 */
 	cs_etm__add_stack_event(etmq, tidq);
 
 	if (etm->synth_opts.branches) {
@@ -3556,16 +3588,23 @@ int cs_etm__process_auxtrace_info_full(union perf_event *event,
 	} else {
 		itrace_synth_opts__set_default(&etm->synth_opts,
 				session->itrace_synth_opts->default_no_sample);
-		etm->synth_opts.callchain = false;
 		etm->synth_opts.thread_stack =
 			session->itrace_synth_opts->thread_stack;
+	}
 
-		if (etm->synth_opts.calls)
-			etm->branches_filter |= PERF_IP_FLAG_CALL |
-						PERF_IP_FLAG_TRACE_END;
-		if (etm->synth_opts.returns)
-			etm->branches_filter |= PERF_IP_FLAG_RETURN |
-						PERF_IP_FLAG_TRACE_BEGIN;
+	if (etm->synth_opts.calls)
+		etm->branches_filter |= PERF_IP_FLAG_CALL |
+					PERF_IP_FLAG_TRACE_END;
+	if (etm->synth_opts.returns)
+		etm->branches_filter |= PERF_IP_FLAG_RETURN |
+					PERF_IP_FLAG_TRACE_BEGIN;
+
+	if (etm->synth_opts.callchain && !symbol_conf.use_callchain) {
+		symbol_conf.use_callchain = true;
+		if (callchain_register_param(&callchain_param) < 0) {
+			symbol_conf.use_callchain = false;
+			etm->synth_opts.callchain = false;
+		}
 	}
 
 	etm->session = session;
