@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+#include "arm_arch_timer.h"
 #include "auxtrace.h"
 #include "color.h"
 #include "debug.h"
@@ -44,6 +45,7 @@ struct arm_spe {
 	struct perf_session		*session;
 	struct machine			*machine;
 	u32				pmu_type;
+	struct perf_arch_timer_conversion tc;
 
 	u8				timeless_decoding;
 	u8				data_queued;
@@ -229,7 +231,8 @@ static void arm_spe_prep_sample(struct arm_spe *spe,
 	struct arm_spe_record *record = &speq->decoder->record;
 
 	if (!spe->timeless_decoding)
-		sample->time = speq->timestamp;
+		sample->time = arch_timer_cyc_to_perf_time(speq->timestamp,
+							   &spe->tc);
 
 	sample->ip = record->from_ip;
 	sample->cpumode = arm_spe_cpumode(spe, sample->ip);
@@ -350,6 +353,7 @@ static int arm_spe_sample(struct arm_spe_queue *speq)
 static int arm_spe_run_decoder(struct arm_spe_queue *speq, u64 *timestamp)
 {
 	struct arm_spe *spe = speq->spe;
+	struct arm_spe_record *record;
 	int ret;
 
 	if (!spe->kernel_start)
@@ -368,6 +372,9 @@ static int arm_spe_run_decoder(struct arm_spe_queue *speq, u64 *timestamp)
 		 */
 		if (ret < 0)
 			continue;
+
+		record = &speq->decoder->record;
+		speq->timestamp = record->timestamp;
 
 		ret = arm_spe_sample(speq);
 		if (ret)
@@ -585,7 +592,7 @@ static int arm_spe_process_event(struct perf_session *session,
 	}
 
 	if (sample->time && (sample->time != (u64) -1))
-		timestamp = sample->time;
+		timestamp = perf_time_to_arch_timer_cyc(sample->time, &spe->tc);
 	else
 		timestamp = 0;
 
@@ -934,6 +941,11 @@ int arm_spe_process_auxtrace_info(union perf_event *event,
 	spe->machine = &session->machines.host; /* No kvm support */
 	spe->auxtrace_type = auxtrace_info->type;
 	spe->pmu_type = auxtrace_info->priv[ARM_SPE_PMU_TYPE];
+	spe->tc.time_shift = auxtrace_info->priv[ARM_SPE_TIME_SHIFT];
+	spe->tc.time_mult = auxtrace_info->priv[ARM_SPE_TIME_MULT];
+	spe->tc.time_zero = auxtrace_info->priv[ARM_SPE_TIME_ZERO];
+	spe->tc.time_cycles = auxtrace_info->priv[ARM_SPE_TIME_CYCLES];
+	spe->tc.time_mask = auxtrace_info->priv[ARM_SPE_TIME_MASK];
 
 	spe->timeless_decoding = arm_spe__is_timeless_decoding(spe);
 	spe->auxtrace.process_event = arm_spe_process_event;
