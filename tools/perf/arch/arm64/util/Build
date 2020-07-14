@@ -1,3 +1,4 @@
+perf-y += arch_timer.o
 perf-y += header.o
 perf-y += machine.o
 perf-y += perf_regs.o
