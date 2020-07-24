@@ -140,6 +140,12 @@ struct arm_spe_pkt {
 #define SPE_OP_PKT_LDST_SUBCLASS_SVE_MASK	(0xa)
 #define SPE_OP_PKT_LDST_SUBCLASS_SVE		(0x8)
 
+#define SPE_OP_PKT_SVE_SG			BIT(7)
+#define SPE_OP_PKT_SVE_EVL_MASK			(0x70)
+#define SPE_OP_PKT_SVE_EVL_SHIFT		(4)
+#define SPE_OP_PKT_SVE_PRED			BIT(2)
+#define SPE_OP_PKT_SVE_FP			BIT(1)
+
 #define SPE_OP_PKT_AR				BIT(4)
 #define SPE_OP_PKT_EXCL				BIT(3)
 #define SPE_OP_PKT_AT				BIT(2)

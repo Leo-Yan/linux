@@ -346,14 +346,77 @@ int arm_spe_pkt_desc(const struct arm_spe_pkt *packet, char *buf,
 				blen -= ret;
 			}
 		}
+
+		if (idx > 2) {
+			if (payload & SPE_EVT_PKT_ALIGNMENT) {
+				ret = snprintf(buf, buf_len, " ALIGNMENT");
+				if (ret < 0)
+					return ret;
+				buf += ret;
+				blen -= ret;
+			}
+			if (payload & SPE_EVT_PKT_SVE_PARTIAL_PREDICATE) {
+				ret = snprintf(buf, buf_len, " SVE-PARTIAL-PRED");
+				if (ret < 0)
+					return ret;
+				buf += ret;
+				blen -= ret;
+			}
+			if (payload & SPE_EVT_PKT_SVE_EMPTY_PREDICATE) {
+				ret = snprintf(buf, buf_len, " SVE-EMPTY-PRED");
+				if (ret < 0)
+					return ret;
+				buf += ret;
+				blen -= ret;
+			}
+		}
+
 		return buf_len - blen;
 	}
 	case ARM_SPE_OP_TYPE:
 		switch (idx) {
 		case SPE_OP_PKT_HDR_CLASS_OTHER:
-			return snprintf(buf, buf_len, "%s",
-					payload & SPE_OP_PKT_OTHER_SUBCLASS_COND ?
-					"COND-SELECT" : "INSN-OTHER");
+			blen = buf_len;
+
+			if ((payload & SPE_OP_PKT_OTHER_SVE_SUBCLASS_MASK) ==
+					SPE_OP_PKT_OTHER_SUBCLASS_SVG_OP) {
+				ret = snprintf(buf, buf_len, "SVE-OTHER");
+				buf += ret;
+				blen -= ret;
+
+				/* Effective Venctor Length */
+				ret = snprintf(buf, buf_len, " EVL %d",
+					32 << ((payload & SPE_OP_PKT_SVE_EVL_MASK) >>
+						SPE_OP_PKT_SVE_EVL_SHIFT));
+				buf += ret;
+				blen -= ret;
+
+				if (payload & SPE_OP_PKT_SVE_FP) {
+					ret = snprintf(buf, buf_len, " FP");
+					buf += ret;
+					blen -= ret;
+				}
+				if (payload & SPE_OP_PKT_SVE_PRED) {
+					ret = snprintf(buf, buf_len, " PRED");
+					buf += ret;
+					blen -= ret;
+				}
+			} else {
+				ret = snprintf(buf, buf_len, "OTHER");
+				buf += ret;
+				blen -= ret;
+
+				ret = snprintf(buf, buf_len, " %s",
+					       payload & SPE_OP_PKT_OTHER_SUBCLASS_COND ?
+					       "COND-SELECT" : "UNCOND");
+				buf += ret;
+				blen -= ret;
+			}
+
+			if (ret < 0)
+				return ret;
+			return buf_len - blen;
+
 		case SPE_OP_PKT_HDR_CLASS_LD_ST_ATOMIC:
 			blen = buf_len;
 
@@ -416,6 +479,32 @@ int arm_spe_pkt_desc(const struct arm_spe_pkt *packet, char *buf,
 					return ret;
 				buf += ret;
 				blen -= ret;
+			} else if ((payload & SPE_OP_PKT_LDST_SUBCLASS_SVE_MASK) ==
+					SPE_OP_PKT_LDST_SUBCLASS_SVE) {
+				/* Effective Venctor Length */
+				ret = snprintf(buf, buf_len, " EVL %d",
+					32 << ((payload & SPE_OP_PKT_SVE_EVL_MASK) >>
+						SPE_OP_PKT_SVE_EVL_SHIFT));
+				if (ret < 0)
+					return ret;
+
+				buf += ret;
+				blen -= ret;
+
+				if (payload & SPE_OP_PKT_SVE_PRED) {
+					ret = snprintf(buf, buf_len, " PRED");
+					if (ret < 0)
+						return ret;
+					buf += ret;
+					blen -= ret;
+				}
+				if (payload & SPE_OP_PKT_SVE_SG) {
+					ret = snprintf(buf, buf_len, " SG");
+					if (ret < 0)
+						return ret;
+					buf += ret;
+					blen -= ret;
+				}
 			}
 			return buf_len - blen;
 		case SPE_OP_PKT_HDR_CLASS_BR_ERET:
