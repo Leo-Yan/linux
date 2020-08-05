@@ -172,6 +172,17 @@ static int arm_spe_read_record(struct arm_spe_decoder *decoder)
 		case ARM_SPE_CONTEXT:
 			break;
 		case ARM_SPE_OP_TYPE:
+			/*
+			 * When operation type packet header's class equals 1,
+			 * the payload's least significant bit (LSB) indicates
+			 * the operation type: load/swap or store.
+			 */
+			if (idx == 1) {
+				if (payload & 0x1)
+					decoder->record.op = ARM_SPE_ST;
+				else
+					decoder->record.op = ARM_SPE_LD;
+			}
 			break;
 		case ARM_SPE_EVENTS:
 			if (payload & BIT(EV_L1D_REFILL))
