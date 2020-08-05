@@ -262,7 +262,7 @@ arm_spe_deliver_synth_event(struct arm_spe *spe,
 }
 
 static int arm_spe__synth_mem_sample(struct arm_spe_queue *speq,
-				     u64 spe_events_id)
+				     u64 spe_events_id, u64 data_src)
 {
 	struct arm_spe *spe = speq->spe;
 	struct arm_spe_record *record = &speq->decoder->record;
@@ -275,6 +275,7 @@ static int arm_spe__synth_mem_sample(struct arm_spe_queue *speq,
 	sample.stream_id = spe_events_id;
 	sample.addr = record->addr;
 	sample.phys_addr = record->phys_addr;
+	sample.data_src = data_src;
 
 	return arm_spe_deliver_synth_event(spe, speq, event, &sample);
 }
@@ -296,21 +297,74 @@ static int arm_spe__synth_branch_sample(struct arm_spe_queue *speq,
 	return arm_spe_deliver_synth_event(spe, speq, event, &sample);
 }
 
+static u64 arm_spe__synth_data_source(const struct arm_spe_record *record,
+				      int type)
+{
+	union perf_mem_data_src	data_src = { 0 };
+
+	if (record->op == ARM_SPE_LD)
+		data_src.mem_op = PERF_MEM_OP_LOAD;
+	else
+		data_src.mem_op = PERF_MEM_OP_STORE;
+
+	switch (type) {
+	case ARM_SPE_L1D_MISS:
+		data_src.mem_lvl_num = PERF_MEM_LVLNUM_L1;
+		data_src.mem_lvl = PERF_MEM_LVL_MISS | PERF_MEM_LVL_L1;
+		break;
+	case ARM_SPE_L1D_ACCESS:
+		data_src.mem_lvl_num = PERF_MEM_LVLNUM_L1;
+		data_src.mem_lvl = PERF_MEM_LVL_HIT | PERF_MEM_LVL_L1;
+		break;
+	case ARM_SPE_LLC_MISS:
+		data_src.mem_lvl_num = PERF_MEM_LVLNUM_L3;
+		data_src.mem_lvl = PERF_MEM_LVL_MISS | PERF_MEM_LVL_L3;
+		break;
+	case ARM_SPE_LLC_ACCESS:
+		data_src.mem_lvl_num = PERF_MEM_LVLNUM_L3;
+		data_src.mem_lvl = PERF_MEM_LVL_HIT | PERF_MEM_LVL_L3;
+		break;
+	case ARM_SPE_TLB_MISS:
+		data_src.mem_dtlb = PERF_MEM_TLB_WK | PERF_MEM_TLB_MISS;
+		break;
+	case ARM_SPE_TLB_ACCESS:
+		data_src.mem_dtlb = PERF_MEM_TLB_WK | PERF_MEM_TLB_HIT;
+		break;
+	case ARM_SPE_REMOTE_ACCESS:
+		data_src.mem_lvl_num = PERF_MEM_LVLNUM_ANY_CACHE;
+		data_src.mem_lvl = PERF_MEM_LVL_HIT | PERF_MEM_LVL_REM_CCE1;
+		break;
+	default:
+		break;
+	}
+
+	return data_src.val;
+}
+
 static int arm_spe_sample(struct arm_spe_queue *speq)
 {
 	const struct arm_spe_record *record = &speq->decoder->record;
 	struct arm_spe *spe = speq->spe;
+	u64 data_src;
 	int err;
 
 	if (spe->sample_flc) {
 		if (record->type & ARM_SPE_L1D_MISS) {
-			err = arm_spe__synth_mem_sample(speq, spe->l1d_miss_id);
+			data_src = arm_spe__synth_data_source(record,
+							      ARM_SPE_L1D_MISS);
+
+			err = arm_spe__synth_mem_sample(speq, spe->l1d_miss_id,
+							data_src);
 			if (err)
 				return err;
 		}
 
 		if (record->type & ARM_SPE_L1D_ACCESS) {
-			err = arm_spe__synth_mem_sample(speq, spe->l1d_access_id);
+			data_src = arm_spe__synth_data_source(record,
+							      ARM_SPE_L1D_ACCESS);
+
+			err = arm_spe__synth_mem_sample(speq, spe->l1d_access_id,
+							data_src);
 			if (err)
 				return err;
 		}
@@ -318,13 +372,21 @@ static int arm_spe_sample(struct arm_spe_queue *speq)
 
 	if (spe->sample_llc) {
 		if (record->type & ARM_SPE_LLC_MISS) {
-			err = arm_spe__synth_mem_sample(speq, spe->llc_miss_id);
+			data_src = arm_spe__synth_data_source(record,
+							      ARM_SPE_LLC_MISS);
+
+			err = arm_spe__synth_mem_sample(speq, spe->llc_miss_id,
+							data_src);
 			if (err)
 				return err;
 		}
 
 		if (record->type & ARM_SPE_LLC_ACCESS) {
-			err = arm_spe__synth_mem_sample(speq, spe->llc_access_id);
+			data_src = arm_spe__synth_data_source(record,
+							      ARM_SPE_LLC_ACCESS);
+
+			err = arm_spe__synth_mem_sample(speq, spe->llc_access_id,
+							data_src);
 			if (err)
 				return err;
 		}
@@ -332,13 +394,19 @@ static int arm_spe_sample(struct arm_spe_queue *speq)
 
 	if (spe->sample_tlb) {
 		if (record->type & ARM_SPE_TLB_MISS) {
-			err = arm_spe__synth_mem_sample(speq, spe->tlb_miss_id);
+			data_src = arm_spe__synth_data_source(record,
+							      ARM_SPE_TLB_MISS);
+			err = arm_spe__synth_mem_sample(speq, spe->tlb_miss_id,
+							data_src);
 			if (err)
 				return err;
 		}
 
 		if (record->type & ARM_SPE_TLB_ACCESS) {
-			err = arm_spe__synth_mem_sample(speq, spe->tlb_access_id);
+			data_src = arm_spe__synth_data_source(record,
+							      ARM_SPE_TLB_ACCESS);
+			err = arm_spe__synth_mem_sample(speq, spe->tlb_access_id,
+							data_src);
 			if (err)
 				return err;
 		}
@@ -352,7 +420,10 @@ static int arm_spe_sample(struct arm_spe_queue *speq)
 
 	if (spe->sample_remote_access &&
 	    (record->type & ARM_SPE_REMOTE_ACCESS)) {
-		err = arm_spe__synth_mem_sample(speq, spe->remote_access_id);
+		data_src = arm_spe__synth_data_source(record,
+						      ARM_SPE_REMOTE_ACCESS);
+		err = arm_spe__synth_mem_sample(speq, spe->remote_access_id,
+						data_src);
 		if (err)
 			return err;
 	}
