@@ -19,8 +19,9 @@
 #include "util/symbol.h"
 #include <linux/err.h>
 
-#define MEM_OPERATION_LOAD	0x1
-#define MEM_OPERATION_STORE	0x2
+#define MEM_OPERATION_LOAD		0x1
+#define MEM_OPERATION_STORE		0x2
+#define MEM_OPERATION_LOAD_STORE	0x4
 
 struct perf_mem {
 	struct perf_tool	tool;
@@ -94,6 +95,11 @@ static int __cmd_record(int argc, const char **argv, struct perf_mem *mem)
 
 	if (mem->operation & MEM_OPERATION_STORE) {
 		e = perf_mem_events__ptr(PERF_MEM_EVENTS__STORE);
+		e->record = true;
+	}
+
+	if (mem->operation & MEM_OPERATION_LOAD_STORE) {
+		e = perf_mem_events__ptr(PERF_MEM_EVENTS__LOAD_STORE);
 		e->record = true;
 	}
 
@@ -326,6 +332,7 @@ struct mem_mode {
 static const struct mem_mode mem_modes[]={
 	MEM_OPT("load", MEM_OPERATION_LOAD),
 	MEM_OPT("store", MEM_OPERATION_STORE),
+	MEM_OPT("ldst", MEM_OPERATION_LOAD_STORE),
 	MEM_END
 };
 
