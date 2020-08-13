@@ -36,6 +36,23 @@ struct arm_spe_pkt {
 	uint64_t		payload;
 };
 
+/* Short header (HEADER0) and extended header (HEADER1) */
+#define SPE_HEADER0_PAD			0x0
+#define SPE_HEADER0_END			0x1
+#define SPE_HEADER0_TIMESTAMP		0x71
+#define SPE_HEADER0_MASK1		0xcf	/* Mask for event & data source */
+#define SPE_HEADER0_EVENTS		0x42
+#define SPE_HEADER0_SOURCE		0x43
+#define SPE_HEADER0_MASK2		0xfc	/* Mask for context & operation */
+#define SPE_HEADER0_CONTEXT		0x64
+#define SPE_HEADER0_OPERATION		0x48
+#define SPE_HEADER0_MASK3		0xe0	/* Mask for extended format */
+#define SPE_HEADER0_EXTENDED		0x20
+#define SPE_HEADER0_MASK4		0xf8	/* Mask for address & counter */
+#define SPE_HEADER0_ADDRESS		0xb0
+#define SPE_HEADER0_COUNTER		0x98
+#define SPE_HEADER1_ALIGNMENT		0x0
+
 #define SPE_HEADER_SZ_SHIFT		(4)
 #define SPE_HEADER_SZ_MASK		(0x30)
 
