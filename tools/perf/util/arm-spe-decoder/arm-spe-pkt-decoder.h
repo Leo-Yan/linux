@@ -93,6 +93,22 @@ struct arm_spe_pkt {
 
 #define SPE_CNT_PKT_HDR_EXT_INDEX_MASK		(0x3)
 
+/* Event packet payload */
+#define SPE_EVT_PKT_SVE_EMPTY_PREDICATE		BIT(18)
+#define SPE_EVT_PKT_SVE_PARTIAL_PREDICATE	BIT(17)
+#define SPE_EVT_PKT_ALIGNMENT			BIT(11)
+#define SPE_EVT_PKT_REMOTE_ACCESS		BIT(10)
+#define SPE_EVT_PKT_LLC_MISS			BIT(9)
+#define SPE_EVT_PKT_LLC_ACCESS			BIT(8)
+#define SPE_EVT_PKT_MISPREDICTED		BIT(7)
+#define SPE_EVT_PKT_NOT_TAKEN			BIT(6)
+#define SPE_EVT_PKT_TLB_WALK			BIT(5)
+#define SPE_EVT_PKT_TLB_ACCESS			BIT(4)
+#define SPE_EVT_PKT_L1D_REFILL			BIT(3)
+#define SPE_EVT_PKT_L1D_ACCESS			BIT(2)
+#define SPE_EVT_PKT_ARCH_RETIRED		BIT(1)
+#define SPE_EVT_PKT_GEN_EXCEPTION		BIT(0)
+
 const char *arm_spe_pkt_name(enum arm_spe_pkt_type);
 
 int arm_spe_get_packet(const unsigned char *buf, size_t len,

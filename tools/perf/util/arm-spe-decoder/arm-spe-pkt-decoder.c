@@ -264,58 +264,58 @@ int arm_spe_pkt_desc(const struct arm_spe_pkt *packet, char *buf,
 		ret = snprintf(buf, buf_len, "EV");
 		buf += ret;
 		blen -= ret;
-		if (payload & 0x1) {
+		if (payload & SPE_EVT_PKT_GEN_EXCEPTION) {
 			ret = snprintf(buf, buf_len, " EXCEPTION-GEN");
 			buf += ret;
 			blen -= ret;
 		}
-		if (payload & 0x2) {
+		if (payload & SPE_EVT_PKT_ARCH_RETIRED) {
 			ret = snprintf(buf, buf_len, " RETIRED");
 			buf += ret;
 			blen -= ret;
 		}
-		if (payload & 0x4) {
+		if (payload & SPE_EVT_PKT_L1D_ACCESS) {
 			ret = snprintf(buf, buf_len, " L1D-ACCESS");
 			buf += ret;
 			blen -= ret;
 		}
-		if (payload & 0x8) {
+		if (payload & SPE_EVT_PKT_L1D_REFILL) {
 			ret = snprintf(buf, buf_len, " L1D-REFILL");
 			buf += ret;
 			blen -= ret;
 		}
-		if (payload & 0x10) {
+		if (payload & SPE_EVT_PKT_TLB_ACCESS) {
 			ret = snprintf(buf, buf_len, " TLB-ACCESS");
 			buf += ret;
 			blen -= ret;
 		}
-		if (payload & 0x20) {
+		if (payload & SPE_EVT_PKT_TLB_WALK) {
 			ret = snprintf(buf, buf_len, " TLB-REFILL");
 			buf += ret;
 			blen -= ret;
 		}
-		if (payload & 0x40) {
+		if (payload & SPE_EVT_PKT_NOT_TAKEN) {
 			ret = snprintf(buf, buf_len, " NOT-TAKEN");
 			buf += ret;
 			blen -= ret;
 		}
-		if (payload & 0x80) {
+		if (payload & SPE_EVT_PKT_MISPREDICTED) {
 			ret = snprintf(buf, buf_len, " MISPRED");
 			buf += ret;
 			blen -= ret;
 		}
 		if (idx > 1) {
-			if (payload & 0x100) {
+			if (payload & SPE_EVT_PKT_LLC_ACCESS) {
 				ret = snprintf(buf, buf_len, " LLC-ACCESS");
 				buf += ret;
 				blen -= ret;
 			}
-			if (payload & 0x200) {
+			if (payload & SPE_EVT_PKT_LLC_MISS) {
 				ret = snprintf(buf, buf_len, " LLC-REFILL");
 				buf += ret;
 				blen -= ret;
 			}
-			if (payload & 0x400) {
+			if (payload & SPE_EVT_PKT_REMOTE_ACCESS) {
 				ret = snprintf(buf, buf_len, " REMOTE-ACCESS");
 				buf += ret;
 				blen -= ret;

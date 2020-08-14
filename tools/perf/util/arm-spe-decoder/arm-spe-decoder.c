@@ -168,31 +168,31 @@ static int arm_spe_read_record(struct arm_spe_decoder *decoder)
 		case ARM_SPE_OP_TYPE:
 			break;
 		case ARM_SPE_EVENTS:
-			if (payload & BIT(EV_L1D_REFILL))
+			if (payload & SPE_EVT_PKT_L1D_REFILL)
 				decoder->record.type |= ARM_SPE_L1D_MISS;
 
-			if (payload & BIT(EV_L1D_ACCESS))
+			if (payload & SPE_EVT_PKT_L1D_ACCESS)
 				decoder->record.type |= ARM_SPE_L1D_ACCESS;
 
-			if (payload & BIT(EV_TLB_WALK))
+			if (payload & SPE_EVT_PKT_TLB_WALK)
 				decoder->record.type |= ARM_SPE_TLB_MISS;
 
-			if (payload & BIT(EV_TLB_ACCESS))
+			if (payload & SPE_EVT_PKT_TLB_ACCESS)
 				decoder->record.type |= ARM_SPE_TLB_ACCESS;
 
 			if ((idx == 2 || idx == 4 || idx == 8) &&
-			    (payload & BIT(EV_LLC_MISS)))
+			    (payload & SPE_EVT_PKT_LLC_MISS))
 				decoder->record.type |= ARM_SPE_LLC_MISS;
 
 			if ((idx == 2 || idx == 4 || idx == 8) &&
-			    (payload & BIT(EV_LLC_ACCESS)))
+			    (payload & SPE_EVT_PKT_LLC_ACCESS))
 				decoder->record.type |= ARM_SPE_LLC_ACCESS;
 
 			if ((idx == 2 || idx == 4 || idx == 8) &&
-			    (payload & BIT(EV_REMOTE_ACCESS)))
+			    (payload & SPE_EVT_PKT_REMOTE_ACCESS))
 				decoder->record.type |= ARM_SPE_REMOTE_ACCESS;
 
-			if (payload & BIT(EV_MISPRED))
+			if (payload & SPE_EVT_PKT_MISPREDICTED)
 				decoder->record.type |= ARM_SPE_BRANCH_MISS;
 
 			break;
