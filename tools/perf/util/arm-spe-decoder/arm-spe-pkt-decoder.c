@@ -150,9 +150,10 @@ static int arm_spe_get_counter(const unsigned char *buf, size_t len,
 {
 	packet->type = ARM_SPE_COUNTER;
 	if (ext_hdr)
-		packet->index = ((buf[0] & 0x3) << 3) | (buf[1] & 0x7);
+		packet->index = (((buf[0] & SPE_CNT_PKT_HDR_EXT_INDEX_MASK) << 3) |
+				  (buf[1] & SPE_CNT_PKT_HDR_INDEX_MASK));
 	else
-		packet->index = buf[0] & 0x7;
+		packet->index = buf[0] & SPE_CNT_PKT_HDR_INDEX_MASK;
 
 	return arm_spe_get_payload(buf, len, ext_hdr, packet);
 }
@@ -421,10 +422,18 @@ int arm_spe_pkt_desc(const struct arm_spe_pkt *packet, char *buf,
 		buf += ret;
 		blen -= ret;
 		switch (idx) {
-		case 0:	ret = snprintf(buf, buf_len, "TOT"); break;
-		case 1:	ret = snprintf(buf, buf_len, "ISSUE"); break;
-		case 2:	ret = snprintf(buf, buf_len, "XLAT"); break;
-		default: ret = 0;
+		case SPE_CNT_PKT_HDR_INDEX_TOTAL_LAT:
+			ret = snprintf(buf, buf_len, "TOT");
+			break;
+		case SPE_CNT_PKT_HDR_INDEX_ISSUE_LAT:
+			ret = snprintf(buf, buf_len, "ISSUE");
+			break;
+		case SPE_CNT_PKT_HDR_INDEX_TRANS_LAT:
+			ret = snprintf(buf, buf_len, "XLAT");
+			break;
+		default:
+			ret = 0;
+			break;
 		}
 		if (ret < 0)
 			return ret;

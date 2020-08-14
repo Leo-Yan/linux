@@ -85,6 +85,14 @@ struct arm_spe_pkt {
 /* Context packet header */
 #define SPE_CTX_PKT_HDR_INDEX_MASK		(0x3)
 
+/* Counter packet header */
+#define SPE_CNT_PKT_HDR_INDEX_MASK		(0x7)
+#define SPE_CNT_PKT_HDR_INDEX_TOTAL_LAT		(0x0)
+#define SPE_CNT_PKT_HDR_INDEX_ISSUE_LAT		(0x1)
+#define SPE_CNT_PKT_HDR_INDEX_TRANS_LAT		(0x2)
+
+#define SPE_CNT_PKT_HDR_EXT_INDEX_MASK		(0x3)
+
 const char *arm_spe_pkt_name(enum arm_spe_pkt_type);
 
 int arm_spe_get_packet(const unsigned char *buf, size_t len,
