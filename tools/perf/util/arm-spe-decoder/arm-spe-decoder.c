@@ -24,36 +24,37 @@
 
 static u64 arm_spe_calc_ip(int index, u64 payload)
 {
-	u8 *addr = (u8 *)&payload;
-	int ns, el;
+	u64 ns, el;
 
 	/* Instruction virtual address or Branch target address */
 	if (index == SPE_ADDR_PKT_HDR_INDEX_INS ||
 	    index == SPE_ADDR_PKT_HDR_INDEX_BRANCH) {
-		ns = addr[7] & SPE_ADDR_PKT_NS;
-		el = (addr[7] & SPE_ADDR_PKT_EL_MASK) >> SPE_ADDR_PKT_EL_OFFSET;
+		ns = payload & SPE_ADDR_PKT_INST_VA_NS;
+		el = payload >> SPE_ADDR_PKT_INST_VA_EL_SHIFT;
+		el &= SPE_ADDR_PKT_INST_VA_EL_MASK;
+
+		/* Clean highest byte */
+		payload &= GENMASK(SPE_ADDR_PKT_ADDR_MSB, 0);
 
 		/* Fill highest byte for EL1 or EL2 (VHE) mode */
-		if (ns && (el == SPE_ADDR_PKT_EL1 || el == SPE_ADDR_PKT_EL2))
-			addr[7] = 0xff;
-		/* Clean highest byte for other cases */
-		else
-			addr[7] = 0x0;
+		if (ns && (el == SPE_ADDR_PKT_INST_VA_EL1 ||
+			   el == SPE_ADDR_PKT_INST_VA_EL2))
+			payload |= 0xffULL << (SPE_ADDR_PKT_ADDR_MSB + 1);
 
 	/* Data access virtual address */
 	} else if (index == SPE_ADDR_PKT_HDR_INDEX_DATA_VIRT) {
 
+		/* Clean tags */
+		payload &= GENMASK(SPE_ADDR_PKT_ADDR_MSB, 0);
+
 		/* Fill highest byte if bits [48..55] is 0xff */
-		if (addr[6] == 0xff)
-			addr[7] = 0xff;
-		/* Otherwise, cleanup tags */
-		else
-			addr[7] = 0x0;
+		if ((payload & GENMASK(SPE_ADDR_PKT_ADDR_MSB, 48)) == (0xffULL << 48))
+			payload |= 0xffULL << (SPE_ADDR_PKT_ADDR_MSB + 1);
 
 	/* Data access physical address */
 	} else if (index == SPE_ADDR_PKT_HDR_INDEX_DATA_PHYS) {
-		/* Cleanup byte 7 */
-		addr[7] = 0x0;
+		/* Clean highest byte */
+		payload &= GENMASK(SPE_ADDR_PKT_ADDR_MSB, 0);
 	} else {
 		pr_err("unsupported address packet index: 0x%x\n", index);
 	}

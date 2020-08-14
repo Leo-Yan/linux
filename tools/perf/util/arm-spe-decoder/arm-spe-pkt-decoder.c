@@ -12,9 +12,6 @@
 
 #include "arm-spe-pkt-decoder.h"
 
-#define NS_FLAG		BIT(63)
-#define EL_FLAG		(BIT(62) | BIT(61))
-
 #if __BYTE_ORDER == __BIG_ENDIAN
 #define le16_to_cpu bswap_16
 #define le32_to_cpu bswap_32
@@ -165,9 +162,10 @@ static int arm_spe_get_addr(const unsigned char *buf, size_t len,
 {
 	packet->type = ARM_SPE_ADDRESS;
 	if (ext_hdr)
-		packet->index = ((buf[0] & 0x3) << 3) | (buf[1] & 0x7);
+		packet->index = (((buf[0] & SPE_ADDR_PKT_HDR_EXT_INDEX_MASK) << 3) |
+				  (buf[1] & SPE_ADDR_PKT_HDR_INDEX_MASK));
 	else
-		packet->index = buf[0] & 0x7;
+		packet->index = buf[0] & SPE_ADDR_PKT_HDR_INDEX_MASK;
 
 	return arm_spe_get_payload(buf, len, ext_hdr, packet);
 }
@@ -394,18 +392,23 @@ int arm_spe_pkt_desc(const struct arm_spe_pkt *packet, char *buf,
 		return snprintf(buf, buf_len, "%s %lld", name, payload);
 	case ARM_SPE_ADDRESS:
 		switch (idx) {
-		case 0:
-		case 1: ns = !!(packet->payload & NS_FLAG);
-			el = (packet->payload & EL_FLAG) >> 61;
-			payload &= ~(0xffULL << 56);
+		case SPE_ADDR_PKT_HDR_INDEX_INS:
+		case SPE_ADDR_PKT_HDR_INDEX_BRANCH:
+			ns = !!(packet->payload & SPE_ADDR_PKT_INST_VA_NS);
+			el = packet->payload >> SPE_ADDR_PKT_INST_VA_EL_SHIFT;
+			el &= SPE_ADDR_PKT_INST_VA_EL_MASK;
+			payload &= GENMASK(SPE_ADDR_PKT_ADDR_MSB, 0);
 			return snprintf(buf, buf_len, "%s 0x%llx el%d ns=%d",
-				        (idx == 1) ? "TGT" : "PC", payload, el, ns);
-		case 2:	return snprintf(buf, buf_len, "VA 0x%llx", payload);
-		case 3:	ns = !!(packet->payload & NS_FLAG);
-			payload &= ~(0xffULL << 56);
+					(idx == 1) ? "TGT" : "PC", payload, el, ns);
+		case SPE_ADDR_PKT_HDR_INDEX_DATA_VIRT:
+			return snprintf(buf, buf_len, "VA 0x%llx", payload);
+		case SPE_ADDR_PKT_HDR_INDEX_DATA_PHYS:
+			ns = !!(packet->payload & SPE_ADDR_PKT_INST_VA_NS);
+			payload &= GENMASK(SPE_ADDR_PKT_ADDR_MSB, 0);
 			return snprintf(buf, buf_len, "PA 0x%llx ns=%d",
 					payload, ns);
-		default: return 0;
+		default:
+			return 0;
 		}
 	case ARM_SPE_CONTEXT:
 		return snprintf(buf, buf_len, "%s 0x%lx el%d", name,

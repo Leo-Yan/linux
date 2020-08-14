@@ -56,19 +56,31 @@ struct arm_spe_pkt {
 #define SPE_HEADER_SZ_SHIFT		(4)
 #define SPE_HEADER_SZ_MASK		(0x30)
 
+/* Address packet header */
+#define SPE_ADDR_PKT_HDR_INDEX_MASK		(0x7)
 #define SPE_ADDR_PKT_HDR_INDEX_INS		(0x0)
 #define SPE_ADDR_PKT_HDR_INDEX_BRANCH		(0x1)
 #define SPE_ADDR_PKT_HDR_INDEX_DATA_VIRT	(0x2)
 #define SPE_ADDR_PKT_HDR_INDEX_DATA_PHYS	(0x3)
 
-#define SPE_ADDR_PKT_NS				BIT(7)
-#define SPE_ADDR_PKT_CH				BIT(6)
-#define SPE_ADDR_PKT_EL_OFFSET			(5)
-#define SPE_ADDR_PKT_EL_MASK			(0x3 << SPE_ADDR_PKT_EL_OFFSET)
-#define SPE_ADDR_PKT_EL0			(0)
-#define SPE_ADDR_PKT_EL1			(1)
-#define SPE_ADDR_PKT_EL2			(2)
-#define SPE_ADDR_PKT_EL3			(3)
+#define SPE_ADDR_PKT_HDR_EXT_INDEX_MASK		(0x3)
+
+#define SPE_ADDR_PKT_ADDR_MSB			(55)
+
+/* Address packet payload for data access physical address */
+#define SPE_ADDR_PKT_DATA_PA_NS			BIT(63)
+#define SPE_ADDR_PKT_DATA_PA_CH			BIT(62)
+#define SPE_ADDR_PKT_DATA_PA_PAT_SHIFT		(56)
+#define SPE_ADDR_PKT_DATA_PA_PAT_MASK		(0xf)
+
+/* Address packet payload for instrcution virtual address */
+#define SPE_ADDR_PKT_INST_VA_NS			BIT(63)
+#define SPE_ADDR_PKT_INST_VA_EL_SHIFT		(61)
+#define SPE_ADDR_PKT_INST_VA_EL_MASK		(0x3)
+#define SPE_ADDR_PKT_INST_VA_EL0		(0)
+#define SPE_ADDR_PKT_INST_VA_EL1		(1)
+#define SPE_ADDR_PKT_INST_VA_EL2		(2)
+#define SPE_ADDR_PKT_INST_VA_EL3		(3)
 
 const char *arm_spe_pkt_name(enum arm_spe_pkt_type);
 
