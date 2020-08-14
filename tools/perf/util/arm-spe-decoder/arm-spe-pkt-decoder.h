@@ -109,6 +109,42 @@ struct arm_spe_pkt {
 #define SPE_EVT_PKT_ARCH_RETIRED		BIT(1)
 #define SPE_EVT_PKT_GEN_EXCEPTION		BIT(0)
 
+/* Operation packet header */
+#define SPE_OP_PKT_HDR_CLASS_MASK		(0x7)
+#define SPE_OP_PKT_HDR_CLASS_OTHER		(0x0)
+#define SPE_OP_PKT_HDR_CLASS_LD_ST_ATOMIC	(0x1)
+#define SPE_OP_PKT_HDR_CLASS_BR_ERET		(0x2)
+
+#define SPE_OP_PKT_OTHER_SUBCLASS_MASK		(0xfe)
+#define SPE_OP_PKT_OTHER_SUBCLASS_OTHER_OP	(0x0)
+#define SPE_OP_PKT_OTHER_SVE_SUBCLASS_MASK	(0x89)
+#define SPE_OP_PKT_OTHER_SUBCLASS_SVG_OP	(0x8)
+
+#define SPE_OP_PKT_OTHER_SUBCLASS_COND		BIT(0)
+
+#define SPE_OP_PKT_BRANCH_SUBCLASS_MASK		(0xfe)
+#define SPE_OP_PKT_BRANCH_SUBCLASS_DIRECT	(0x0)
+#define SPE_OP_PKT_BRANCH_SUBCLASS_INDIRECT	(0x2)
+
+#define SPE_OP_PKT_BRANCH_SUBCLASS_COND		BIT(0)
+
+#define SPE_OP_PKT_LDST_SUBCLASS_MASK		(0xfe)
+#define SPE_OP_PKT_LDST_SUBCLASS_GP_REG		(0x0)
+#define SPE_OP_PKT_LDST_SUBCLASS_SIMD_FP	(0x4)
+#define SPE_OP_PKT_LDST_SUBCLASS_UNSPEC_REG	(0x10)
+#define SPE_OP_PKT_LDST_SUBCLASS_MRS_MSR	(0x30)
+
+#define SPE_OP_PKT_LDST_SUBCLASS_ATOMIC_MASK	(0xe2)
+#define SPE_OP_PKT_LDST_SUBCLASS_ATOMIC		(0x2)
+
+#define SPE_OP_PKT_LDST_SUBCLASS_SVE_MASK	(0xa)
+#define SPE_OP_PKT_LDST_SUBCLASS_SVE		(0x8)
+
+#define SPE_OP_PKT_AR				BIT(4)
+#define SPE_OP_PKT_EXCL				BIT(3)
+#define SPE_OP_PKT_AT				BIT(2)
+#define SPE_OP_PKT_LDST				BIT(0)
+
 const char *arm_spe_pkt_name(enum arm_spe_pkt_type);
 
 int arm_spe_get_packet(const unsigned char *buf, size_t len,

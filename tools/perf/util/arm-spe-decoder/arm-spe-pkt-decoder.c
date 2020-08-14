@@ -141,7 +141,7 @@ static int arm_spe_get_op_type(const unsigned char *buf, size_t len,
 			       struct arm_spe_pkt *packet)
 {
 	packet->type = ARM_SPE_OP_TYPE;
-	packet->index = buf[0] & 0x3;
+	packet->index = buf[0] & SPE_OP_PKT_HDR_CLASS_MASK;
 	return arm_spe_get_payload(buf, len, 0, packet);
 }
 
@@ -251,6 +251,7 @@ int arm_spe_pkt_desc(const struct arm_spe_pkt *packet, char *buf,
 	int ret, ns, el, idx = packet->index;
 	unsigned long long payload = packet->payload;
 	const char *name = arm_spe_pkt_name(packet->type);
+	size_t blen;
 
 	switch (packet->type) {
 	case ARM_SPE_BAD:
@@ -258,7 +259,7 @@ int arm_spe_pkt_desc(const struct arm_spe_pkt *packet, char *buf,
 	case ARM_SPE_END:
 		return snprintf(buf, buf_len, "%s", name);
 	case ARM_SPE_EVENTS: {
-		size_t blen = buf_len;
+		blen = buf_len;
 
 		ret = 0;
 		ret = snprintf(buf, buf_len, "EV");
@@ -349,65 +350,79 @@ int arm_spe_pkt_desc(const struct arm_spe_pkt *packet, char *buf,
 	}
 	case ARM_SPE_OP_TYPE:
 		switch (idx) {
-		case 0:	return snprintf(buf, buf_len, "%s", payload & 0x1 ?
+		case SPE_OP_PKT_HDR_CLASS_OTHER:
+			return snprintf(buf, buf_len, "%s",
+					payload & SPE_OP_PKT_OTHER_SUBCLASS_COND ?
 					"COND-SELECT" : "INSN-OTHER");
-		case 1:	{
-			size_t blen = buf_len;
+		case SPE_OP_PKT_HDR_CLASS_LD_ST_ATOMIC:
+			blen = buf_len;
 
-			if (payload & 0x1)
+			if (payload & SPE_OP_PKT_LDST)
 				ret = snprintf(buf, buf_len, "ST");
 			else
 				ret = snprintf(buf, buf_len, "LD");
+			if (ret < 0)
+				return ret;
 			buf += ret;
 			blen -= ret;
-			if (payload & 0x2) {
-				if (payload & 0x4) {
+			if ((payload & SPE_OP_PKT_LDST_SUBCLASS_ATOMIC_MASK) ==
+					SPE_OP_PKT_LDST_SUBCLASS_ATOMIC) {
+				if (payload & SPE_OP_PKT_AT) {
 					ret = snprintf(buf, buf_len, " AT");
+					if (ret < 0)
+						return ret;
 					buf += ret;
 					blen -= ret;
 				}
-				if (payload & 0x8) {
+				if (payload & SPE_OP_PKT_EXCL) {
 					ret = snprintf(buf, buf_len, " EXCL");
+					if (ret < 0)
+						return ret;
 					buf += ret;
 					blen -= ret;
 				}
-				if (payload & 0x10) {
+				if (payload & SPE_OP_PKT_AR) {
 					ret = snprintf(buf, buf_len, " AR");
+					if (ret < 0)
+						return ret;
 					buf += ret;
 					blen -= ret;
 				}
-			} else if (payload & 0x4) {
+			} else if ((payload & SPE_OP_PKT_LDST_SUBCLASS_MASK) ==
+					SPE_OP_PKT_LDST_SUBCLASS_SIMD_FP) {
 				ret = snprintf(buf, buf_len, " SIMD-FP");
+				if (ret < 0)
+					return ret;
 				buf += ret;
 				blen -= ret;
 			}
-			if (ret < 0)
-				return ret;
-			blen -= ret;
 			return buf_len - blen;
-		}
-		case 2:	{
-			size_t blen = buf_len;
+		case SPE_OP_PKT_HDR_CLASS_BR_ERET:
+			blen = buf_len;
 
 			ret = snprintf(buf, buf_len, "B");
-			buf += ret;
-			blen -= ret;
-			if (payload & 0x1) {
-				ret = snprintf(buf, buf_len, " COND");
-				buf += ret;
-				blen -= ret;
-			}
-			if (payload & 0x2) {
-				ret = snprintf(buf, buf_len, " IND");
-				buf += ret;
-				blen -= ret;
-			}
 			if (ret < 0)
 				return ret;
+			buf += ret;
 			blen -= ret;
-			return buf_len - blen;
+			if (payload & SPE_OP_PKT_BRANCH_SUBCLASS_COND) {
+				ret = snprintf(buf, buf_len, " COND");
+				if (ret < 0)
+					return ret;
+				buf += ret;
+				blen -= ret;
 			}
-		default: return 0;
+			if ((payload & SPE_OP_PKT_BRANCH_SUBCLASS_MASK) ==
+					SPE_OP_PKT_BRANCH_SUBCLASS_INDIRECT) {
+				ret = snprintf(buf, buf_len, " IND");
+				if (ret < 0)
+					return ret;
+				buf += ret;
+				blen -= ret;
+			}
+			return buf_len - blen;
+		default:
+			return 0;
 		}
 	case ARM_SPE_DATA_SOURCE:
 	case ARM_SPE_TIMESTAMP:
@@ -436,7 +451,7 @@ int arm_spe_pkt_desc(const struct arm_spe_pkt *packet, char *buf,
 		return snprintf(buf, buf_len, "%s 0x%lx el%d", name,
 				(unsigned long)payload, idx + 1);
 	case ARM_SPE_COUNTER: {
-		size_t blen = buf_len;
+		blen = buf_len;
 
 		ret = snprintf(buf, buf_len, "%s %d ", name,
 			       (unsigned short)payload);
