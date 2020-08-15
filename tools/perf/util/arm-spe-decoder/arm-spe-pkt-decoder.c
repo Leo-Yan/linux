@@ -395,6 +395,27 @@ int arm_spe_pkt_desc(const struct arm_spe_pkt *packet, char *buf,
 					return ret;
 				buf += ret;
 				blen -= ret;
+			} else if ((payload & SPE_OP_PKT_LDST_SUBCLASS_MASK) ==
+					SPE_OP_PKT_LDST_SUBCLASS_GP_REG) {
+				ret = snprintf(buf, buf_len, " GP-REG");
+				if (ret < 0)
+					return ret;
+				buf += ret;
+				blen -= ret;
+			} else if ((payload & SPE_OP_PKT_LDST_SUBCLASS_MASK) ==
+					SPE_OP_PKT_LDST_SUBCLASS_UNSPEC_REG) {
+				ret = snprintf(buf, buf_len, " UNSPEC-REG");
+				if (ret < 0)
+					return ret;
+				buf += ret;
+				blen -= ret;
+			} else if ((payload & SPE_OP_PKT_LDST_SUBCLASS_MASK) ==
+					SPE_OP_PKT_LDST_SUBCLASS_MRS_MSR) {
+				ret = snprintf(buf, buf_len, " MRS-MSR");
+				if (ret < 0)
+					return ret;
+				buf += ret;
+				blen -= ret;
 			}
 			return buf_len - blen;
 		case SPE_OP_PKT_HDR_CLASS_BR_ERET:
