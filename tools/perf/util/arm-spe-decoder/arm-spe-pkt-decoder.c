@@ -262,68 +262,89 @@ int arm_spe_pkt_desc(const struct arm_spe_pkt *packet, char *buf,
 
 		ret = 0;
 		ret = snprintf(buf, buf_len, "EV");
+		if (ret < 0)
+			return ret;
 		buf += ret;
 		blen -= ret;
 		if (payload & SPE_EVT_PKT_GEN_EXCEPTION) {
 			ret = snprintf(buf, buf_len, " EXCEPTION-GEN");
+			if (ret < 0)
+				return ret;
 			buf += ret;
 			blen -= ret;
 		}
 		if (payload & SPE_EVT_PKT_ARCH_RETIRED) {
 			ret = snprintf(buf, buf_len, " RETIRED");
+			if (ret < 0)
+				return ret;
 			buf += ret;
 			blen -= ret;
 		}
 		if (payload & SPE_EVT_PKT_L1D_ACCESS) {
 			ret = snprintf(buf, buf_len, " L1D-ACCESS");
+			if (ret < 0)
+				return ret;
 			buf += ret;
 			blen -= ret;
 		}
 		if (payload & SPE_EVT_PKT_L1D_REFILL) {
 			ret = snprintf(buf, buf_len, " L1D-REFILL");
+			if (ret < 0)
+				return ret;
 			buf += ret;
 			blen -= ret;
 		}
 		if (payload & SPE_EVT_PKT_TLB_ACCESS) {
 			ret = snprintf(buf, buf_len, " TLB-ACCESS");
+			if (ret < 0)
+				return ret;
 			buf += ret;
 			blen -= ret;
 		}
 		if (payload & SPE_EVT_PKT_TLB_WALK) {
 			ret = snprintf(buf, buf_len, " TLB-REFILL");
+			if (ret < 0)
+				return ret;
 			buf += ret;
 			blen -= ret;
 		}
 		if (payload & SPE_EVT_PKT_NOT_TAKEN) {
 			ret = snprintf(buf, buf_len, " NOT-TAKEN");
+			if (ret < 0)
+				return ret;
 			buf += ret;
 			blen -= ret;
 		}
 		if (payload & SPE_EVT_PKT_MISPREDICTED) {
 			ret = snprintf(buf, buf_len, " MISPRED");
+			if (ret < 0)
+				return ret;
 			buf += ret;
 			blen -= ret;
 		}
 		if (idx > 1) {
 			if (payload & SPE_EVT_PKT_LLC_ACCESS) {
 				ret = snprintf(buf, buf_len, " LLC-ACCESS");
+				if (ret < 0)
+					return ret;
 				buf += ret;
 				blen -= ret;
 			}
 			if (payload & SPE_EVT_PKT_LLC_MISS) {
 				ret = snprintf(buf, buf_len, " LLC-REFILL");
+				if (ret < 0)
+					return ret;
 				buf += ret;
 				blen -= ret;
 			}
 			if (payload & SPE_EVT_PKT_REMOTE_ACCESS) {
 				ret = snprintf(buf, buf_len, " REMOTE-ACCESS");
+				if (ret < 0)
+					return ret;
 				buf += ret;
 				blen -= ret;
 			}
 		}
-		if (ret < 0)
-			return ret;
-		blen -= ret;
 		return buf_len - blen;
 	}
 	case ARM_SPE_OP_TYPE:
