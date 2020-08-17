@@ -36,6 +36,9 @@ struct arm_spe_pkt {
 	uint64_t		payload;
 };
 
+#define SPE_HEADER_SZ_SHIFT		(4)
+#define SPE_HEADER_SZ_MASK		(0x30)
+
 #define SPE_ADDR_PKT_HDR_INDEX_INS		(0x0)
 #define SPE_ADDR_PKT_HDR_INDEX_BRANCH		(0x1)
 #define SPE_ADDR_PKT_HDR_INDEX_DATA_VIRT	(0x2)
