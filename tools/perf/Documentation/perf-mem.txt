@@ -38,7 +38,12 @@ OPTIONS
 
 -t::
 --type=<type>::
-	Select the memory operation type: load or store (default: load,store)
+	Select the memory operation type: load, store, ldst (default: load,store).
+	The type 'ldst' means the single event can record both for load and store
+	operations; on Intel and PowerPC systems, the types 'load' and 'store' are
+        supported but misses the type 'ldst'; on Arm64 system, it uses SPE AUX
+	trace data to generate memory events, so need to specify one of these
+	three types.
 
 -D::
 --dump-raw-samples::
@@ -83,6 +88,9 @@ RECORD OPTIONS
 
 --ldlat <n>::
 	Specify desired latency for loads event. (x86 only)
+
+--itrace=M::
+	Synthesize memory samples from the AUX trace data. (Arm SPE only)
 
 In addition, for report all perf report options are valid, and for record
 all perf record options.
