@@ -346,6 +346,10 @@ static struct test generic_tests[] = {
 		.func = test__pe_file_parsing,
 	},
 	{
+		.desc = "Convert perf time to TSC",
+		.func = test__perf_time_to_tsc,
+	},
+	{
 		.func = NULL,
 	},
 };
