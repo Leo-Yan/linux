@@ -223,6 +223,46 @@ static inline u8 arm_spe_cpumode(struct arm_spe *spe, u64 ip)
 		PERF_RECORD_MISC_USER;
 }
 
+static void arm_spe_set_pid_tid_cpu(struct arm_spe *spe,
+				    struct auxtrace_queue *queue)
+{
+	struct arm_spe_queue *speq = queue->priv;
+	pid_t tid;
+
+	tid = machine__get_current_tid(spe->machine, speq->cpu);
+	if (tid != -1) {
+		speq->tid = tid;
+		thread__zput(speq->thread);
+	} else
+		speq->tid = queue->tid;
+
+	if ((!speq->thread) && (speq->tid != -1)) {
+		speq->thread = machine__find_thread(spe->machine, -1,
+						    speq->tid);
+	}
+
+	if (speq->thread) {
+		speq->pid = speq->thread->pid_;
+		if (queue->cpu == -1)
+			speq->cpu = speq->thread->cpu;
+	}
+}
+
+static int arm_spe_set_tid(struct arm_spe_queue *speq, pid_t tid)
+{
+	int err;
+	struct arm_spe *spe = speq->spe;
+	struct auxtrace_queue *queue;
+
+	err = machine__set_current_tid(spe->machine, speq->cpu, tid, tid);
+	if (err)
+		return err;
+
+	queue = &speq->spe->queues.queue_array[speq->queue_nr];
+	arm_spe_set_pid_tid_cpu(speq->spe, queue);
+	return 0;
+}
+
 static void arm_spe_prep_sample(struct arm_spe *spe,
 				struct arm_spe_queue *speq,
 				union perf_event *event,
@@ -431,6 +471,7 @@ static int arm_spe_sample(struct arm_spe_queue *speq)
 static int arm_spe_run_decoder(struct arm_spe_queue *speq, u64 *timestamp)
 {
 	struct arm_spe *spe = speq->spe;
+	const struct arm_spe_record *record;
 	int ret;
 
 	if (!spe->kernel_start)
@@ -449,6 +490,11 @@ static int arm_spe_run_decoder(struct arm_spe_queue *speq, u64 *timestamp)
 		 */
 		if (ret < 0)
 			continue;
+
+		record = &speq->decoder->record;
+		ret = arm_spe_set_tid(speq, record->context_id);
+		if (ret)
+			return ret;
 
 		ret = arm_spe_sample(speq);
 		if (ret)
@@ -500,6 +546,10 @@ retry:
 
 		record = &speq->decoder->record;
 
+		ret = arm_spe_set_tid(speq, record->context_id);
+		if (ret)
+			return ret;
+
 		speq->timestamp = record->timestamp;
 		ret = auxtrace_heap__add(&spe->heap, queue_nr, speq->timestamp);
 		if (ret)
@@ -550,31 +600,6 @@ static bool arm_spe__is_timeless_decoding(struct arm_spe *spe)
 	}
 
 	return timeless_decoding;
-}
-
-static void arm_spe_set_pid_tid_cpu(struct arm_spe *spe,
-				    struct auxtrace_queue *queue)
-{
-	struct arm_spe_queue *speq = queue->priv;
-	pid_t tid;
-
-	tid = machine__get_current_tid(spe->machine, speq->cpu);
-	if (tid != -1) {
-		speq->tid = tid;
-		thread__zput(speq->thread);
-	} else
-		speq->tid = queue->tid;
-
-	if ((!speq->thread) && (speq->tid != -1)) {
-		speq->thread = machine__find_thread(spe->machine, -1,
-						    speq->tid);
-	}
-
-	if (speq->thread) {
-		speq->pid = speq->thread->pid_;
-		if (queue->cpu == -1)
-			speq->cpu = speq->thread->cpu;
-	}
 }
 
 static int arm_spe_process_queues(struct arm_spe *spe, u64 timestamp)
