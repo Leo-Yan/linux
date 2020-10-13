@@ -390,6 +390,8 @@ do {				\
 					HITM_INC(lcl_hitm);
 				else
 					stats->ld_llchit++;
+
+				stats->tot_llchit++;
 			}
 
 			if (lvl & P(LVL, LOC_RAM)) {
@@ -474,6 +476,7 @@ void c2c_add_stats(struct c2c_stats *stats, struct c2c_stats *add)
 	stats->ld_fbhit		+= add->ld_fbhit;
 	stats->ld_l1hit		+= add->ld_l1hit;
 	stats->ld_l2hit		+= add->ld_l2hit;
+	stats->tot_llchit	+= add->tot_llchit;
 	stats->ld_llchit	+= add->ld_llchit;
 	stats->lcl_hitm		+= add->lcl_hitm;
 	stats->rmt_hitm		+= add->rmt_hitm;
