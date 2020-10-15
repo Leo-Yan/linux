@@ -1176,7 +1176,7 @@ node_entry(struct perf_hpp_fmt *fmt __maybe_unused, struct perf_hpp *hpp,
 			ret = scnprintf(hpp->buf, hpp->size, "%2d{%2d ", node, num);
 			advance_hpp(hpp, ret);
 
-		#define DISPLAY_HITM(__h)						\
+		#define DISPLAY_ENTRY(__h)						\
 			if (c2c_he->stats.__h> 0) {					\
 				ret = scnprintf(hpp->buf, hpp->size, "%5.1f%% ",	\
 						percent(stats->__h, c2c_he->stats.__h));\
@@ -1186,18 +1186,18 @@ node_entry(struct perf_hpp_fmt *fmt __maybe_unused, struct perf_hpp *hpp,
 
 			switch (c2c.display) {
 			case DISPLAY_RMT:
-				DISPLAY_HITM(rmt_hitm);
+				DISPLAY_ENTRY(rmt_hitm);
 				break;
 			case DISPLAY_LCL:
-				DISPLAY_HITM(lcl_hitm);
+				DISPLAY_ENTRY(lcl_hitm);
 				break;
 			case DISPLAY_TOT:
-				DISPLAY_HITM(tot_hitm);
+				DISPLAY_ENTRY(tot_hitm);
 			default:
 				break;
 			}
 
-		#undef DISPLAY_HITM
+		#undef DISPLAY_ENTRY
 
 			advance_hpp(hpp, ret);
 
@@ -1984,7 +1984,7 @@ static bool he__display(struct hist_entry *he, struct c2c_stats *stats)
 
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
 
-#define FILTER_HITM(__h)						\
+#define FILTER_ENTRY(__h)						\
 	if (stats->__h) {						\
 		ld_dist = ((double)c2c_he->stats.__h / stats->__h);	\
 		if (ld_dist < DISPLAY_LINE_LIMIT)			\
@@ -1995,18 +1995,18 @@ static bool he__display(struct hist_entry *he, struct c2c_stats *stats)
 
 	switch (c2c.display) {
 	case DISPLAY_LCL:
-		FILTER_HITM(lcl_hitm);
+		FILTER_ENTRY(lcl_hitm);
 		break;
 	case DISPLAY_RMT:
-		FILTER_HITM(rmt_hitm);
+		FILTER_ENTRY(rmt_hitm);
 		break;
 	case DISPLAY_TOT:
-		FILTER_HITM(tot_hitm);
+		FILTER_ENTRY(tot_hitm);
 	default:
 		break;
 	}
 
-#undef FILTER_HITM
+#undef FILTER_ENTRY
 
 	return he->filtered == 0;
 }
