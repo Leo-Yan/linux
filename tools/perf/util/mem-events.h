@@ -69,6 +69,7 @@ struct c2c_stats {
 	u32	ld_fbhit;            /* count of loads hitting Fill Buffer */
 	u32	ld_l1hit;            /* count of loads that hit L1D */
 	u32	ld_l2hit;            /* count of loads that hit L2D */
+	u32	tot_llchit;          /* count of all loads that hit LLC */
 	u32	ld_llchit;           /* count of loads that hit LLC */
 	u32	lcl_hitm;            /* count of loads with local HITM  */
 	u32	rmt_hitm;            /* count of loads with remote HITM */
