@@ -113,13 +113,15 @@ enum {
 	DISPLAY_LCL,
 	DISPLAY_RMT,
 	DISPLAY_TOT,
+	DISPLAY_LLC,
 	DISPLAY_MAX,
 };
 
 static const char *display_str[DISPLAY_MAX] = {
-	[DISPLAY_LCL] = "Local",
-	[DISPLAY_RMT] = "Remote",
-	[DISPLAY_TOT] = "Total",
+	[DISPLAY_LCL] = "Local HITMs",
+	[DISPLAY_RMT] = "Remote HITMs",
+	[DISPLAY_TOT] = "Total HITMs",
+	[DISPLAY_LLC] = "LLC Access",
 };
 
 static const struct option c2c_options[] = {
@@ -1193,6 +1195,10 @@ node_entry(struct perf_hpp_fmt *fmt __maybe_unused, struct perf_hpp *hpp,
 				break;
 			case DISPLAY_TOT:
 				DISPLAY_ENTRY(tot_hitm);
+				break;
+			case DISPLAY_LLC:
+				DISPLAY_ENTRY(tot_llchit);
+				break;
 			default:
 				break;
 			}
@@ -1533,6 +1539,7 @@ static struct c2c_header percent_hitm_header[] = {
 	[DISPLAY_LCL] = HEADER_BOTH("Lcl", "Hitm"),
 	[DISPLAY_RMT] = HEADER_BOTH("Rmt", "Hitm"),
 	[DISPLAY_TOT] = HEADER_BOTH("Tot", "Hitm"),
+	[DISPLAY_LLC] = HEADER_BOTH("LLC", "Hit"),
 };
 
 static struct c2c_dimension dim_percent_hitm = {
@@ -2002,6 +2009,10 @@ static bool he__display(struct hist_entry *he, struct c2c_stats *stats)
 		break;
 	case DISPLAY_TOT:
 		FILTER_ENTRY(tot_hitm);
+		break;
+	case DISPLAY_LLC:
+		FILTER_ENTRY(tot_llchit);
+		break;
 	default:
 		break;
 	}
@@ -2031,6 +2042,9 @@ static inline bool is_valid_hist_entry(struct hist_entry *he)
 		break;
 	case DISPLAY_TOT:
 		has_record = !!c2c_he->stats.tot_hitm;
+		break;
+	case DISPLAY_LLC:
+		has_record = !!c2c_he->stats.tot_llchit;
 		break;
 	default:
 		break;
@@ -2186,17 +2200,20 @@ static int setup_nodes(struct perf_session *session)
 }
 
 #define HAS_HITMS(__h) ((__h)->stats.lcl_hitm || (__h)->stats.rmt_hitm)
+#define HAS_LLCHIT(__h) ((__h)->stats.tot_llchit)
 
 static int resort_shared_cl_cb(struct hist_entry *he, void *arg __maybe_unused)
 {
 	struct c2c_hist_entry *c2c_he;
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
 
-	if (HAS_HITMS(c2c_he)) {
+	if (c2c.display == DISPLAY_LLC && HAS_LLCHIT(c2c_he)) {
+		c2c.shared_clines++;
+		c2c_add_stats(&c2c.shared_clines_stats, &c2c_he->stats);
+	} else if (HAS_HITMS(c2c_he)) {
 		c2c.shared_clines++;
 		c2c_add_stats(&c2c.shared_clines_stats, &c2c_he->stats);
 	}
-
 	return 0;
 }
 
@@ -2315,16 +2332,26 @@ static void print_pareto(FILE *out)
 	struct perf_hpp_list hpp_list;
 	struct rb_node *nd;
 	int ret;
+	const char *cl_output;
+
+	if (c2c.display == DISPLAY_TOT || c2c.display == DISPLAY_LCL ||
+	    c2c.display == DISPLAY_RMT)
+		cl_output = "cl_num,"
+			    "cl_rmt_hitm,"
+			    "cl_lcl_hitm,"
+			    "cl_stores_l1hit,"
+			    "cl_stores_l1miss,"
+			    "dcacheline";
+	else /* c2c.display == DISPLAY_LLC */
+		cl_output = "cl_num,"
+			    "cl_llc_hit,"
+			    "cl_lcl_hitm,"
+			    "cl_stores_l1hit,"
+			    "cl_stores_l1miss,"
+			    "dcacheline";
 
 	perf_hpp_list__init(&hpp_list);
-	ret = hpp_list__parse(&hpp_list,
-				"cl_num,"
-				"cl_rmt_hitm,"
-				"cl_lcl_hitm,"
-				"cl_stores_l1hit,"
-				"cl_stores_l1miss,"
-				"dcacheline",
-				NULL);
+	ret = hpp_list__parse(&hpp_list, cl_output, NULL);
 
 	if (WARN_ONCE(ret, "failed to setup sort entries\n"))
 		return;
@@ -2357,7 +2384,7 @@ static void print_c2c_info(FILE *out, struct perf_session *session)
 		fprintf(out, "%-36s: %s\n", first ? "  Events" : "", evsel__name(evsel));
 		first = false;
 	}
-	fprintf(out, "  Cachelines sort on                : %s HITMs\n",
+	fprintf(out, "  Cachelines sort on                : %s\n",
 		display_str[c2c.display]);
 	fprintf(out, "  Cacheline data grouping           : %s\n", c2c.cl_sort);
 }
@@ -2514,7 +2541,7 @@ static int perf_c2c_browser__title(struct hist_browser *browser,
 {
 	scnprintf(bf, size,
 		  "Shared Data Cache Line Table     "
-		  "(%lu entries, sorted on %s HITMs)",
+		  "(%lu entries, sorted on %s)",
 		  browser->nr_non_filtered_entries,
 		  display_str[c2c.display]);
 	return 0;
@@ -2720,6 +2747,8 @@ static int setup_display(const char *str)
 		c2c.display = DISPLAY_RMT;
 	else if (!strcmp(display, "lcl"))
 		c2c.display = DISPLAY_LCL;
+	else if (!strcmp(display, "llc"))
+		c2c.display = DISPLAY_LLC;
 	else {
 		pr_err("failed: unknown display type: %s\n", str);
 		return -1;
@@ -2766,9 +2795,10 @@ static int build_cl_output(char *cl_sort, bool no_source)
 	}
 
 	if (asprintf(&c2c.cl_output,
-		"%s%s%s%s%s%s%s%s%s%s",
+		"%s%s%s%s%s%s%s%s%s%s%s",
 		c2c.use_stdio ? "cl_num_empty," : "",
-		"percent_rmt_hitm,"
+		c2c.display == DISPLAY_LLC ? "percent_llc_hit," :
+					     "percent_rmt_hitm,",
 		"percent_lcl_hitm,"
 		"percent_stores_l1hit,"
 		"percent_stores_l1miss,"
@@ -2798,6 +2828,7 @@ err:
 static int setup_coalesce(const char *coalesce, bool no_source)
 {
 	const char *c = coalesce ?: coalesce_default;
+	const char *sort_str;
 
 	if (asprintf(&c2c.cl_sort, "offset,%s", c) < 0)
 		return -ENOMEM;
@@ -2805,12 +2836,16 @@ static int setup_coalesce(const char *coalesce, bool no_source)
 	if (build_cl_output(c2c.cl_sort, no_source))
 		return -1;
 
-	if (asprintf(&c2c.cl_resort, "offset,%s",
-		     c2c.display == DISPLAY_TOT ?
-		     "tot_hitm" :
-		     c2c.display == DISPLAY_RMT ?
-		     "rmt_hitm,lcl_hitm" :
-		     "lcl_hitm,rmt_hitm") < 0)
+	if (c2c.display == DISPLAY_TOT)
+		sort_str = "tot_hitm";
+	else if (c2c.display == DISPLAY_RMT)
+		sort_str = "rmt_hitm,lcl_hitm";
+	else if (c2c.display == DISPLAY_LCL)
+		sort_str = "lcl_hitm,rmt_hitm";
+	else if (c2c.display == DISPLAY_LLC)
+		sort_str = "tot_llchit";
+
+	if (asprintf(&c2c.cl_resort, "offset,%s", sort_str) < 0)
 		return -ENOMEM;
 
 	pr_debug("coalesce sort   fields: %s\n", c2c.cl_sort);
@@ -2862,6 +2897,7 @@ static int perf_c2c__report(int argc, const char **argv)
 	OPT_END()
 	};
 	int err = 0;
+	const char *output_str, *sort_str;
 
 	argc = parse_options(argc, argv, options, report_c2c_usage,
 			     PARSE_OPT_STOP_AT_NON_OPTION);
@@ -2936,24 +2972,48 @@ static int perf_c2c__report(int argc, const char **argv)
 		goto out_mem2node;
 	}
 
-	c2c_hists__reinit(&c2c.hists,
-			"cl_idx,"
-			"dcacheline,"
-			"dcacheline_node,"
-			"dcacheline_count,"
-			"percent_hitm,"
-			"tot_hitm,lcl_hitm,rmt_hitm,"
-			"tot_recs,"
-			"tot_loads,"
-			"tot_stores,"
-			"stores_l1hit,stores_l1miss,"
-			"ld_fbhit,ld_l1hit,ld_l2hit,"
-			"ld_lclhit,lcl_hitm,"
-			"ld_rmthit,rmt_hitm,"
-			"dram_lcl,dram_rmt",
-			c2c.display == DISPLAY_TOT ? "tot_hitm" :
-			c2c.display == DISPLAY_LCL ? "lcl_hitm" : "rmt_hitm"
-			);
+	if (c2c.display == DISPLAY_TOT || c2c.display == DISPLAY_LCL ||
+	    c2c.display == DISPLAY_RMT)
+		output_str = "cl_idx,"
+			     "dcacheline,"
+			     "dcacheline_node,"
+			     "dcacheline_count,"
+			     "percent_hitm,"
+			     "tot_hitm,lcl_hitm,rmt_hitm,"
+			     "tot_recs,"
+			     "tot_loads,"
+			     "tot_stores,"
+			     "stores_l1hit,stores_l1miss,"
+			     "ld_fbhit,ld_l1hit,ld_l2hit,"
+			     "ld_lclhit,lcl_hitm,"
+			     "ld_rmthit,rmt_hitm,"
+			     "dram_lcl,dram_rmt";
+	else /* c2c.display == DISPLAY_LLC */
+		output_str = "cl_idx,"
+			     "dcacheline,"
+			     "dcacheline_node,"
+			     "dcacheline_count,"
+			     "percent_llchit,"
+			     "tot_llchit,"
+			     "tot_recs,"
+			     "tot_loads,"
+			     "tot_stores,"
+			     "stores_l1hit,stores_l1miss,"
+			     "ld_fbhit,ld_l1hit,ld_l2hit,"
+			     "ld_lclhit,lcl_hitm,"
+			     "ld_rmthit,rmt_hitm,"
+			     "dram_lcl,dram_rmt";
+
+	if (c2c.display == DISPLAY_TOT)
+		sort_str = "tot_hitm";
+	else if (c2c.display == DISPLAY_RMT)
+		sort_str = "rmt_hitm";
+	else if (c2c.display == DISPLAY_LCL)
+		sort_str = "lcl_hitm";
+	else if (c2c.display == DISPLAY_LLC)
+		sort_str = "tot_llchit";
+
+	c2c_hists__reinit(&c2c.hists, output_str, sort_str);
 
 	ui_progress__init(&prog, c2c.hists.hists.nr_entries, "Sorting...");
 
