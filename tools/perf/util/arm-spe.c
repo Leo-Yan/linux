@@ -361,9 +361,9 @@ static u64 arm_spe__synth_data_source(const struct arm_spe_record *record)
 		data_src.mem_lvl = PERF_MEM_LVL_L3;
 
 		if (record->type & ARM_SPE_LLC_MISS)
-			data_src.mem_lvl |= PERF_MEM_LVL_MISS;
-		else
 			data_src.mem_lvl |= PERF_MEM_LVL_HIT;
+		else
+			data_src.mem_lvl |= PERF_MEM_LVL_MISS;
 	} else if (record->type & (ARM_SPE_L1D_ACCESS | ARM_SPE_L1D_MISS)) {
 		data_src.mem_lvl = PERF_MEM_LVL_L1;
 
