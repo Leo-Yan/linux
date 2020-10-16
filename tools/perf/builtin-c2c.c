@@ -362,6 +362,19 @@ free_mi:
 	goto out;
 }
 
+static int process_attr(struct perf_tool *tool __maybe_unused,
+			union perf_event *event,
+			struct evlist **pevlist)
+{
+	int err;
+
+	err = perf_event__process_attr(tool, event, pevlist);
+	if (err)
+		return err;
+
+	return 0;
+}
+
 static struct perf_c2c c2c = {
 	.tool = {
 		.sample		= process_sample_event,
@@ -371,6 +384,12 @@ static struct perf_c2c c2c = {
 		.exit		= perf_event__process_exit,
 		.fork		= perf_event__process_fork,
 		.lost		= perf_event__process_lost,
+		.attr		= process_attr,
+ 		.build_id	= perf_event__process_build_id,
+ 		.namespaces	= perf_event__process_namespaces,
+		.auxtrace_info  = perf_event__process_auxtrace_info,
+		.auxtrace       = perf_event__process_auxtrace,
+		.auxtrace_error = perf_event__process_auxtrace_error,
 		.ordered_events	= true,
 		.ordering_requires_timestamps = true,
 	},
@@ -2856,6 +2875,12 @@ static int setup_coalesce(const char *coalesce, bool no_source)
 
 static int perf_c2c__report(int argc, const char **argv)
 {
+	struct itrace_synth_opts itrace_synth_opts = {
+		.set = true,
+		.mem = true,		/* Memory samples */
+		.default_no_sample = true,
+	};
+
 	struct perf_session *session;
 	struct ui_progress prog;
 	struct perf_data data = {
@@ -2935,6 +2960,8 @@ static int perf_c2c__report(int argc, const char **argv)
 		pr_debug("Error creating perf session\n");
 		goto out;
 	}
+
+	session->itrace_synth_opts = &itrace_synth_opts;
 
 	err = setup_nodes(session);
 	if (err) {
