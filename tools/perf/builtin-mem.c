@@ -87,14 +87,22 @@ static int __cmd_record(int argc, const char **argv, struct perf_mem *mem)
 
 	rec_argv[i++] = "record";
 
-	if (mem->operation & MEM_OPERATION_LOAD) {
-		e = perf_mem_events__ptr(PERF_MEM_EVENTS__LOAD);
+	e = perf_mem_events__ptr(PERF_MEM_EVENTS__LOAD_STORE);
+	if (e->tag &&
+	    (mem->operation & MEM_OPERATION_LOAD) &&
+	    (mem->operation & MEM_OPERATION_STORE)) {
 		e->record = true;
-	}
+	} else {
 
-	if (mem->operation & MEM_OPERATION_STORE) {
-		e = perf_mem_events__ptr(PERF_MEM_EVENTS__STORE);
-		e->record = true;
+		if (mem->operation & MEM_OPERATION_LOAD) {
+			e = perf_mem_events__ptr(PERF_MEM_EVENTS__LOAD);
+			e->record = true;
+		}
+
+		if (mem->operation & MEM_OPERATION_STORE) {
+			e = perf_mem_events__ptr(PERF_MEM_EVENTS__STORE);
+			e->record = true;
+		}
 	}
 
 	e = perf_mem_events__ptr(PERF_MEM_EVENTS__LOAD);
