@@ -304,6 +304,12 @@ static int arm_spe_pkt_desc_event(const struct arm_spe_pkt *packet,
 		arm_spe_pkt_snprintf(&err, &buf, &blen, " LLC-REFILL");
 	if (payload & BIT(EV_REMOTE_ACCESS))
 		arm_spe_pkt_snprintf(&err, &buf, &blen, " REMOTE-ACCESS");
+	if (payload & BIT(EV_ALIGNMENT))
+		arm_spe_pkt_snprintf(&err, &buf, &blen, " ALIGNMENT");
+	if (payload & BIT(EV_PARTIAL_PREDICATE))
+		arm_spe_pkt_snprintf(&err, &buf, &blen, " SVE-PARTIAL-PRED");
+	if (payload & BIT(EV_EMPTY_PREDICATE))
+		arm_spe_pkt_snprintf(&err, &buf, &blen, " SVE-EMPTY-PRED");
 
 	return err ?: (int)(buf_len - blen);
 }
@@ -317,8 +323,26 @@ static int arm_spe_pkt_desc_op_type(const struct arm_spe_pkt *packet,
 
 	switch (packet->index) {
 	case SPE_OP_PKT_HDR_CLASS_OTHER:
-		return arm_spe_pkt_snprintf(&err, &buf, &blen,
-			payload & SPE_OP_PKT_COND ? "COND-SELECT" : "INSN-OTHER");
+		if (SPE_OP_PKT_IS_OTHER_SVE_OP(payload)) {
+			arm_spe_pkt_snprintf(&err, &buf, &blen, "SVE-OTHER");
+
+			/* SVE effective vector length */
+			arm_spe_pkt_snprintf(&err, &buf, &blen, " EVLEN %d",
+					     SPE_OP_PKG_SVE_EVL(payload));
+
+			if (payload & SPE_OP_PKT_SVE_FP)
+				arm_spe_pkt_snprintf(&err, &buf, &blen, " FP");
+			if (payload & SPE_OP_PKT_SVE_PRED)
+				arm_spe_pkt_snprintf(&err, &buf, &blen, " PRED");
+		} else {
+			arm_spe_pkt_snprintf(&err, &buf, &blen, "OTHER");
+			arm_spe_pkt_snprintf(&err, &buf, &blen, " %s",
+					     payload & SPE_OP_PKT_COND ?
+					     "COND-SELECT" : "INSN-OTHER");
+		}
+
+		return err ?: (int)(buf_len - blen);
+
 	case SPE_OP_PKT_HDR_CLASS_LD_ST_ATOMIC:
 		arm_spe_pkt_snprintf(&err, &buf, &blen,
 				     payload & 0x1 ? "ST" : "LD");
@@ -347,6 +371,17 @@ static int arm_spe_pkt_desc_op_type(const struct arm_spe_pkt *packet,
 			break;
 		default:
 			break;
+		}
+
+		if (SPE_OP_PKT_IS_LDST_SVE(payload)) {
+			/* SVE effective vector length */
+			arm_spe_pkt_snprintf(&err, &buf, &blen, " EVLEN %d",
+					     SPE_OP_PKG_SVE_EVL(payload));
+
+			if (payload & SPE_OP_PKT_SVE_PRED)
+				arm_spe_pkt_snprintf(&err, &buf, &blen, " PRED");
+			if (payload & SPE_OP_PKT_SVE_SG)
+				arm_spe_pkt_snprintf(&err, &buf, &blen, " SG");
 		}
 
 		return err ?: (int)(buf_len - blen);
