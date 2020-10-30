@@ -301,6 +301,34 @@ static int arm_spe_pkt_desc_addr(const struct arm_spe_pkt *packet,
 	}
 }
 
+static int arm_spe_pkt_desc_counter(const struct arm_spe_pkt *packet,
+				    char *buf, size_t buf_len)
+{
+	u64 payload = packet->payload;
+	const char *name = arm_spe_pkt_name(packet->type);
+	size_t blen = buf_len;
+	int err = 0;
+
+	arm_spe_pkt_snprintf(&err, &buf, &blen, "%s %d ", name,
+			     (unsigned short)payload);
+
+	switch (packet->index) {
+	case 0:
+		arm_spe_pkt_snprintf(&err, &buf, &blen, "TOT");
+		break;
+	case 1:
+		arm_spe_pkt_snprintf(&err, &buf, &blen, "ISSUE");
+		break;
+	case 2:
+		arm_spe_pkt_snprintf(&err, &buf, &blen, "XLAT");
+		break;
+	default:
+		break;
+	}
+
+	return err ?: (int)(buf_len - blen);
+}
+
 int arm_spe_pkt_desc(const struct arm_spe_pkt *packet, char *buf,
 		     size_t buf_len)
 {
@@ -388,25 +416,7 @@ int arm_spe_pkt_desc(const struct arm_spe_pkt *packet, char *buf,
 		return arm_spe_pkt_snprintf(&err, &buf, &blen, "%s 0x%lx el%d",
 					    name, (unsigned long)payload, idx + 1);
 	case ARM_SPE_COUNTER:
-		arm_spe_pkt_snprintf(&err, &buf, &blen, "%s %d ", name,
-				     (unsigned short)payload);
-
-		switch (idx) {
-		case 0:
-			arm_spe_pkt_snprintf(&err, &buf, &blen, "TOT");
-			break;
-		case 1:
-			arm_spe_pkt_snprintf(&err, &buf, &blen, "ISSUE");
-			break;
-		case 2:
-			arm_spe_pkt_snprintf(&err, &buf, &blen, "XLAT");
-			break;
-		default:
-			break;
-		}
-
-		return err ?: (int)(buf_len - blen);
-
+		return arm_spe_pkt_desc_counter(packet, buf, buf_len);
 	default:
 		break;
 	}
