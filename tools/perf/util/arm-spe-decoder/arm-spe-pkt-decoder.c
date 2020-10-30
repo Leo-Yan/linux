@@ -371,6 +371,7 @@ static int arm_spe_pkt_desc_addr(const struct arm_spe_pkt *packet,
 				 char *buf, size_t buf_len)
 {
 	int ns, el, idx = packet->index;
+	int ch, pat;
 	u64 payload = packet->payload;
 	int err = 0;
 
@@ -388,9 +389,12 @@ static int arm_spe_pkt_desc_addr(const struct arm_spe_pkt *packet,
 					    "VA 0x%llx", payload);
 	case SPE_ADDR_PKT_HDR_INDEX_DATA_PHYS:
 		ns = !!SPE_ADDR_PKT_GET_NS(payload);
+		ch = !!SPE_ADDR_PKT_GET_CH(payload);
+		pat = SPE_ADDR_PKT_GET_PAT(payload);
 		payload = SPE_ADDR_PKT_ADDR_GET_BYTES_0_6(payload);
 		return arm_spe_pkt_snprintf(&err, &buf, &buf_len,
-					    "PA 0x%llx ns=%d", payload, ns);
+					    "PA 0x%llx ns=%d ch=%d, pat=%x",
+					    payload, ns, ch, pat);
 	default:
 		return 0;
 	}
