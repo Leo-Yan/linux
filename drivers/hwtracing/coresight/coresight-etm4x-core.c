@@ -477,6 +477,15 @@ static int etm4_parse_event_config(struct etmv4_drvdata *drvdata,
 		/* bit[6], Context ID tracing bit */
 		config->cfg |= BIT(ETM4_CFG_BIT_CTXTID);
 
+	/* Do not enable VMID tracing if we are not running in EL2 */
+	if (attr->config & BIT(ETM_OPT_CTXTID_IN_VMID)) {
+		if (!is_kernel_in_hyp_mode()) {
+			ret = -EINVAL;
+			goto out;
+		}
+		config->cfg |= BIT(ETM4_CFG_BIT_VMID) | BIT(ETM4_CFG_BIT_VMID_OPT);
+	}
+
 	/* return stack - enable if selected and supported */
 	if ((attr->config & BIT(ETM_OPT_RETSTK)) && drvdata->retstack)
 		/* bit[12], Return stack enable bit */
