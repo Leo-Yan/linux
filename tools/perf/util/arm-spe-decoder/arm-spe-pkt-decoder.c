@@ -308,6 +308,49 @@ static int arm_spe_pkt_desc_event(const struct arm_spe_pkt *packet,
 	return err ?: (int)(buf_len - blen);
 }
 
+static int arm_spe_pkt_desc_op_type(const struct arm_spe_pkt *packet,
+				    char *buf, size_t buf_len)
+{
+	u64 payload = packet->payload;
+	size_t blen = buf_len;
+	int err = 0;
+
+	switch (packet->index) {
+	case 0:
+		return arm_spe_pkt_snprintf(&err, &buf, &blen,
+				payload & 0x1 ? "COND-SELECT" : "INSN-OTHER");
+	case 1:
+		arm_spe_pkt_snprintf(&err, &buf, &blen,
+				     payload & 0x1 ? "ST" : "LD");
+
+		if (payload & 0x2) {
+			if (payload & 0x4)
+				arm_spe_pkt_snprintf(&err, &buf, &blen, " AT");
+			if (payload & 0x8)
+				arm_spe_pkt_snprintf(&err, &buf, &blen, " EXCL");
+			if (payload & 0x10)
+				arm_spe_pkt_snprintf(&err, &buf, &blen, " AR");
+		} else if (payload & 0x4) {
+			arm_spe_pkt_snprintf(&err, &buf, &blen, " SIMD-FP");
+		}
+
+		return err ?: (int)(buf_len - blen);
+
+	case 2:
+		arm_spe_pkt_snprintf(&err, &buf, &blen, "B");
+
+		if (payload & 0x1)
+			arm_spe_pkt_snprintf(&err, &buf, &blen, " COND");
+		if (payload & 0x2)
+			arm_spe_pkt_snprintf(&err, &buf, &blen, " IND");
+
+		return err ?: (int)(buf_len - blen);
+
+	default:
+		return 0;
+	}
+}
+
 static int arm_spe_pkt_desc_addr(const struct arm_spe_pkt *packet,
 				 char *buf, size_t buf_len)
 {
@@ -382,40 +425,7 @@ int arm_spe_pkt_desc(const struct arm_spe_pkt *packet, char *buf,
 	case ARM_SPE_EVENTS:
 		return arm_spe_pkt_desc_event(packet, buf, buf_len);
 	case ARM_SPE_OP_TYPE:
-		switch (idx) {
-		case 0:
-			return arm_spe_pkt_snprintf(&err, &buf, &blen,
-					payload & 0x1 ? "COND-SELECT" : "INSN-OTHER");
-		case 1:
-			arm_spe_pkt_snprintf(&err, &buf, &blen,
-					     payload & 0x1 ? "ST" : "LD");
-
-			if (payload & 0x2) {
-				if (payload & 0x4)
-					arm_spe_pkt_snprintf(&err, &buf, &blen, " AT");
-				if (payload & 0x8)
-					arm_spe_pkt_snprintf(&err, &buf, &blen, " EXCL");
-				if (payload & 0x10)
-					arm_spe_pkt_snprintf(&err, &buf, &blen, " AR");
-			} else if (payload & 0x4) {
-				arm_spe_pkt_snprintf(&err, &buf, &blen, " SIMD-FP");
-			}
-
-			return err ?: (int)(buf_len - blen);
-
-		case 2:
-			arm_spe_pkt_snprintf(&err, &buf, &blen, "B");
-
-			if (payload & 0x1)
-				arm_spe_pkt_snprintf(&err, &buf, &blen, " COND");
-			if (payload & 0x2)
-				arm_spe_pkt_snprintf(&err, &buf, &blen, " IND");
-
-			return err ?: (int)(buf_len - blen);
-
-		default:
-			return 0;
-		}
+		return arm_spe_pkt_desc_op_type(packet, buf, buf_len);
 	case ARM_SPE_DATA_SOURCE:
 	case ARM_SPE_TIMESTAMP:
 		return arm_spe_pkt_snprintf(&err, &buf, &blen, "%s %lld", name, payload);
