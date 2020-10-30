@@ -273,6 +273,43 @@ static int arm_spe_pkt_snprintf(int *err, char **buf_p, size_t *blen,
 	return ret;
 }
 
+static int arm_spe_pkt_desc_event(const struct arm_spe_pkt *packet,
+				  char *buf, size_t buf_len)
+{
+	u64 payload = packet->payload;
+	size_t blen = buf_len;
+	int err = 0;
+
+	arm_spe_pkt_snprintf(&err, &buf, &blen, "EV");
+
+	if (payload & 0x1)
+		arm_spe_pkt_snprintf(&err, &buf, &blen, " EXCEPTION-GEN");
+	if (payload & 0x2)
+		arm_spe_pkt_snprintf(&err, &buf, &blen, " RETIRED");
+	if (payload & 0x4)
+		arm_spe_pkt_snprintf(&err, &buf, &blen, " L1D-ACCESS");
+	if (payload & 0x8)
+		arm_spe_pkt_snprintf(&err, &buf, &blen, " L1D-REFILL");
+	if (payload & 0x10)
+		arm_spe_pkt_snprintf(&err, &buf, &blen, " TLB-ACCESS");
+	if (payload & 0x20)
+		arm_spe_pkt_snprintf(&err, &buf, &blen, " TLB-REFILL");
+	if (payload & 0x40)
+		arm_spe_pkt_snprintf(&err, &buf, &blen, " NOT-TAKEN");
+	if (payload & 0x80)
+		arm_spe_pkt_snprintf(&err, &buf, &blen, " MISPRED");
+	if (packet->index > 1) {
+		if (payload & 0x100)
+			arm_spe_pkt_snprintf(&err, &buf, &blen, " LLC-ACCESS");
+		if (payload & 0x200)
+			arm_spe_pkt_snprintf(&err, &buf, &blen, " LLC-REFILL");
+		if (payload & 0x400)
+			arm_spe_pkt_snprintf(&err, &buf, &blen, " REMOTE-ACCESS");
+	}
+
+	return err ?: (int)(buf_len - blen);
+}
+
 static int arm_spe_pkt_desc_addr(const struct arm_spe_pkt *packet,
 				 char *buf, size_t buf_len)
 {
@@ -345,34 +382,7 @@ int arm_spe_pkt_desc(const struct arm_spe_pkt *packet, char *buf,
 	case ARM_SPE_END:
 		return arm_spe_pkt_snprintf(&err, &buf, &blen, "%s", name);
 	case ARM_SPE_EVENTS:
-		arm_spe_pkt_snprintf(&err, &buf, &blen, "EV");
-
-		if (payload & 0x1)
-			arm_spe_pkt_snprintf(&err, &buf, &blen, " EXCEPTION-GEN");
-		if (payload & 0x2)
-			arm_spe_pkt_snprintf(&err, &buf, &blen, " RETIRED");
-		if (payload & 0x4)
-			arm_spe_pkt_snprintf(&err, &buf, &blen, " L1D-ACCESS");
-		if (payload & 0x8)
-			arm_spe_pkt_snprintf(&err, &buf, &blen, " L1D-REFILL");
-		if (payload & 0x10)
-			arm_spe_pkt_snprintf(&err, &buf, &blen, " TLB-ACCESS");
-		if (payload & 0x20)
-			arm_spe_pkt_snprintf(&err, &buf, &blen, " TLB-REFILL");
-		if (payload & 0x40)
-			arm_spe_pkt_snprintf(&err, &buf, &blen, " NOT-TAKEN");
-		if (payload & 0x80)
-			arm_spe_pkt_snprintf(&err, &buf, &blen, " MISPRED");
-		if (idx > 1) {
-			if (payload & 0x100)
-				arm_spe_pkt_snprintf(&err, &buf, &blen, " LLC-ACCESS");
-			if (payload & 0x200)
-				arm_spe_pkt_snprintf(&err, &buf, &blen, " LLC-REFILL");
-			if (payload & 0x400)
-				arm_spe_pkt_snprintf(&err, &buf, &blen, " REMOTE-ACCESS");
-		}
-		return err ?: (int)(buf_len - blen);
-
+		return arm_spe_pkt_desc_event(packet, buf, buf_len);
 	case ARM_SPE_OP_TYPE:
 		switch (idx) {
 		case 0:
