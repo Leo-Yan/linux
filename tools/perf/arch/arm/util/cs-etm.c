@@ -59,14 +59,15 @@ static const char *metadata_etmv4_ro[CS_ETMV4_PRIV_MAX] = {
 
 static bool cs_etm_is_etmv4(struct auxtrace_record *itr, int cpu);
 
-static int cs_etm_set_context_id(struct auxtrace_record *itr,
-				 struct evsel *evsel, int cpu)
+static int cs_etm_set_pid(struct auxtrace_record *itr,
+			  struct evsel *evsel, int cpu)
 {
 	struct cs_etm_recording *ptr;
 	struct perf_pmu *cs_etm_pmu;
 	char path[PATH_MAX];
 	int err = -EINVAL;
 	u32 val;
+	u64 pid_fmt;
 
 	ptr = container_of(itr, struct cs_etm_recording, itr);
 	cs_etm_pmu = ptr->cs_etm_pmu;
@@ -86,21 +87,50 @@ static int cs_etm_set_context_id(struct auxtrace_record *itr,
 		goto out;
 	}
 
+	pid_fmt = perf_pmu__format_bits(&cs_etm_pmu->format, "pid");
 	/*
-	 * TRCIDR2.CIDSIZE, bit [9-5], indicates whether contextID tracing
-	 * is supported:
-	 *  0b00000 Context ID tracing is not supported.
-	 *  0b00100 Maximum of 32-bit Context ID size.
-	 *  All other values are reserved.
+	 * If the kernel doesn't support the "pid" format (older kernel),
+	 * fall back to using the CTXTID.
 	 */
-	val = BMVAL(val, 5, 9);
-	if (!val || val != 0x4) {
+	if (!pid_fmt)
+		pid_fmt = 1ULL << ETM_OPT_CTXTID;
+
+	switch (pid_fmt) {
+	case (1ULL << ETM_OPT_CTXTID):
+		/*
+		 * TRCIDR2.CIDSIZE, bit [9-5], indicates whether contextID
+		 * tracing is supported:
+		 *  0b00000 Context ID tracing is not supported.
+		 *  0b00100 Maximum of 32-bit Context ID size.
+		 *  All other values are reserved.
+		 */
+		val = BMVAL(val, 5, 9);
+		if (!val || val != 0x4) {
+			err = -EINVAL;
+			goto out;
+		}
+		break;
+	case (1ULL << ETM_OPT_CTXTID_IN_VMID):
+		/*
+		 * TRCIDR2.VMIDOPT[30:29] != 0 and
+		 * TRCIDR2.VMIDSIZE[14:10] == 0b00100 (32bit virtual contextid)
+		 * We can't support CONTEXTIDR in VMID if the size of the
+		 * virtual context id is < 32bit.
+		 * Any value of VMIDSIZE >= 4 (i.e, > 32bit) is fine for us.
+		 */
+		if (!BMVAL(val, 29, 30) || BMVAL(val, 10, 14) < 4) {
+			err = -EINVAL;
+			goto out;
+		}
+		break;
+	default:
 		err = -EINVAL;
 		goto out;
 	}
 
+
 	/* All good, let the kernel know */
-	evsel->core.attr.config |= (1 << ETM_OPT_CTXTID);
+	evsel->core.attr.config |= pid_fmt;
 	err = 0;
 
 out:
@@ -156,6 +186,10 @@ out:
 	return err;
 }
 
+#define ETM_SET_OPT_PID		(1 << 0)
+#define ETM_SET_OPT_TS		(1 << 1)
+#define ETM_SET_OPT_MASK	(ETM_SET_OPT_PID | ETM_SET_OPT_TS)
+
 static int cs_etm_set_option(struct auxtrace_record *itr,
 			     struct evsel *evsel, u32 option)
 {
@@ -169,17 +203,17 @@ static int cs_etm_set_option(struct auxtrace_record *itr,
 		    !cpu_map__has(online_cpus, i))
 			continue;
 
-		if (option & ETM_OPT_CTXTID) {
-			err = cs_etm_set_context_id(itr, evsel, i);
+		if (option & ETM_SET_OPT_PID) {
+			err = cs_etm_set_pid(itr, evsel, i);
 			if (err)
 				goto out;
 		}
-		if (option & ETM_OPT_TS) {
+		if (option & ETM_SET_OPT_TS) {
 			err = cs_etm_set_timestamp(itr, evsel, i);
 			if (err)
 				goto out;
 		}
-		if (option & ~(ETM_OPT_CTXTID | ETM_OPT_TS))
+		if (option & ~(ETM_SET_OPT_MASK))
 			/* Nothing else is currently supported */
 			goto out;
 	}
@@ -406,7 +440,7 @@ static int cs_etm_recording_options(struct auxtrace_record *itr,
 		evsel__set_sample_bit(cs_etm_evsel, CPU);
 
 		err = cs_etm_set_option(itr, cs_etm_evsel,
-					ETM_OPT_CTXTID | ETM_OPT_TS);
+					ETM_SET_OPT_PID | ETM_SET_OPT_TS);
 		if (err)
 			goto out;
 	}
@@ -485,7 +519,9 @@ static u64 cs_etmv4_get_config(struct auxtrace_record *itr)
 		config |= BIT(ETM4_CFG_BIT_TS);
 	if (config_opts & BIT(ETM_OPT_RETSTK))
 		config |= BIT(ETM4_CFG_BIT_RETSTK);
-
+	if (config_opts & BIT(ETM_OPT_CTXTID_IN_VMID))
+		config |= BIT(ETM4_CFG_BIT_VMID) |
+			  BIT(ETM4_CFG_BIT_VMID_OPT);
 	return config;
 }
 
