@@ -2895,11 +2895,16 @@ static int perf_c2c__record(int argc, const char **argv)
 	rec_argv[i++] = "record";
 
 	if (!event_set) {
-		e = perf_mem_events__ptr(PERF_MEM_EVENTS__LOAD);
-		e->record = true;
+		e = perf_mem_events__ptr(PERF_MEM_EVENTS__LOAD_STORE);
+		if (e->tag) {
+			e->record = true;
+		} else {
+			e = perf_mem_events__ptr(PERF_MEM_EVENTS__LOAD);
+			e->record = true;
 
-		e = perf_mem_events__ptr(PERF_MEM_EVENTS__STORE);
-		e->record = true;
+			e = perf_mem_events__ptr(PERF_MEM_EVENTS__STORE);
+			e->record = true;
+		}
 	}
 
 	e = perf_mem_events__ptr(PERF_MEM_EVENTS__LOAD);
