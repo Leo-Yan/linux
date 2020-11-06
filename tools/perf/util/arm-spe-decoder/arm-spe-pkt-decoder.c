@@ -301,9 +301,10 @@ static int arm_spe_pkt_snprintf(int *err, char **buf_p, size_t *blen,
 int arm_spe_pkt_desc(const struct arm_spe_pkt *packet, char *buf,
 		     size_t buf_len)
 {
-	int ret, ns, el, idx = packet->index;
+	int ns, el, idx = packet->index;
 	unsigned long long payload = packet->payload;
 	const char *name = arm_spe_pkt_name(packet->type);
+	char *buf_orig = buf;
 	size_t blen = buf_len;
 	int err = 0;
 
@@ -311,82 +312,76 @@ int arm_spe_pkt_desc(const struct arm_spe_pkt *packet, char *buf,
 	case ARM_SPE_BAD:
 	case ARM_SPE_PAD:
 	case ARM_SPE_END:
-		return arm_spe_pkt_snprintf(&err, &buf, &blen, "%s", name);
+		arm_spe_pkt_snprintf(&err, &buf, &blen, "%s", name);
+		break;
 	case ARM_SPE_EVENTS:
-		ret = arm_spe_pkt_snprintf(&err, &buf, &blen, "EV");
+		arm_spe_pkt_snprintf(&err, &buf, &blen, "EV");
 
 		if (payload & 0x1)
-			ret = arm_spe_pkt_snprintf(&err, &buf, &blen, " EXCEPTION-GEN");
+			arm_spe_pkt_snprintf(&err, &buf, &blen, " EXCEPTION-GEN");
 		if (payload & 0x2)
-			ret = arm_spe_pkt_snprintf(&err, &buf, &blen, " RETIRED");
+			arm_spe_pkt_snprintf(&err, &buf, &blen, " RETIRED");
 		if (payload & 0x4)
-			ret = arm_spe_pkt_snprintf(&err, &buf, &blen, " L1D-ACCESS");
+			arm_spe_pkt_snprintf(&err, &buf, &blen, " L1D-ACCESS");
 		if (payload & 0x8)
-			ret = arm_spe_pkt_snprintf(&err, &buf, &blen, " L1D-REFILL");
+			arm_spe_pkt_snprintf(&err, &buf, &blen, " L1D-REFILL");
 		if (payload & 0x10)
-			ret = arm_spe_pkt_snprintf(&err, &buf, &blen, " TLB-ACCESS");
+			arm_spe_pkt_snprintf(&err, &buf, &blen, " TLB-ACCESS");
 		if (payload & 0x20)
-			ret = arm_spe_pkt_snprintf(&err, &buf, &blen, " TLB-REFILL");
+			arm_spe_pkt_snprintf(&err, &buf, &blen, " TLB-REFILL");
 		if (payload & 0x40)
-			ret = arm_spe_pkt_snprintf(&err, &buf, &blen, " NOT-TAKEN");
+			arm_spe_pkt_snprintf(&err, &buf, &blen, " NOT-TAKEN");
 		if (payload & 0x80)
-			ret = arm_spe_pkt_snprintf(&err, &buf, &blen, " MISPRED");
+			arm_spe_pkt_snprintf(&err, &buf, &blen, " MISPRED");
 		if (idx > 1) {
 			if (payload & 0x100)
-				ret = arm_spe_pkt_snprintf(&err, &buf, &blen, " LLC-ACCESS");
+				arm_spe_pkt_snprintf(&err, &buf, &blen, " LLC-ACCESS");
 			if (payload & 0x200)
-				ret = arm_spe_pkt_snprintf(&err, &buf, &blen, " LLC-REFILL");
+				arm_spe_pkt_snprintf(&err, &buf, &blen, " LLC-REFILL");
 			if (payload & 0x400)
-				ret = arm_spe_pkt_snprintf(&err, &buf, &blen, " REMOTE-ACCESS");
+				arm_spe_pkt_snprintf(&err, &buf, &blen, " REMOTE-ACCESS");
 		}
-		if (ret < 0)
-			return ret;
-		blen -= ret;
-		return buf_len - blen;
+		break;
 	case ARM_SPE_OP_TYPE:
 		switch (idx) {
 		case 0:
-			return arm_spe_pkt_snprintf(&err, &buf, &blen,
+			arm_spe_pkt_snprintf(&err, &buf, &blen,
 					payload & 0x1 ? "COND-SELECT" : "INSN-OTHER");
+			break;
 		case 1:
-			ret = arm_spe_pkt_snprintf(&err, &buf, &blen,
-						   payload & 0x1 ? "ST" : "LD");
+			arm_spe_pkt_snprintf(&err, &buf, &blen,
+					     payload & 0x1 ? "ST" : "LD");
 
 			if (payload & 0x2) {
 				if (payload & 0x4)
-					ret = arm_spe_pkt_snprintf(&err, &buf, &blen, " AT");
+					arm_spe_pkt_snprintf(&err, &buf, &blen, " AT");
 				if (payload & 0x8)
-					ret = arm_spe_pkt_snprintf(&err, &buf, &blen, " EXCL");
+					arm_spe_pkt_snprintf(&err, &buf, &blen, " EXCL");
 				if (payload & 0x10)
-					ret = arm_spe_pkt_snprintf(&err, &buf, &blen, " AR");
+					arm_spe_pkt_snprintf(&err, &buf, &blen, " AR");
 			} else if (payload & 0x4) {
-				ret = arm_spe_pkt_snprintf(&err, &buf, &blen, " SIMD-FP");
+				arm_spe_pkt_snprintf(&err, &buf, &blen, " SIMD-FP");
 			}
-
-			if (ret < 0)
-				return ret;
-			blen -= ret;
-			return buf_len - blen;
-
+			break;
 		case 2:
-			ret = arm_spe_pkt_snprintf(&err, &buf, &blen, "B");
+			arm_spe_pkt_snprintf(&err, &buf, &blen, "B");
 
 			if (payload & 0x1)
-				ret = arm_spe_pkt_snprintf(&err, &buf, &blen, " COND");
+				arm_spe_pkt_snprintf(&err, &buf, &blen, " COND");
 			if (payload & 0x2)
-				ret = arm_spe_pkt_snprintf(&err, &buf, &blen, " IND");
+				arm_spe_pkt_snprintf(&err, &buf, &blen, " IND");
 
-			if (ret < 0)
-				return ret;
-			blen -= ret;
-			return buf_len - blen;
-
+			break;
 		default:
-			return 0;
+			/* Unknown index */
+			err = -1;
+			break;
 		}
+		break;
 	case ARM_SPE_DATA_SOURCE:
 	case ARM_SPE_TIMESTAMP:
-		return arm_spe_pkt_snprintf(&err, &buf, &blen, "%s %lld", name, payload);
+		arm_spe_pkt_snprintf(&err, &buf, &blen, "%s %lld", name, payload);
+		break;
 	case ARM_SPE_ADDRESS:
 		switch (idx) {
 		case 0:
@@ -394,48 +389,59 @@ int arm_spe_pkt_desc(const struct arm_spe_pkt *packet, char *buf,
 			ns = !!(packet->payload & NS_FLAG);
 			el = (packet->payload & EL_FLAG) >> 61;
 			payload &= ~(0xffULL << 56);
-			return arm_spe_pkt_snprintf(&err, &buf, &blen,
+			arm_spe_pkt_snprintf(&err, &buf, &blen,
 					"%s 0x%llx el%d ns=%d",
 				        (idx == 1) ? "TGT" : "PC", payload, el, ns);
+			break;
 		case 2:
-			return arm_spe_pkt_snprintf(&err, &buf, &blen,
-						    "VA 0x%llx", payload);
+			arm_spe_pkt_snprintf(&err, &buf, &blen,
+					     "VA 0x%llx", payload);
+			break;
 		case 3:
 			ns = !!(packet->payload & NS_FLAG);
 			payload &= ~(0xffULL << 56);
-			return arm_spe_pkt_snprintf(&err, &buf, &blen,
-						    "PA 0x%llx ns=%d", payload, ns);
+			arm_spe_pkt_snprintf(&err, &buf, &blen,
+					     "PA 0x%llx ns=%d", payload, ns);
+			break;
 		default:
-			return 0;
+			/* Unknown index */
+			err = -1;
+			break;
 		}
+		break;
 	case ARM_SPE_CONTEXT:
-		return arm_spe_pkt_snprintf(&err, &buf, &blen, "%s 0x%lx el%d",
-					    name, (unsigned long)payload, idx + 1);
+		arm_spe_pkt_snprintf(&err, &buf, &blen, "%s 0x%lx el%d",
+				     name, (unsigned long)payload, idx + 1);
+		break;
 	case ARM_SPE_COUNTER:
-		ret = arm_spe_pkt_snprintf(&err, &buf, &blen, "%s %d ", name,
-					   (unsigned short)payload);
+		arm_spe_pkt_snprintf(&err, &buf, &blen, "%s %d ", name,
+				     (unsigned short)payload);
 		switch (idx) {
 		case 0:
-			ret = arm_spe_pkt_snprintf(&err, &buf, &blen, "TOT");
+			arm_spe_pkt_snprintf(&err, &buf, &blen, "TOT");
 			break;
 		case 1:
-			ret = arm_spe_pkt_snprintf(&err, &buf, &blen, "ISSUE");
+			arm_spe_pkt_snprintf(&err, &buf, &blen, "ISSUE");
 			break;
 		case 2:
-			ret = arm_spe_pkt_snprintf(&err, &buf, &blen, "XLAT");
+			arm_spe_pkt_snprintf(&err, &buf, &blen, "XLAT");
 			break;
 		default:
-			ret = 0;
 			break;
 		}
-		if (ret < 0)
-			return ret;
-		blen -= ret;
-		return buf_len - blen;
+		break;
 	default:
+		/* Unknown index */
+		err = -1;
 		break;
 	}
 
-	return arm_spe_pkt_snprintf(&err, &buf, &blen, "%s 0x%llx (%d)",
-				    name, payload, packet->index);
+	/* Output raw data if detect any error */
+	if (err) {
+		err = 0;
+		arm_spe_pkt_snprintf(&err, &buf_orig, &buf_len, "%s 0x%llx (%d)",
+				     name, payload, packet->index);
+	}
+
+	return err;
 }
