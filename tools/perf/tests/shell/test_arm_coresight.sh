@@ -33,7 +33,7 @@ record_touch_file() {
 	echo "Recording trace (only user mode) with path: CPU$2 => $1"
 	rm -f $file
 	perf record -o ${perfdata} -e cs_etm/@$1/u --per-thread \
-		-- taskset -c $2 touch $file
+		-- taskset -c $2 touch $file > /dev/null 2>&1
 }
 
 perf_script_branch_samples() {
@@ -44,7 +44,7 @@ perf_script_branch_samples() {
 	#   touch  6512          1         branches:u:      ffffb22082e0 strcmp+0xa0 (/lib/aarch64-linux-gnu/ld-2.27.so)
 	#   touch  6512          1         branches:u:      ffffb2208320 strcmp+0xe0 (/lib/aarch64-linux-gnu/ld-2.27.so)
 	perf script -F,-time -i ${perfdata} | \
-		egrep " +$1 +[0-9]+ .* +branches:(.*:)? +"
+		egrep " +$1 +[0-9]+ .* +branches:(.*:)? +" > /dev/null 2>&1
 }
 
 perf_report_branch_samples() {
@@ -55,7 +55,7 @@ perf_report_branch_samples() {
 	#    7.71%     7.71%  touch    libc-2.27.so      [.] getenv
 	#    2.59%     2.59%  touch    ld-2.27.so        [.] strcmp
 	perf report --stdio -i ${perfdata} | \
-		egrep " +[0-9]+\.[0-9]+% +[0-9]+\.[0-9]+% +$1 "
+		egrep " +[0-9]+\.[0-9]+% +[0-9]+\.[0-9]+% +$1 " > /dev/null 2>&1
 }
 
 perf_report_instruction_samples() {
@@ -66,7 +66,7 @@ perf_report_instruction_samples() {
 	#    5.80%  touch    libc-2.27.so   [.] getenv
 	#    4.35%  touch    ld-2.27.so     [.] _dl_fixup
 	perf report --itrace=i1000i --stdio -i ${perfdata} | \
-		egrep " +[0-9]+\.[0-9]+% +$1"
+		egrep " +[0-9]+\.[0-9]+% +$1" > /dev/null 2>&1
 }
 
 is_device_sink() {
@@ -115,7 +115,12 @@ arm_cs_iterate_devices() {
 			err=$?
 
 			# Exit when find failure
-			[ $err != 0 ] && exit $err
+			if [ $err != 0 ]; then
+				echo "CoreSight path testing (CPU$2 -> $device_name): FAIL"
+				glb_err=$err
+			else
+				echo "CoreSight path testing (CPU$2 -> $device_name): PASS"
+			fi
 		fi
 
 		arm_cs_iterate_devices $dev $2
@@ -148,7 +153,12 @@ arm_cs_etm_system_wide_test() {
 	err=$?
 
 	# Exit when find failure
-	[ $err != 0 ] && exit $err
+	if [ $err != 0 ]; then
+		echo "System wide testing: FAIL"
+		glb_err=$err
+	else
+		echo "System wide testing: PASS"
+	fi
 }
 
 arm_cs_etm_snapshot_test() {
@@ -174,10 +184,15 @@ arm_cs_etm_snapshot_test() {
 	err=$?
 
 	# Exit when find failure
-	[ $err != 0 ] && exit $err
+	if [ $err != 0 ]; then
+		echo "Snapshot testing: FAIL"
+		glb_err=$err
+	else
+		echo "Snapshot testing: PASS"
+	fi
 }
 
 arm_cs_etm_traverse_path_test
 arm_cs_etm_system_wide_test
 arm_cs_etm_snapshot_test
-exit 0
+exit $glb_err
