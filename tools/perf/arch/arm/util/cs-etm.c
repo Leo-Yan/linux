@@ -613,6 +613,7 @@ static void cs_etm_get_metadata(int cpu, u32 *offset,
 	struct cs_etm_recording *ptr =
 			container_of(itr, struct cs_etm_recording, itr);
 	struct perf_pmu *cs_etm_pmu = ptr->cs_etm_pmu;
+	u64 pid_fmt;
 
 	/* first see what kind of tracer this cpu is affined to */
 	if (cs_etm_is_etmv4(itr, cpu)) {
@@ -641,6 +642,16 @@ static void cs_etm_get_metadata(int cpu, u32 *offset,
 				      metadata_etmv4_ro
 				      [CS_ETMV4_TRCAUTHSTATUS]);
 
+		/*
+		 * The PID format will be used when decode the trace data;
+		 * based on it the decoder will make decision for setting
+		 * sample's PID as context_id or VMID.
+		 */
+		pid_fmt = perf_pmu__format_bits(&cs_etm_pmu->format, "pid");
+		if (!pid_fmt)
+			pid_fmt = 1ULL << ETM_OPT_CTXTID;
+		info->priv[*offset + CS_ETMV4_PID_FMT] = pid_fmt;
+
 		/* How much space was used */
 		increment = CS_ETMV4_PRIV_MAX;
 	} else {
@@ -657,6 +668,16 @@ static void cs_etm_get_metadata(int cpu, u32 *offset,
 		info->priv[*offset + CS_ETM_ETMIDR] =
 			cs_etm_get_ro(cs_etm_pmu, cpu,
 				      metadata_etmv3_ro[CS_ETM_ETMIDR]);
+
+		/*
+		 * The PID format will be used when decode the trace data;
+		 * based on it the decoder will make decision for setting
+		 * sample's PID as context_id or VMID.
+		 */
+		pid_fmt = perf_pmu__format_bits(&cs_etm_pmu->format, "pid");
+		if (!pid_fmt)
+			pid_fmt = 1ULL << ETM_OPT_CTXTID;
+		info->priv[*offset + CS_ETM_PID_FMT] = pid_fmt;
 
 		/* How much space was used */
 		increment = CS_ETM_PRIV_MAX;

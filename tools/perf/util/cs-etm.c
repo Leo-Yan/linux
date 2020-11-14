@@ -2447,6 +2447,7 @@ static const char * const cs_etm_priv_fmts[] = {
 	[CS_ETM_ETMTRACEIDR]	= "	ETMTRACEIDR		       %llx\n",
 	[CS_ETM_ETMCCER]	= "	ETMCCER			       %llx\n",
 	[CS_ETM_ETMIDR]		= "	ETMIDR			       %llx\n",
+	[CS_ETM_PID_FMT]	= "	PID Format		       %llx\n",
 };
 
 static const char * const cs_etmv4_priv_fmts[] = {
@@ -2459,6 +2460,7 @@ static const char * const cs_etmv4_priv_fmts[] = {
 	[CS_ETMV4_TRCIDR2]	= "	TRCIDR2			       %llx\n",
 	[CS_ETMV4_TRCIDR8]	= "	TRCIDR8			       %llx\n",
 	[CS_ETMV4_TRCAUTHSTATUS] = "	TRCAUTHSTATUS		       %llx\n",
+	[CS_ETMV4_PID_FMT]	= "	PID Format		       %llx\n",
 };
 
 static void cs_etm__print_auxtrace_info(__u64 *val, int num)
