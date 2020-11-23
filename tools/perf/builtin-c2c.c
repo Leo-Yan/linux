@@ -658,6 +658,7 @@ STAT_FN(ld_l2hit)
 STAT_FN(ld_llchit)
 STAT_FN(rmt_hit)
 STAT_FN(tot_ld_chit)
+STAT_FN(tot_ld_miss)
 
 static uint64_t total_records(struct c2c_stats *stats)
 {
@@ -1451,11 +1452,19 @@ static struct c2c_dimension dim_cl_rmt_hitm = {
 	.width		= 7,
 };
 
-static struct c2c_dimension dim_cl_llc_hit = {
-	.header		= HEADER_SPAN("--- LLC Load ---", "LclHit", 1),
-	.name		= "cl_llc_hit",
-	.cmp		= ld_llchit_cmp,
-	.entry		= ld_llchit_entry,
+static struct c2c_dimension dim_cl_ld_hit = {
+	.header		= HEADER_SPAN("--  Load Refs --", "Hit", 1),
+	.name		= "cl_ld_hit",
+	.cmp		= tot_ld_chit_cmp,
+	.entry		= tot_ld_chit_entry,
+	.width		= 7,
+};
+
+static struct c2c_dimension dim_cl_ld_miss = {
+	.header		= HEADER_SPAN_LOW("Miss"),
+	.name		= "cl_ld_miss",
+	.cmp		= tot_ld_miss_cmp,
+	.entry		= tot_ld_miss_entry,
 	.width		= 7,
 };
 
@@ -1774,7 +1783,8 @@ static struct c2c_dimension *dimensions[] = {
 	&dim_tot_hitm,
 	&dim_lcl_hitm,
 	&dim_rmt_hitm,
-	&dim_cl_llc_hit,
+	&dim_cl_ld_hit,
+	&dim_cl_ld_miss,
 	&dim_cl_lcl_hitm,
 	&dim_cl_rmt_hitm,
 	&dim_tot_stores,
@@ -2390,8 +2400,8 @@ static void print_pareto(FILE *out)
 			    "dcacheline";
 	else /* c2c.display == DISPLAY_LLC */
 		cl_output = "cl_num,"
-			    "cl_llc_hit,"
-			    "cl_lcl_hitm,"
+			    "cl_ld_hit,"
+			    "cl_ld_miss,"
 			    "cl_stores_l1hit,"
 			    "cl_stores_l1miss,"
 			    "dcacheline";
