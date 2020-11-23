@@ -1045,8 +1045,8 @@ percent_tot_ld_chit_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
 	double per_left;
 	double per_right;
 
-	per_left  = PERCENT(left, ld_llchit);
-	per_right = PERCENT(right, ld_llchit);
+	per_left  = PERCENT(left, tot_ld_chit);
+	per_right = PERCENT(right, tot_ld_chit);
 
 	return per_left - per_right;
 }
@@ -1076,8 +1076,8 @@ percent_tot_ld_miss_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
 	double per_left;
 	double per_right;
 
-	per_left  = PERCENT(left, ld_llchit);
-	per_right = PERCENT(right, ld_llchit);
+	per_left  = PERCENT(left, tot_ld_miss);
+	per_right = PERCENT(right, tot_ld_miss);
 
 	return per_left - per_right;
 }
