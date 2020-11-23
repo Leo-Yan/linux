@@ -409,6 +409,7 @@ do {				\
 
 			if (lvl & P(LVL, LOC_RAM)) {
 				stats->lcl_dram++;
+				stats->tot_ld_miss++;
 				if (snoop & P(SNOOP, HIT))
 					stats->ld_shared++;
 				else
@@ -419,6 +420,7 @@ do {				\
 			    (lvl & P(LVL, REM_RAM2)) ||
 			     mrem) {
 				stats->rmt_dram++;
+				stats->tot_ld_miss++;
 				if (snoop & P(SNOOP, HIT))
 					stats->ld_shared++;
 				else
@@ -490,6 +492,7 @@ void c2c_add_stats(struct c2c_stats *stats, struct c2c_stats *add)
 	stats->ld_l1hit		+= add->ld_l1hit;
 	stats->ld_l2hit		+= add->ld_l2hit;
 	stats->tot_ld_chit	+= add->tot_ld_chit;
+	stats->tot_ld_miss	+= add->tot_ld_miss;
 	stats->ld_llchit	+= add->ld_llchit;
 	stats->lcl_hitm		+= add->lcl_hitm;
 	stats->rmt_hitm		+= add->rmt_hitm;

@@ -956,6 +956,7 @@ PERCENT_FN(lcl_hitm)
 PERCENT_FN(st_l1hit)
 PERCENT_FN(st_l1miss)
 PERCENT_FN(tot_ld_chit)
+PERCENT_FN(tot_ld_miss)
 
 static int
 percent_rmt_hitm_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
@@ -1039,6 +1040,37 @@ percent_tot_ld_chit_color(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 
 static int64_t
 percent_tot_ld_chit_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
+			struct hist_entry *left, struct hist_entry *right)
+{
+	double per_left;
+	double per_right;
+
+	per_left  = PERCENT(left, ld_llchit);
+	per_right = PERCENT(right, ld_llchit);
+
+	return per_left - per_right;
+}
+
+static int
+percent_tot_ld_miss_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
+			  struct hist_entry *he)
+{
+	int width = c2c_width(fmt, hpp, he->hists);
+	double per = PERCENT(he, tot_ld_miss);
+	char buf[10];
+
+	return scnprintf(hpp->buf, hpp->size, "%*s", width, PERC_STR(buf, per));
+}
+
+static int
+percent_tot_ld_miss_color(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
+			  struct hist_entry *he)
+{
+	return percent_color(fmt, hpp, he, percent_tot_ld_miss);
+}
+
+static int64_t
+percent_tot_ld_miss_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
 			struct hist_entry *left, struct hist_entry *right)
 {
 	double per_left;
@@ -1582,11 +1614,20 @@ static struct c2c_dimension dim_percent_lcl_hitm = {
 };
 
 static struct c2c_dimension dim_percent_tot_ld_chit = {
-	.header		= HEADER_SPAN("--  Load Refs --", "LclHit", 1),
+	.header		= HEADER_SPAN("--  Load Refs --", "Hit", 1),
 	.name		= "percent_tot_ld_chit",
 	.cmp		= percent_tot_ld_chit_cmp,
 	.entry		= percent_tot_ld_chit_entry,
 	.color		= percent_tot_ld_chit_color,
+	.width		= 7,
+};
+
+static struct c2c_dimension dim_percent_tot_ld_miss = {
+	.header		= HEADER_SPAN_LOW("Miss"),
+	.name		= "percent_tot_ld_miss",
+	.cmp		= percent_tot_ld_miss_cmp,
+	.entry		= percent_tot_ld_miss_entry,
+	.color		= percent_tot_ld_miss_color,
 	.width		= 7,
 };
 
@@ -1754,6 +1795,7 @@ static struct c2c_dimension *dimensions[] = {
 	&dim_percent_rmt_hitm,
 	&dim_percent_lcl_hitm,
 	&dim_percent_tot_ld_chit,
+	&dim_percent_tot_ld_miss,
 	&dim_percent_stores_l1hit,
 	&dim_percent_stores_l1miss,
 	&dim_dram_lcl,
@@ -2801,9 +2843,10 @@ static int build_cl_output(char *cl_sort, bool no_source)
 	if (asprintf(&c2c.cl_output,
 		"%s%s%s%s%s%s%s%s%s%s%s",
 		c2c.use_stdio ? "cl_num_empty," : "",
-		c2c.display == DISPLAY_LLC ? "percent_tot_ld_chit," :
-					     "percent_rmt_hitm,",
-		"percent_lcl_hitm,"
+		c2c.display == DISPLAY_LLC ? "percent_tot_ld_chit,"
+					     "percent_tot_ld_miss," :
+					     "percent_rmt_hitm,"
+					     "percent_lcl_hitm,",
 		"percent_stores_l1hit,"
 		"percent_stores_l1miss,"
 		"offset,offset_node,dcacheline_count,",

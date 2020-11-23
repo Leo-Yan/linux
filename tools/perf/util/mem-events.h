@@ -70,6 +70,7 @@ struct c2c_stats {
 	u32	ld_l1hit;            /* count of loads that hit L1D */
 	u32	ld_l2hit;            /* count of loads that hit L2D */
 	u32	tot_ld_chit;         /* count of all loads that hit cache */
+	u32	tot_ld_miss;         /* count of all loads that miss cache */
 	u32	ld_llchit;           /* count of loads that hit LLC */
 	u32	lcl_hitm;            /* count of loads with local HITM  */
 	u32	rmt_hitm;            /* count of loads with remote HITM */
