@@ -386,16 +386,25 @@ do {				\
 		if (lvl & P(LVL, HIT)) {
 			if (lvl & P(LVL, UNC)) stats->ld_uncache++;
 			if (lvl & P(LVL, IO))  stats->ld_io++;
-			if (lvl & P(LVL, LFB)) stats->ld_fbhit++;
-			if (lvl & P(LVL, L1 )) stats->ld_l1hit++;
-			if (lvl & P(LVL, L2 )) stats->ld_l2hit++;
+			if (lvl & P(LVL, LFB)) {
+				stats->ld_fbhit++;
+				stats->tot_ld_chit++;
+			}
+			if (lvl & P(LVL, L1 )) {
+				stats->ld_l1hit++;
+				stats->tot_ld_chit++;
+			}
+			if (lvl & P(LVL, L2 )) {
+				stats->ld_l2hit++;
+				stats->tot_ld_chit++;
+			}
 			if (lvl & P(LVL, L3 )) {
 				if (snoop & P(SNOOP, HITM))
 					HITM_INC(lcl_hitm);
 				else
 					stats->ld_llchit++;
 
-				stats->tot_llchit++;
+				stats->tot_ld_chit++;
 			}
 
 			if (lvl & P(LVL, LOC_RAM)) {
@@ -480,7 +489,7 @@ void c2c_add_stats(struct c2c_stats *stats, struct c2c_stats *add)
 	stats->ld_fbhit		+= add->ld_fbhit;
 	stats->ld_l1hit		+= add->ld_l1hit;
 	stats->ld_l2hit		+= add->ld_l2hit;
-	stats->tot_llchit	+= add->tot_llchit;
+	stats->tot_ld_chit	+= add->tot_ld_chit;
 	stats->ld_llchit	+= add->ld_llchit;
 	stats->lcl_hitm		+= add->lcl_hitm;
 	stats->rmt_hitm		+= add->rmt_hitm;

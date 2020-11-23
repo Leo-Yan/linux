@@ -657,7 +657,7 @@ STAT_FN(ld_l1hit)
 STAT_FN(ld_l2hit)
 STAT_FN(ld_llchit)
 STAT_FN(rmt_hit)
-STAT_FN(tot_llchit)
+STAT_FN(tot_ld_chit)
 
 static uint64_t total_records(struct c2c_stats *stats)
 {
@@ -863,7 +863,7 @@ percent_hitm_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
 	return per_left - per_right;
 }
 
-static double percent_llchit(struct c2c_hist_entry *c2c_he)
+static double percent_ld_chit(struct c2c_hist_entry *c2c_he)
 {
 	struct c2c_hists *hists;
 	struct c2c_stats *stats;
@@ -874,14 +874,14 @@ static double percent_llchit(struct c2c_hist_entry *c2c_he)
 	stats = &c2c_he->stats;
 	total = &hists->stats;
 
-	st  = stats->tot_llchit;
-	tot = total->tot_llchit;
+	st  = stats->tot_ld_chit;
+	tot = total->tot_ld_chit;
 
 	return tot ? (double) st * 100 / tot : 0;
 }
 
 static int
-percent_llchit_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
+percent_ld_chit_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		     struct hist_entry *he)
 {
 	struct c2c_hist_entry *c2c_he;
@@ -890,20 +890,20 @@ percent_llchit_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	double per;
 
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
-	per = percent_llchit(c2c_he);
+	per = percent_ld_chit(c2c_he);
 	return scnprintf(hpp->buf, hpp->size, "%*s", width, PERC_STR(buf, per));
 }
 
 static int
-percent_llchit_color(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
+percent_ld_chit_color(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		     struct hist_entry *he)
 {
-	return percent_color(fmt, hpp, he, percent_llchit);
+	return percent_color(fmt, hpp, he, percent_ld_chit);
 }
 
 static int64_t
-percent_llchit_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
-		   struct hist_entry *left, struct hist_entry *right)
+percent_ld_chit_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
+		    struct hist_entry *left, struct hist_entry *right)
 {
 	struct c2c_hist_entry *c2c_left;
 	struct c2c_hist_entry *c2c_right;
@@ -913,8 +913,8 @@ percent_llchit_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
 	c2c_left  = container_of(left, struct c2c_hist_entry, he);
 	c2c_right = container_of(right, struct c2c_hist_entry, he);
 
-	per_left  = percent_llchit(c2c_left);
-	per_right = percent_llchit(c2c_right);
+	per_left  = percent_ld_chit(c2c_left);
+	per_right = percent_ld_chit(c2c_right);
 
 	return per_left - per_right;
 }
@@ -1201,7 +1201,7 @@ node_entry(struct perf_hpp_fmt *fmt __maybe_unused, struct perf_hpp *hpp,
 				DISPLAY_ENTRY(tot_hitm);
 				break;
 			case DISPLAY_LLC:
-				DISPLAY_ENTRY(tot_llchit);
+				DISPLAY_ENTRY(tot_ld_chit);
 				break;
 			default:
 				break;
@@ -1499,11 +1499,11 @@ static struct c2c_dimension dim_ld_l2hit = {
 	.width		= 7,
 };
 
-static struct c2c_dimension dim_tot_llchit = {
-	.header		= HEADER_BOTH("LLC Hit", "Total"),
-	.name		= "tot_llchit",
-	.cmp		= tot_llchit_cmp,
-	.entry		= tot_llchit_entry,
+static struct c2c_dimension dim_tot_ld_chit = {
+	.header		= HEADER_BOTH("Load Hit", "Total"),
+	.name		= "tot_ld_chit",
+	.cmp		= tot_ld_chit_cmp,
+	.entry		= tot_ld_chit_entry,
 	.width		= 8,
 };
 
@@ -1554,12 +1554,12 @@ static struct c2c_dimension dim_percent_hitm = {
 	.width		= 7,
 };
 
-static struct c2c_dimension dim_percent_llchit = {
-	.header         = HEADER_BOTH("LLC Hit", "Pct"),
-	.name		= "percent_llchit",
-	.cmp		= percent_llchit_cmp,
-	.entry		= percent_llchit_entry,
-	.color		= percent_llchit_color,
+static struct c2c_dimension dim_percent_ld_chit = {
+	.header         = HEADER_BOTH("LD Hit", "Pct"),
+	.name		= "percent_ld_chit",
+	.cmp		= percent_ld_chit_cmp,
+	.entry		= percent_ld_chit_entry,
+	.color		= percent_ld_chit_color,
 	.width		= 7,
 };
 
@@ -1746,11 +1746,11 @@ static struct c2c_dimension *dimensions[] = {
 	&dim_ld_l2hit,
 	&dim_ld_llchit,
 	&dim_ld_rmthit,
-	&dim_tot_llchit,
+	&dim_tot_ld_chit,
 	&dim_tot_recs,
 	&dim_tot_loads,
 	&dim_percent_hitm,
-	&dim_percent_llchit,
+	&dim_percent_ld_chit,
 	&dim_percent_rmt_hitm,
 	&dim_percent_lcl_hitm,
 	&dim_percent_llc_hit,
@@ -2015,7 +2015,7 @@ static bool he__display(struct hist_entry *he, struct c2c_stats *stats)
 		FILTER_ENTRY(tot_hitm);
 		break;
 	case DISPLAY_LLC:
-		FILTER_ENTRY(tot_llchit);
+		FILTER_ENTRY(tot_ld_chit);
 		break;
 	default:
 		break;
@@ -2048,7 +2048,7 @@ static inline bool is_valid_hist_entry(struct hist_entry *he)
 		has_record = !!c2c_he->stats.tot_hitm;
 		break;
 	case DISPLAY_LLC:
-		has_record = !!c2c_he->stats.tot_llchit;
+		has_record = !!c2c_he->stats.tot_ld_chit;
 		break;
 	default:
 		break;
@@ -2204,7 +2204,7 @@ static int setup_nodes(struct perf_session *session)
 }
 
 #define HAS_HITMS(__h) ((__h)->stats.lcl_hitm || (__h)->stats.rmt_hitm)
-#define HAS_LLCHIT(__h) ((__h)->stats.tot_llchit)
+#define HAS_LLCHIT(__h) ((__h)->stats.tot_ld_chit)
 
 static int resort_shared_cl_cb(struct hist_entry *he, void *arg __maybe_unused)
 {
@@ -2847,7 +2847,7 @@ static int setup_coalesce(const char *coalesce, bool no_source)
 	else if (c2c.display == DISPLAY_LCL)
 		sort_str = "lcl_hitm,rmt_hitm";
 	else if (c2c.display == DISPLAY_LLC)
-		sort_str = "tot_llchit";
+		sort_str = "tot_ld_chit";
 
 	if (asprintf(&c2c.cl_resort, "offset,%s", sort_str) < 0)
 		return -ENOMEM;
@@ -3005,8 +3005,8 @@ static int perf_c2c__report(int argc, const char **argv)
 			     "dcacheline,"
 			     "dcacheline_node,"
 			     "dcacheline_count,"
-			     "percent_llchit,"
-			     "tot_llchit,"
+			     "percent_ld_chit,"
+			     "tot_ld_chit,"
 			     "tot_recs,"
 			     "tot_loads,"
 			     "tot_stores,"
@@ -3023,7 +3023,7 @@ static int perf_c2c__report(int argc, const char **argv)
 	else if (c2c.display == DISPLAY_LCL)
 		sort_str = "lcl_hitm";
 	else if (c2c.display == DISPLAY_LLC)
-		sort_str = "tot_llchit";
+		sort_str = "tot_ld_chit";
 
 	c2c_hists__reinit(&c2c.hists, output_str, sort_str);
 
