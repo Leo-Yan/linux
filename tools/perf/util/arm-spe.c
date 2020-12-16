@@ -26,6 +26,7 @@
 #include "symbol.h"
 #include "thread.h"
 #include "thread-stack.h"
+#include "tsc.h"
 #include "tool.h"
 #include "util/synthetic-events.h"
 
@@ -44,6 +45,8 @@ struct arm_spe {
 	struct perf_session		*session;
 	struct machine			*machine;
 	u32				pmu_type;
+
+	struct perf_tsc_conversion	tc;
 
 	u8				timeless_decoding;
 	u8				data_queued;
@@ -722,14 +725,23 @@ static bool arm_spe_evsel_is_auxtrace(struct perf_session *session,
 
 static const char * const arm_spe_info_fmts[] = {
 	[ARM_SPE_PMU_TYPE]		= "  PMU Type           %"PRId64"\n",
+	[ARM_SPE_TIME_SHIFT]		= "  Time Shift         %"PRIu64"\n",
+	[ARM_SPE_TIME_MULT]		= "  Time Muliplier     %"PRIu64"\n",
+	[ARM_SPE_TIME_ZERO]		= "  Time Zero          %"PRIu64"\n",
+	[ARM_SPE_TIME_CYCLES]		= "  Time Cycles        %"PRIu64"\n",
+	[ARM_SPE_TIME_MASK]		= "  Time Mask          %#"PRIx64"\n",
+	[ARM_SPE_CAP_USER_TIME_SHORT]	= "  Cap Time Short     %"PRId64"\n",
 };
 
 static void arm_spe_print_info(__u64 *arr)
 {
+	int i;
+
 	if (!dump_trace)
 		return;
 
-	fprintf(stdout, arm_spe_info_fmts[ARM_SPE_PMU_TYPE], arr[ARM_SPE_PMU_TYPE]);
+	for (i = 0; i < ARM_SPE_AUXTRACE_PRIV_MAX; i++)
+		fprintf(stdout, arm_spe_info_fmts[i], arr[i]);
 }
 
 struct arm_spe_synth {
@@ -934,6 +946,12 @@ int arm_spe_process_auxtrace_info(union perf_event *event,
 	spe->machine = &session->machines.host; /* No kvm support */
 	spe->auxtrace_type = auxtrace_info->type;
 	spe->pmu_type = auxtrace_info->priv[ARM_SPE_PMU_TYPE];
+	spe->tc.time_shift = auxtrace_info->priv[ARM_SPE_TIME_SHIFT];
+	spe->tc.time_mult = auxtrace_info->priv[ARM_SPE_TIME_MULT];
+	spe->tc.time_zero = auxtrace_info->priv[ARM_SPE_TIME_ZERO];
+	spe->tc.time_cycles = auxtrace_info->priv[ARM_SPE_TIME_CYCLES];
+	spe->tc.time_mask = auxtrace_info->priv[ARM_SPE_TIME_MASK];
+	spe->tc.cap_user_time_short = auxtrace_info->priv[ARM_SPE_CAP_USER_TIME_SHORT];
 
 	spe->timeless_decoding = arm_spe__is_timeless_decoding(spe);
 	spe->auxtrace.process_event = arm_spe_process_event;
