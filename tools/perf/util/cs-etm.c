@@ -2577,6 +2577,15 @@ int cs_etm__process_auxtrace_info(union perf_event *event,
 			for (k = 0; k < metadata_cpu_array_size; k++)
 				metadata[j][k] = ptr[i + k];
 
+			/*
+			 * If the data in CS_ETM_PID_FMT is zero, means the
+			 * information isn't stored in the data file, this is
+			 * because the old perf tool hasn't yet supported
+			 * CS_ETM_PID_FMT.  Fixup the item to option "CTXTID".
+			 */
+			if (!metadata[j][CS_ETM_PID_FMT])
+				metadata[j][CS_ETM_PID_FMT] = BIT(ETM_OPT_CTXTID);
+
 			/* The traceID is our handle */
 			idx = metadata[j][CS_ETM_ETMTRACEIDR];
 			i += metadata_cpu_array_size;
@@ -2589,6 +2598,15 @@ int cs_etm__process_auxtrace_info(union perf_event *event,
 			}
 			for (k = 0; k < metadata_cpu_array_size; k++)
 				metadata[j][k] = ptr[i + k];
+
+			/*
+			 * If the data in CS_ETMV4_PID_FMT is zero, means the
+			 * information isn't stored in the data file, this is
+			 * because the old perf tool hasn't yet supported
+			 * CS_ETMV4_PID_FMT.  Fixup the item to option "CTXTID".
+			 */
+			if (!metadata[j][CS_ETMV4_PID_FMT])
+				metadata[j][CS_ETMV4_PID_FMT] = BIT(ETM_OPT_CTXTID);
 
 			/* The traceID is our handle */
 			idx = metadata[j][CS_ETMV4_TRCTRACEIDR];
