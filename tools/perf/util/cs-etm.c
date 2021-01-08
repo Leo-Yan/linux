@@ -2497,6 +2497,7 @@ int cs_etm__process_auxtrace_info(union perf_event *event,
 	int i, j, k;
 	u64 *ptr, *hdr = NULL;
 	u64 **metadata = NULL;
+	int metadata_cpu_array_size;
 
 	/*
 	 * sizeof(auxtrace_info_event::type) +
@@ -2545,6 +2546,19 @@ int cs_etm__process_auxtrace_info(union perf_event *event,
 	}
 
 	/*
+	 * The metadata is a two dimensional array, the first dimension uses CPU
+	 * number as index and the second dimension is the metadata array per
+	 * CPU.  Since the metadata array can be extended over time, the
+	 * predefined macros (CS_ETM_PRIV_MAX or CS_ETMV4_PRIV_MAX) might
+	 * mismatch within different versions of tool, this can lead to copy
+	 * wrong data.  To maintain backward compatibility, calculate CPU's
+	 * metadata array size on the runtime.
+	 */
+	metadata_cpu_array_size =
+		(auxtrace_info->header.size -
+		 sizeof(struct perf_record_auxtrace_info)) / num_cpu / sizeof(u64);
+
+	/*
 	 * The metadata is stored in the auxtrace_info section and encodes
 	 * the configuration of the ARM embedded trace macrocell which is
 	 * required by the trace decoder to properly decode the trace due
@@ -2558,12 +2572,12 @@ int cs_etm__process_auxtrace_info(union perf_event *event,
 				err = -ENOMEM;
 				goto err_free_metadata;
 			}
-			for (k = 0; k < CS_ETM_PRIV_MAX; k++)
+			for (k = 0; k < metadata_cpu_array_size; k++)
 				metadata[j][k] = ptr[i + k];
 
 			/* The traceID is our handle */
 			idx = metadata[j][CS_ETM_ETMTRACEIDR];
-			i += CS_ETM_PRIV_MAX;
+			i += metadata_cpu_array_size;
 		} else if (ptr[i] == __perf_cs_etmv4_magic) {
 			metadata[j] = zalloc(sizeof(*metadata[j]) *
 					     CS_ETMV4_PRIV_MAX);
@@ -2571,12 +2585,12 @@ int cs_etm__process_auxtrace_info(union perf_event *event,
 				err = -ENOMEM;
 				goto err_free_metadata;
 			}
-			for (k = 0; k < CS_ETMV4_PRIV_MAX; k++)
+			for (k = 0; k < metadata_cpu_array_size; k++)
 				metadata[j][k] = ptr[i + k];
 
 			/* The traceID is our handle */
 			idx = metadata[j][CS_ETMV4_TRCTRACEIDR];
-			i += CS_ETMV4_PRIV_MAX;
+			i += metadata_cpu_array_size;
 		}
 
 		/* Get an RB node for this CPU */
