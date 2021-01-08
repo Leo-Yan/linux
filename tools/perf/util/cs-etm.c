@@ -156,6 +156,24 @@ int cs_etm__get_cpu(u8 trace_chan_id, int *cpu)
 	return 0;
 }
 
+int cs_etm__get_pid_fmt(u8 trace_chan_id, u64 *pid_fmt)
+{
+	struct int_node *inode;
+	u64 *metadata;
+
+	inode = intlist__find(traceid_list, trace_chan_id);
+	if (!inode)
+		return -EINVAL;
+
+	metadata = inode->priv;
+	if (metadata[CS_ETM_MAGIC] == __perf_cs_etmv3_magic)
+		*pid_fmt = metadata[CS_ETM_PID_FMT];
+	else
+		*pid_fmt = metadata[CS_ETMV4_PID_FMT];
+
+	return 0;
+}
+
 void cs_etm__etmq_set_traceid_queue_timestamp(struct cs_etm_queue *etmq,
 					      u8 trace_chan_id)
 {
