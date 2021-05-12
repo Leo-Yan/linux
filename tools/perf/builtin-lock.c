@@ -88,13 +88,6 @@ struct lock_stat {
 #define SEQ_STATE_CONTENDED	5
 
 /*
- * MAX_LOCK_DEPTH
- * Imported from include/linux/sched.h.
- * Should this be synchronized?
- */
-#define MAX_LOCK_DEPTH 48
-
-/*
  * struct lock_seq_stat:
  * Place to put on state of one lock sequence
  * 1) acquire -> acquired -> release
