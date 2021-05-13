@@ -73,32 +73,38 @@ struct lock_stat {
 };
 
 /*
- * States of lock_seq_stat
+ * States for thread lock sequence
  *
- * UNINITIALIZED is required for detecting first event of acquire.
- * As the nature of lock events, there is no guarantee
- * that the first event for the locks are acquire,
- * it can be acquired, contended or release.
+ * The state UNINITIALIZED is required for detecting the first 'acquire' event;
+ * since the tracepoints can be enabled in the middle of locking sequence, it's
+ * no guarantee that the first event must be 'acquire' for a lock, it can be
+ * any event of 'acquired', 'contended' or 'release'.
  */
-#define SEQ_STATE_UNINITIALIZED      0	       /* initial state */
-#define SEQ_STATE_RELEASED	1
-#define SEQ_STATE_ACQUIRING	2
-#define SEQ_STATE_ACQUIRED	3
-#define SEQ_STATE_READ_ACQUIRED	4
-#define SEQ_STATE_CONTENDED	5
+#define SEQ_STATE_UNINITIALIZED		0
+#define SEQ_STATE_RELEASED		1
+#define SEQ_STATE_ACQUIRING		2
+#define SEQ_STATE_ACQUIRED		3
+#define SEQ_STATE_READ_ACQUIRED		4
+#define SEQ_STATE_CONTENDED		5
 
 /*
- * struct lock_seq_stat:
+ * Structure for thread lock sequence
+ *
+ * A lock can be used for not only one thread, e.g. for the read lock
+ * which can be acquired concurrently by multiple threads at the same
+ * time.  So define the lock sequence structure which is to maintain
+ * the states for a lock which is associated to a thread.
+ *
  * Place to put on state of one lock sequence
  * 1) acquire -> acquired -> release
  * 2) acquire -> contended -> acquired -> release
  * 3) acquire (with read or try) -> release
  * 4) Are there other patterns?
  */
-struct lock_seq_stat {
+struct thread_lock_seq {
 	struct list_head        list;
 	int			state;
-	u64			prev_event_time;
+	u64			state_start_time;
 	void                    *addr;
 
 	int                     read_count;
@@ -108,7 +114,7 @@ struct thread_stat {
 	struct rb_node		rb;
 
 	u32                     tid;
-	struct list_head        seq_list;
+	struct list_head        lock_list;
 };
 
 static struct rb_root		thread_stats;
@@ -169,7 +175,7 @@ static struct thread_stat *thread_stat_add(u32 tid)
 	}
 
 	st->tid = tid;
-	INIT_LIST_HEAD(&st->seq_list);
+	INIT_LIST_HEAD(&st->lock_list);
 
 	thread_stat_insert(st);
 	return st;
@@ -330,16 +336,16 @@ struct trace_lock_handler {
 			     struct perf_sample *sample);
 };
 
-static struct lock_seq_stat *get_seq(struct thread_stat *ts, void *addr)
+static struct thread_lock_seq *get_seq(struct thread_stat *ts, void *addr)
 {
-	struct lock_seq_stat *seq;
+	struct thread_lock_seq *seq;
 
-	list_for_each_entry(seq, &ts->seq_list, list) {
+	list_for_each_entry(seq, &ts->lock_list, list) {
 		if (seq->addr == addr)
 			return seq;
 	}
 
-	seq = zalloc(sizeof(struct lock_seq_stat));
+	seq = zalloc(sizeof(struct thread_lock_seq));
 	if (!seq) {
 		pr_err("memory allocation failed\n");
 		return NULL;
@@ -347,7 +353,7 @@ static struct lock_seq_stat *get_seq(struct thread_stat *ts, void *addr)
 	seq->state = SEQ_STATE_UNINITIALIZED;
 	seq->addr = addr;
 
-	list_add(&seq->list, &ts->seq_list);
+	list_add(&seq->list, &ts->lock_list);
 	return seq;
 }
 
@@ -372,7 +378,7 @@ static int report_lock_acquire_event(struct evsel *evsel,
 	void *addr;
 	struct lock_stat *ls;
 	struct thread_stat *ts;
-	struct lock_seq_stat *seq;
+	struct thread_lock_seq *seq;
 	const char *name = evsel__strval(evsel, sample, "name");
 	u64 tmp	 = evsel__intval(evsel, sample, "lockdep_addr");
 	int flag = evsel__intval(evsel, sample, "flags");
@@ -433,7 +439,7 @@ broken:
 	}
 
 	ls->nr_acquire++;
-	seq->prev_event_time = sample->time;
+	seq->state_start_time = sample->time;
 end:
 	return 0;
 }
@@ -444,7 +450,7 @@ static int report_lock_acquired_event(struct evsel *evsel,
 	void *addr;
 	struct lock_stat *ls;
 	struct thread_stat *ts;
-	struct lock_seq_stat *seq;
+	struct thread_lock_seq *seq;
 	u64 contended_term;
 	const char *name = evsel__strval(evsel, sample, "name");
 	u64 tmp = evsel__intval(evsel, sample, "lockdep_addr");
@@ -472,7 +478,7 @@ static int report_lock_acquired_event(struct evsel *evsel,
 	case SEQ_STATE_ACQUIRING:
 		break;
 	case SEQ_STATE_CONTENDED:
-		contended_term = sample->time - seq->prev_event_time;
+		contended_term = sample->time - seq->state_start_time;
 		ls->wait_time_total += contended_term;
 		if (contended_term < ls->wait_time_min)
 			ls->wait_time_min = contended_term;
@@ -496,7 +502,7 @@ static int report_lock_acquired_event(struct evsel *evsel,
 	seq->state = SEQ_STATE_ACQUIRED;
 	ls->nr_acquired++;
 	ls->avg_wait_time = ls->nr_contended ? ls->wait_time_total/ls->nr_contended : 0;
-	seq->prev_event_time = sample->time;
+	seq->state_start_time = sample->time;
 end:
 	return 0;
 }
@@ -507,7 +513,7 @@ static int report_lock_contended_event(struct evsel *evsel,
 	void *addr;
 	struct lock_stat *ls;
 	struct thread_stat *ts;
-	struct lock_seq_stat *seq;
+	struct thread_lock_seq *seq;
 	const char *name = evsel__strval(evsel, sample, "name");
 	u64 tmp = evsel__intval(evsel, sample, "lockdep_addr");
 
@@ -551,7 +557,7 @@ static int report_lock_contended_event(struct evsel *evsel,
 	seq->state = SEQ_STATE_CONTENDED;
 	ls->nr_contended++;
 	ls->avg_wait_time = ls->wait_time_total/ls->nr_contended;
-	seq->prev_event_time = sample->time;
+	seq->state_start_time = sample->time;
 end:
 	return 0;
 }
@@ -562,7 +568,7 @@ static int report_lock_release_event(struct evsel *evsel,
 	void *addr;
 	struct lock_stat *ls;
 	struct thread_stat *ts;
-	struct lock_seq_stat *seq;
+	struct thread_lock_seq *seq;
 	const char *name = evsel__strval(evsel, sample, "name");
 	u64 tmp = evsel__intval(evsel, sample, "lockdep_addr");
 
