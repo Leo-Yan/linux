@@ -154,7 +154,7 @@ static void thread_stat_insert(struct thread_stat *new)
 	rb_insert_color(&new->rb, &thread_stats);
 }
 
-static struct thread_stat *thread_stat_findnew_after_first(u32 tid)
+static struct thread_stat *thread_stat_add(u32 tid)
 {
 	struct thread_stat *st;
 
@@ -172,30 +172,6 @@ static struct thread_stat *thread_stat_findnew_after_first(u32 tid)
 	INIT_LIST_HEAD(&st->seq_list);
 
 	thread_stat_insert(st);
-
-	return st;
-}
-
-static struct thread_stat *thread_stat_findnew_first(u32 tid);
-static struct thread_stat *(*thread_stat_findnew)(u32 tid) =
-	thread_stat_findnew_first;
-
-static struct thread_stat *thread_stat_findnew_first(u32 tid)
-{
-	struct thread_stat *st;
-
-	st = zalloc(sizeof(struct thread_stat));
-	if (!st) {
-		pr_err("memory allocation failed\n");
-		return NULL;
-	}
-	st->tid = tid;
-	INIT_LIST_HEAD(&st->seq_list);
-
-	rb_link_node(&st->rb, NULL, &thread_stats.rb_node);
-	rb_insert_color(&st->rb, &thread_stats);
-
-	thread_stat_findnew = thread_stat_findnew_after_first;
 	return st;
 }
 
@@ -409,7 +385,7 @@ static int report_lock_acquire_event(struct evsel *evsel,
 	if (ls->discard)
 		return 0;
 
-	ts = thread_stat_findnew(sample->tid);
+	ts = thread_stat_add(sample->tid);
 	if (!ts)
 		return -ENOMEM;
 
@@ -481,7 +457,7 @@ static int report_lock_acquired_event(struct evsel *evsel,
 	if (ls->discard)
 		return 0;
 
-	ts = thread_stat_findnew(sample->tid);
+	ts = thread_stat_add(sample->tid);
 	if (!ts)
 		return -ENOMEM;
 
@@ -543,7 +519,7 @@ static int report_lock_contended_event(struct evsel *evsel,
 	if (ls->discard)
 		return 0;
 
-	ts = thread_stat_findnew(sample->tid);
+	ts = thread_stat_add(sample->tid);
 	if (!ts)
 		return -ENOMEM;
 
@@ -598,7 +574,7 @@ static int report_lock_release_event(struct evsel *evsel,
 	if (ls->discard)
 		return 0;
 
-	ts = thread_stat_findnew(sample->tid);
+	ts = thread_stat_add(sample->tid);
 	if (!ts)
 		return -ENOMEM;
 
