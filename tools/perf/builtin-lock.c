@@ -305,19 +305,17 @@ static struct lock_stat *lock_stat_findnew(void *addr, const char *name)
 		goto alloc_failed;
 
 	new->addr = addr;
-	new->name = zalloc(sizeof(char) * strlen(name) + 1);
-	if (!new->name) {
-		free(new);
+	new->name = strdup(name);
+	if (!new->name)
 		goto alloc_failed;
-	}
 
-	strcpy(new->name, name);
 	new->wait_time_min = ULLONG_MAX;
 
 	list_add(&new->hash_entry, entry);
 	return new;
 
 alloc_failed:
+	free(new);
 	pr_err("memory allocation failed\n");
 	return NULL;
 }
