@@ -336,11 +336,12 @@ struct trace_lock_handler {
 			     struct perf_sample *sample);
 };
 
-static struct thread_lock_seq *get_seq(struct thread_stat *ts, void *addr)
+static struct thread_lock_seq *_get_lock_seq(struct thread_stat *thd_stat,
+					     void *addr)
 {
 	struct thread_lock_seq *seq;
 
-	list_for_each_entry(seq, &ts->lock_list, list) {
+	list_for_each_entry(seq, &thd_stat->lock_list, list) {
 		if (seq->addr == addr)
 			return seq;
 	}
@@ -353,8 +354,19 @@ static struct thread_lock_seq *get_seq(struct thread_stat *ts, void *addr)
 	seq->state = SEQ_STATE_UNINITIALIZED;
 	seq->addr = addr;
 
-	list_add(&seq->list, &ts->lock_list);
+	list_add(&seq->list, &thd_stat->lock_list);
 	return seq;
+}
+
+static struct thread_lock_seq *thread_find_lock_seq(u32 tid, void *addr)
+{
+	struct thread_stat *thd_stat;
+
+	thd_stat = thread_stat_add(tid);
+	if (!thd_stat)
+		return NULL;
+
+	return _get_lock_seq(thd_stat, addr);
 }
 
 enum broken_state {
@@ -377,7 +389,6 @@ static int report_lock_acquire_event(struct evsel *evsel,
 {
 	void *addr;
 	struct lock_stat *ls;
-	struct thread_stat *ts;
 	struct thread_lock_seq *seq;
 	const char *name = evsel__strval(evsel, sample, "name");
 	u64 tmp	 = evsel__intval(evsel, sample, "lockdep_addr");
@@ -391,11 +402,7 @@ static int report_lock_acquire_event(struct evsel *evsel,
 	if (ls->discard)
 		return 0;
 
-	ts = thread_stat_add(sample->tid);
-	if (!ts)
-		return -ENOMEM;
-
-	seq = get_seq(ts, addr);
+	seq = thread_find_lock_seq(sample->tid, addr);
 	if (!seq)
 		return -ENOMEM;
 
@@ -449,7 +456,6 @@ static int report_lock_acquired_event(struct evsel *evsel,
 {
 	void *addr;
 	struct lock_stat *ls;
-	struct thread_stat *ts;
 	struct thread_lock_seq *seq;
 	u64 contended_term;
 	const char *name = evsel__strval(evsel, sample, "name");
@@ -463,11 +469,7 @@ static int report_lock_acquired_event(struct evsel *evsel,
 	if (ls->discard)
 		return 0;
 
-	ts = thread_stat_add(sample->tid);
-	if (!ts)
-		return -ENOMEM;
-
-	seq = get_seq(ts, addr);
+	seq = thread_find_lock_seq(sample->tid, addr);
 	if (!seq)
 		return -ENOMEM;
 
@@ -512,7 +514,6 @@ static int report_lock_contended_event(struct evsel *evsel,
 {
 	void *addr;
 	struct lock_stat *ls;
-	struct thread_stat *ts;
 	struct thread_lock_seq *seq;
 	const char *name = evsel__strval(evsel, sample, "name");
 	u64 tmp = evsel__intval(evsel, sample, "lockdep_addr");
@@ -525,11 +526,7 @@ static int report_lock_contended_event(struct evsel *evsel,
 	if (ls->discard)
 		return 0;
 
-	ts = thread_stat_add(sample->tid);
-	if (!ts)
-		return -ENOMEM;
-
-	seq = get_seq(ts, addr);
+	seq = thread_find_lock_seq(sample->tid, addr);
 	if (!seq)
 		return -ENOMEM;
 
@@ -567,7 +564,6 @@ static int report_lock_release_event(struct evsel *evsel,
 {
 	void *addr;
 	struct lock_stat *ls;
-	struct thread_stat *ts;
 	struct thread_lock_seq *seq;
 	const char *name = evsel__strval(evsel, sample, "name");
 	u64 tmp = evsel__intval(evsel, sample, "lockdep_addr");
@@ -580,11 +576,7 @@ static int report_lock_release_event(struct evsel *evsel,
 	if (ls->discard)
 		return 0;
 
-	ts = thread_stat_add(sample->tid);
-	if (!ts)
-		return -ENOMEM;
-
-	seq = get_seq(ts, addr);
+	seq = thread_find_lock_seq(sample->tid, addr);
 	if (!seq)
 		return -ENOMEM;
 
