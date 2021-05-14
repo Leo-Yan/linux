@@ -34,17 +34,18 @@
 
 static struct perf_session *session;
 
-/* based on kernel/lockdep.c */
+/*
+ * Aspired by the kernel lockdep which uses hash-table for fast lookup,
+ * create a hash-table for quick searching lock stats.  Currently the
+ * hash-table size is 4096.
+ */
 #define LOCKHASH_BITS		12
 #define LOCKHASH_SIZE		(1UL << LOCKHASH_BITS)
 
-static struct list_head lockhash_table[LOCKHASH_SIZE];
-
-#define __lockhashfn(key)	hash_long((unsigned long)key, LOCKHASH_BITS)
-#define lockhashentry(key)	(lockhash_table + __lockhashfn((key)))
+static struct hlist_head lockhash_table[LOCKHASH_SIZE];
 
 struct lock_stat {
-	struct list_head	hash_entry;
+	struct hlist_node	hash_entry;
 	struct rb_node		rb;		/* used for sorting */
 
 	/*
@@ -292,10 +293,10 @@ static struct lock_stat *pop_from_result(void)
 
 static struct lock_stat *lock_stat_add(void *addr, const char *name)
 {
-	struct list_head *entry = lockhashentry(addr);
 	struct lock_stat *stat;
+	unsigned int hval = hash_long((unsigned long)addr, LOCKHASH_BITS);
 
-	list_for_each_entry(stat, entry, hash_entry) {
+	hlist_for_each_entry(stat, &lockhash_table[hval], hash_entry) {
 		if (stat->addr == addr)
 			return stat;
 	}
@@ -315,19 +316,20 @@ static struct lock_stat *lock_stat_add(void *addr, const char *name)
 
 	stat->addr = addr;
 	stat->wait_time_min = ULLONG_MAX;
-	list_add(&stat->hash_entry, entry);
+
+	hlist_add_head(&stat->hash_entry, &lockhash_table[hval]);
 	return stat;
 }
 
 static void lock_stat_del_all(void)
 {
 	unsigned int i;
-	struct lock_stat *stat, *tmp;
+	struct lock_stat *stat;
+	struct hlist_node *tmp;
 
 	for (i = 0; i < LOCKHASH_SIZE; i++) {
-		list_for_each_entry_safe(stat, tmp, &lockhash_table[i],
-					 hash_entry) {
-			list_del(&stat->hash_entry);
+		hlist_for_each_entry_safe(stat, tmp, &lockhash_table[i], hash_entry) {
+			hlist_del(&stat->hash_entry);
 			free(stat->name);
 			free(stat);
 		}
@@ -760,7 +762,7 @@ static void dump_map(void)
 
 	pr_info("Address of instance: name of class\n");
 	for (i = 0; i < LOCKHASH_SIZE; i++) {
-		list_for_each_entry(st, &lockhash_table[i], hash_entry) {
+		hlist_for_each_entry(st, &lockhash_table[i], hash_entry) {
 			pr_info(" %p: %s\n", st->addr, st->name);
 		}
 	}
@@ -817,7 +819,7 @@ static void sort_result(void)
 	struct lock_stat *st;
 
 	for (i = 0; i < LOCKHASH_SIZE; i++) {
-		list_for_each_entry(st, &lockhash_table[i], hash_entry) {
+		hlist_for_each_entry(st, &lockhash_table[i], hash_entry) {
 			insert_to_result(st, compare);
 		}
 	}
@@ -967,11 +969,7 @@ int cmd_lock(int argc, const char **argv)
 		"perf lock report [<options>]",
 		NULL
 	};
-	unsigned int i;
 	int rc = 0;
-
-	for (i = 0; i < LOCKHASH_SIZE; i++)
-		INIT_LIST_HEAD(lockhash_table + i);
 
 	argc = parse_options_subcommand(argc, argv, lock_options, lock_subcommands,
 					lock_usage, PARSE_OPT_STOP_AT_NON_OPTION);
