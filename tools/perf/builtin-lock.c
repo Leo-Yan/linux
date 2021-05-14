@@ -290,34 +290,33 @@ static struct lock_stat *pop_from_result(void)
 	return container_of(node, struct lock_stat, rb);
 }
 
-static struct lock_stat *lock_stat_findnew(void *addr, const char *name)
+static struct lock_stat *lock_stat_add(void *addr, const char *name)
 {
 	struct list_head *entry = lockhashentry(addr);
-	struct lock_stat *ret, *new;
+	struct lock_stat *stat;
 
-	list_for_each_entry(ret, entry, hash_entry) {
-		if (ret->addr == addr)
-			return ret;
+	list_for_each_entry(stat, entry, hash_entry) {
+		if (stat->addr == addr)
+			return stat;
 	}
 
-	new = zalloc(sizeof(struct lock_stat));
-	if (!new)
-		goto alloc_failed;
+	stat = zalloc(sizeof(*stat));
+	if (!stat) {
+		pr_err("Failed to allocate lock stat\n");
+		return NULL;
+	}
 
-	new->addr = addr;
-	new->name = strdup(name);
-	if (!new->name)
-		goto alloc_failed;
+	stat->name = strdup(name);
+	if (!stat->name) {
+		pr_err("Failed to duplicate name for lock stat\n");
+		free(stat);
+		return NULL;
+	}
 
-	new->wait_time_min = ULLONG_MAX;
-
-	list_add(&new->hash_entry, entry);
-	return new;
-
-alloc_failed:
-	free(new);
-	pr_err("memory allocation failed\n");
-	return NULL;
+	stat->addr = addr;
+	stat->wait_time_min = ULLONG_MAX;
+	list_add(&stat->hash_entry, entry);
+	return stat;
 }
 
 struct trace_lock_handler {
@@ -394,7 +393,7 @@ static int report_lock_acquire_event(struct evsel *evsel,
 
 	memcpy(&addr, &tmp, sizeof(void *));
 
-	ls = lock_stat_findnew(addr, name);
+	ls = lock_stat_add(addr, name);
 	if (!ls)
 		return -ENOMEM;
 	if (ls->discard)
@@ -461,7 +460,7 @@ static int report_lock_acquired_event(struct evsel *evsel,
 
 	memcpy(&addr, &tmp, sizeof(void *));
 
-	ls = lock_stat_findnew(addr, name);
+	ls = lock_stat_add(addr, name);
 	if (!ls)
 		return -ENOMEM;
 	if (ls->discard)
@@ -518,7 +517,7 @@ static int report_lock_contended_event(struct evsel *evsel,
 
 	memcpy(&addr, &tmp, sizeof(void *));
 
-	ls = lock_stat_findnew(addr, name);
+	ls = lock_stat_add(addr, name);
 	if (!ls)
 		return -ENOMEM;
 	if (ls->discard)
@@ -568,7 +567,7 @@ static int report_lock_release_event(struct evsel *evsel,
 
 	memcpy(&addr, &tmp, sizeof(void *));
 
-	ls = lock_stat_findnew(addr, name);
+	ls = lock_stat_add(addr, name);
 	if (!ls)
 		return -ENOMEM;
 	if (ls->discard)
