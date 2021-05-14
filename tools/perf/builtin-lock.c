@@ -319,6 +319,21 @@ static struct lock_stat *lock_stat_add(void *addr, const char *name)
 	return stat;
 }
 
+static void lock_stat_del_all(void)
+{
+	unsigned int i;
+	struct lock_stat *stat, *tmp;
+
+	for (i = 0; i < LOCKHASH_SIZE; i++) {
+		list_for_each_entry_safe(stat, tmp, &lockhash_table[i],
+					 hash_entry) {
+			list_del(&stat->hash_entry);
+			free(stat->name);
+			free(stat);
+		}
+	}
+}
+
 struct trace_lock_handler {
 	int (*acquire_event)(struct evsel *evsel,
 			     struct perf_sample *sample);
@@ -862,6 +877,8 @@ static int __cmd_report(bool display_info)
 		sort_result();
 		print_result();
 	}
+
+	lock_stat_del_all();
 
 out_delete:
 	perf_session__delete(session);
