@@ -46,7 +46,7 @@ static struct hlist_head lockhash_table[LOCKHASH_SIZE];
 
 struct lock_stat {
 	struct hlist_node	hash_entry;
-	struct rb_node		rb;		/* used for sorting */
+	struct rb_node		rb_node;	/* used for sorting */
 
 	/*
 	 * FIXME: evsel__intval() returns u64,
@@ -279,39 +279,24 @@ static int lock_stat_compare(struct lock_stat *ls_a, struct lock_stat *ls_b)
 	BUG_ON(1);
 }
 
-static void insert_to_result(struct lock_stat *st)
+static void perf_lock__insert_result(struct lock_stat *new)
 {
-	struct rb_node **rb = &sort_result.rb_node;
+	struct rb_node **p = &sort_result.rb_node;
 	struct rb_node *parent = NULL;
-	struct lock_stat *p;
+	struct lock_stat *stat;
 
-	while (*rb) {
-		p = container_of(*rb, struct lock_stat, rb);
-		parent = *rb;
+	while (*p) {
+		parent = *p;
+		stat = rb_entry(parent, struct lock_stat, rb_node);
 
-		if (lock_stat_compare(st, p))
-			rb = &(*rb)->rb_left;
+		if (lock_stat_compare(new, stat))
+			p = &(*p)->rb_left;
 		else
-			rb = &(*rb)->rb_right;
+			p = &(*p)->rb_right;
 	}
 
-	rb_link_node(&st->rb, parent, rb);
-	rb_insert_color(&st->rb, &sort_result);
-}
-
-/* returns left most element of result, and erase it */
-static struct lock_stat *pop_from_result(void)
-{
-	struct rb_node *node = sort_result.rb_node;
-
-	if (!node)
-		return NULL;
-
-	while (node->rb_left)
-		node = node->rb_left;
-
-	rb_erase(node, &sort_result);
-	return container_of(node, struct lock_stat, rb);
+	rb_link_node(&new->rb_node, parent, p);
+	rb_insert_color(&new->rb_node, &sort_result);
 }
 
 struct trace_lock_handler {
@@ -629,6 +614,7 @@ static void print_bad_events(int bad, int total)
 /* TODO: various way to print, coloring, nano or milli sec */
 static void print_result(void)
 {
+	struct rb_node *node;
 	struct lock_stat *st;
 	char cut_name[20];
 	int bad, total;
@@ -645,7 +631,10 @@ static void print_result(void)
 	pr_info("\n\n");
 
 	bad = total = 0;
-	while ((st = pop_from_result())) {
+
+	for (node = rb_first(&sort_result); node; node = rb_next(node)) {
+		st = rb_entry(node, struct lock_stat, rb_node);
+
 		total++;
 		if (st->discard) {
 			bad++;
@@ -765,7 +754,7 @@ static void lock_stat_sort(void)
 
 	for (i = 0; i < LOCKHASH_SIZE; i++) {
 		hlist_for_each_entry(st, &lockhash_table[i], hash_entry) {
-			insert_to_result(st);
+			perf_lock__insert_result(st);
 		}
 	}
 }
