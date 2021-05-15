@@ -153,6 +153,30 @@ static struct thread_stat *thread_stat_findnew(u32 tid)
 	return new;
 }
 
+static void thread_stat_purge(void)
+{
+	struct rb_root *root;
+	struct rb_node *next;
+
+	root = &thread_stats;
+	next = rb_first(root);
+
+	while (next) {
+		struct thread_stat *stat;
+		struct thread_lock_seq *seq, *tmp;
+
+		stat = rb_entry(next, struct thread_stat, rb_node);
+		next = rb_next(&stat->rb_node);
+		rb_erase(&stat->rb_node, root);
+
+		list_for_each_entry_safe(seq, tmp, &stat->lock_list, list) {
+			list_del(&seq->list);
+			free(seq);
+		}
+	        free(stat);
+	}
+}
+
 /* build simple key function one is bigger than two */
 #define SINGLE_KEY(member)						\
 	static int lock_stat_key_ ## member(struct lock_stat *one,	\
@@ -852,6 +876,7 @@ static int __cmd_report(bool display_info)
 	}
 
 	lock_stat_del_all();
+	thread_stat_purge();
 
 out_delete:
 	perf_session__delete(session);
