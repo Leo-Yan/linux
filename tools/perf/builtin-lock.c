@@ -120,6 +120,51 @@ struct thread_stat {
 
 static struct rb_root		thread_stats;
 
+static struct lock_stat *lock_stat_add(void *addr, const char *name)
+{
+	struct lock_stat *stat;
+	unsigned int hval = hash_long((unsigned long)addr, LOCKHASH_BITS);
+
+	hlist_for_each_entry(stat, &lockhash_table[hval], hash_entry) {
+		if (stat->addr == addr)
+			return stat;
+	}
+
+	stat = zalloc(sizeof(*stat));
+	if (!stat) {
+		pr_err("Failed to allocate lock stat\n");
+		return NULL;
+	}
+
+	stat->name = strdup(name);
+	if (!stat->name) {
+		pr_err("Failed to duplicate name for lock stat\n");
+		free(stat);
+		return NULL;
+	}
+
+	stat->addr = addr;
+	stat->wait_time_min = ULLONG_MAX;
+
+	hlist_add_head(&stat->hash_entry, &lockhash_table[hval]);
+	return stat;
+}
+
+static void lock_stat_del_all(void)
+{
+	unsigned int i;
+	struct lock_stat *stat;
+	struct hlist_node *tmp;
+
+	for (i = 0; i < LOCKHASH_SIZE; i++) {
+		hlist_for_each_entry_safe(stat, tmp, &lockhash_table[i], hash_entry) {
+			hlist_del(&stat->hash_entry);
+			free(stat->name);
+			free(stat);
+		}
+	}
+}
+
 static struct thread_stat *thread_stat_findnew(u32 tid)
 {
 	struct rb_node **p = &thread_stats.rb_node;
@@ -151,6 +196,39 @@ static struct thread_stat *thread_stat_findnew(u32 tid)
 	rb_insert_color(&new->rb_node, &thread_stats);
 
 	return new;
+}
+
+static struct thread_lock_seq *_get_lock_seq(struct thread_stat *thd_stat,
+					     void *addr)
+{
+	struct thread_lock_seq *seq;
+
+	list_for_each_entry(seq, &thd_stat->lock_list, list) {
+		if (seq->addr == addr)
+			return seq;
+	}
+
+	seq = zalloc(sizeof(struct thread_lock_seq));
+	if (!seq) {
+		pr_err("memory allocation failed\n");
+		return NULL;
+	}
+	seq->state = SEQ_STATE_UNINITIALIZED;
+	seq->addr = addr;
+
+	list_add(&seq->list, &thd_stat->lock_list);
+	return seq;
+}
+
+static struct thread_lock_seq *thread_find_lock_seq(u32 tid, void *addr)
+{
+	struct thread_stat *thd_stat;
+
+	thd_stat = thread_stat_findnew(tid);
+	if (!thd_stat)
+		return NULL;
+
+	return _get_lock_seq(thd_stat, addr);
 }
 
 static void thread_stat_purge(void)
@@ -286,51 +364,6 @@ static struct lock_stat *pop_from_result(void)
 	return container_of(node, struct lock_stat, rb);
 }
 
-static struct lock_stat *lock_stat_add(void *addr, const char *name)
-{
-	struct lock_stat *stat;
-	unsigned int hval = hash_long((unsigned long)addr, LOCKHASH_BITS);
-
-	hlist_for_each_entry(stat, &lockhash_table[hval], hash_entry) {
-		if (stat->addr == addr)
-			return stat;
-	}
-
-	stat = zalloc(sizeof(*stat));
-	if (!stat) {
-		pr_err("Failed to allocate lock stat\n");
-		return NULL;
-	}
-
-	stat->name = strdup(name);
-	if (!stat->name) {
-		pr_err("Failed to duplicate name for lock stat\n");
-		free(stat);
-		return NULL;
-	}
-
-	stat->addr = addr;
-	stat->wait_time_min = ULLONG_MAX;
-
-	hlist_add_head(&stat->hash_entry, &lockhash_table[hval]);
-	return stat;
-}
-
-static void lock_stat_del_all(void)
-{
-	unsigned int i;
-	struct lock_stat *stat;
-	struct hlist_node *tmp;
-
-	for (i = 0; i < LOCKHASH_SIZE; i++) {
-		hlist_for_each_entry_safe(stat, tmp, &lockhash_table[i], hash_entry) {
-			hlist_del(&stat->hash_entry);
-			free(stat->name);
-			free(stat);
-		}
-	}
-}
-
 struct trace_lock_handler {
 	int (*acquire_event)(struct evsel *evsel,
 			     struct perf_sample *sample);
@@ -344,39 +377,6 @@ struct trace_lock_handler {
 	int (*release_event)(struct evsel *evsel,
 			     struct perf_sample *sample);
 };
-
-static struct thread_lock_seq *_get_lock_seq(struct thread_stat *thd_stat,
-					     void *addr)
-{
-	struct thread_lock_seq *seq;
-
-	list_for_each_entry(seq, &thd_stat->lock_list, list) {
-		if (seq->addr == addr)
-			return seq;
-	}
-
-	seq = zalloc(sizeof(struct thread_lock_seq));
-	if (!seq) {
-		pr_err("memory allocation failed\n");
-		return NULL;
-	}
-	seq->state = SEQ_STATE_UNINITIALIZED;
-	seq->addr = addr;
-
-	list_add(&seq->list, &thd_stat->lock_list);
-	return seq;
-}
-
-static struct thread_lock_seq *thread_find_lock_seq(u32 tid, void *addr)
-{
-	struct thread_stat *thd_stat;
-
-	thd_stat = thread_stat_findnew(tid);
-	if (!thd_stat)
-		return NULL;
-
-	return _get_lock_seq(thd_stat, addr);
-}
 
 enum broken_state {
 	BROKEN_ACQUIRE,
