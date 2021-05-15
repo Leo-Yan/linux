@@ -118,7 +118,10 @@ struct thread_stat {
 	struct list_head        lock_list;
 };
 
-static struct rb_root		thread_stats;
+static struct rb_root thread_stats;
+
+static const char *sort_key = "acquired";
+static struct rb_root sort_result;
 
 static struct lock_stat *lock_stat_add(void *addr, const char *name)
 {
@@ -255,83 +258,30 @@ static void thread_stat_purge(void)
 	}
 }
 
-/* build simple key function one is bigger than two */
-#define SINGLE_KEY(member)						\
-	static int lock_stat_key_ ## member(struct lock_stat *one,	\
-					 struct lock_stat *two)		\
-	{								\
-		return one->member > two->member;			\
-	}
-
-SINGLE_KEY(nr_acquired)
-SINGLE_KEY(nr_contended)
-SINGLE_KEY(avg_wait_time)
-SINGLE_KEY(wait_time_total)
-SINGLE_KEY(wait_time_max)
-
-static int lock_stat_key_wait_time_min(struct lock_stat *one,
-					struct lock_stat *two)
+static int lock_stat_compare(struct lock_stat *ls_a, struct lock_stat *ls_b)
 {
-	u64 s1 = one->wait_time_min;
-	u64 s2 = two->wait_time_min;
-	if (s1 == ULLONG_MAX)
-		s1 = 0;
-	if (s2 == ULLONG_MAX)
-		s2 = 0;
-	return s1 > s2;
+	if (!strcmp(sort_key, "acquired"))
+		return ls_a->nr_acquired > ls_b->nr_acquired;
+
+	if (!strcmp(sort_key, "contended"))
+		return ls_a->nr_contended > ls_b->nr_contended;
+
+	if (!strcmp(sort_key, "wait_time"))
+		return ls_a->avg_wait_time > ls_b->avg_wait_time;
+
+	if (!strcmp(sort_key, "wait_time_total"))
+		return ls_a->wait_time_total > ls_b->wait_time_total;
+
+	if (!strcmp(sort_key, "wait_time_max"))
+		return ls_a->wait_time_max > ls_b->wait_time_max;
+
+	/* Unknown sort key */
+	BUG_ON(1);
 }
 
-struct lock_key {
-	/*
-	 * name: the value for specify by user
-	 * this should be simpler than raw name of member
-	 * e.g. nr_acquired -> acquired, wait_time_total -> wait_total
-	 */
-	const char		*name;
-	int			(*key)(struct lock_stat*, struct lock_stat*);
-};
-
-static const char		*sort_key = "acquired";
-
-static int			(*compare)(struct lock_stat *, struct lock_stat *);
-
-static struct rb_root		result;	/* place to store sorted data */
-
-#define DEF_KEY_LOCK(name, fn_suffix)	\
-	{ #name, lock_stat_key_ ## fn_suffix }
-struct lock_key keys[] = {
-	DEF_KEY_LOCK(acquired, nr_acquired),
-	DEF_KEY_LOCK(contended, nr_contended),
-	DEF_KEY_LOCK(avg_wait, avg_wait_time),
-	DEF_KEY_LOCK(wait_total, wait_time_total),
-	DEF_KEY_LOCK(wait_min, wait_time_min),
-	DEF_KEY_LOCK(wait_max, wait_time_max),
-
-	/* extra comparisons much complicated should be here */
-
-	{ NULL, NULL }
-};
-
-static int select_key(void)
+static void insert_to_result(struct lock_stat *st)
 {
-	int i;
-
-	for (i = 0; keys[i].name; i++) {
-		if (!strcmp(keys[i].name, sort_key)) {
-			compare = keys[i].key;
-			return 0;
-		}
-	}
-
-	pr_err("Unknown compare key: %s\n", sort_key);
-
-	return -1;
-}
-
-static void insert_to_result(struct lock_stat *st,
-			     int (*bigger)(struct lock_stat *, struct lock_stat *))
-{
-	struct rb_node **rb = &result.rb_node;
+	struct rb_node **rb = &sort_result.rb_node;
 	struct rb_node *parent = NULL;
 	struct lock_stat *p;
 
@@ -339,20 +289,20 @@ static void insert_to_result(struct lock_stat *st,
 		p = container_of(*rb, struct lock_stat, rb);
 		parent = *rb;
 
-		if (bigger(st, p))
+		if (lock_stat_compare(st, p))
 			rb = &(*rb)->rb_left;
 		else
 			rb = &(*rb)->rb_right;
 	}
 
 	rb_link_node(&st->rb, parent, rb);
-	rb_insert_color(&st->rb, &result);
+	rb_insert_color(&st->rb, &sort_result);
 }
 
 /* returns left most element of result, and erase it */
 static struct lock_stat *pop_from_result(void)
 {
-	struct rb_node *node = result.rb_node;
+	struct rb_node *node = sort_result.rb_node;
 
 	if (!node)
 		return NULL;
@@ -360,7 +310,7 @@ static struct lock_stat *pop_from_result(void)
 	while (node->rb_left)
 		node = node->rb_left;
 
-	rb_erase(node, &result);
+	rb_erase(node, &sort_result);
 	return container_of(node, struct lock_stat, rb);
 }
 
@@ -808,14 +758,14 @@ static int process_sample_event(struct perf_tool *tool __maybe_unused,
 	return err;
 }
 
-static void sort_result(void)
+static void lock_stat_sort(void)
 {
 	unsigned int i;
 	struct lock_stat *st;
 
 	for (i = 0; i < LOCKHASH_SIZE; i++) {
 		hlist_for_each_entry(st, &lockhash_table[i], hash_entry) {
-			insert_to_result(st, compare);
+			insert_to_result(st);
 		}
 	}
 }
@@ -860,9 +810,6 @@ static int __cmd_report(bool display_info)
 		goto out_delete;
 	}
 
-	if (select_key())
-		goto out_delete;
-
 	err = perf_session__process_events(session);
 	if (err)
 		goto out_delete;
@@ -871,7 +818,7 @@ static int __cmd_report(bool display_info)
 	if (display_info) /* used for info subcommand */
 		err = dump_info();
 	else {
-		sort_result();
+		lock_stat_sort();
 		print_result();
 	}
 
