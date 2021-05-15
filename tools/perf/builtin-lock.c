@@ -112,7 +112,7 @@ struct thread_lock_seq {
 };
 
 struct thread_stat {
-	struct rb_node		rb;
+	struct rb_node		rb_node;
 
 	u32                     tid;
 	struct list_head        lock_list;
@@ -120,66 +120,37 @@ struct thread_stat {
 
 static struct rb_root		thread_stats;
 
-static struct thread_stat *thread_stat_find(u32 tid)
+static struct thread_stat *thread_stat_findnew(u32 tid)
 {
-	struct rb_node *node;
-	struct thread_stat *st;
-
-	node = thread_stats.rb_node;
-	while (node) {
-		st = container_of(node, struct thread_stat, rb);
-		if (st->tid == tid)
-			return st;
-		else if (tid < st->tid)
-			node = node->rb_left;
-		else
-			node = node->rb_right;
-	}
-
-	return NULL;
-}
-
-static void thread_stat_insert(struct thread_stat *new)
-{
-	struct rb_node **rb = &thread_stats.rb_node;
+	struct rb_node **p = &thread_stats.rb_node;
 	struct rb_node *parent = NULL;
-	struct thread_stat *p;
+	struct thread_stat *stat, *new;
 
-	while (*rb) {
-		p = container_of(*rb, struct thread_stat, rb);
-		parent = *rb;
+	while (*p != NULL) {
+		parent = *p;
+		stat = rb_entry(parent, struct thread_stat, rb_node);
 
-		if (new->tid < p->tid)
-			rb = &(*rb)->rb_left;
-		else if (new->tid > p->tid)
-			rb = &(*rb)->rb_right;
+		if (tid < stat->tid)
+			p = &(*p)->rb_left;
+		else if (tid > stat->tid)
+			p = &(*p)->rb_right;
 		else
-			BUG_ON("inserting invalid thread_stat\n");
+			return stat;
 	}
 
-	rb_link_node(&new->rb, parent, rb);
-	rb_insert_color(&new->rb, &thread_stats);
-}
-
-static struct thread_stat *thread_stat_add(u32 tid)
-{
-	struct thread_stat *st;
-
-	st = thread_stat_find(tid);
-	if (st)
-		return st;
-
-	st = zalloc(sizeof(struct thread_stat));
-	if (!st) {
-		pr_err("memory allocation failed\n");
+	new = zalloc(sizeof(struct thread_stat));
+	if (!new) {
+		pr_err("Failed to allocate thread stat\n");
 		return NULL;
 	}
 
-	st->tid = tid;
-	INIT_LIST_HEAD(&st->lock_list);
+	new->tid = tid;
+	INIT_LIST_HEAD(&new->lock_list);
 
-	thread_stat_insert(st);
-	return st;
+	rb_link_node(&new->rb_node, parent, p);
+	rb_insert_color(&new->rb_node, &thread_stats);
+
+	return new;
 }
 
 /* build simple key function one is bigger than two */
@@ -376,7 +347,7 @@ static struct thread_lock_seq *thread_find_lock_seq(u32 tid, void *addr)
 {
 	struct thread_stat *thd_stat;
 
-	thd_stat = thread_stat_add(tid);
+	thd_stat = thread_stat_findnew(tid);
 	if (!thd_stat)
 		return NULL;
 
@@ -747,7 +718,7 @@ static void dump_threads(void)
 
 	node = rb_first(&thread_stats);
 	while (node) {
-		st = container_of(node, struct thread_stat, rb);
+		st = rb_entry(node, struct thread_stat, rb_node);
 		t = perf_session__findnew(session, st->tid);
 		pr_info("%10d: %s\n", st->tid, thread__comm_str(t));
 		node = rb_next(node);
