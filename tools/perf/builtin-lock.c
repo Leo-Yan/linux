@@ -299,20 +299,6 @@ static void perf_lock__insert_result(struct lock_stat *new)
 	rb_insert_color(&new->rb_node, &sort_result);
 }
 
-struct trace_lock_handler {
-	int (*acquire_event)(struct evsel *evsel,
-			     struct perf_sample *sample);
-
-	int (*acquired_event)(struct evsel *evsel,
-			      struct perf_sample *sample);
-
-	int (*contended_event)(struct evsel *evsel,
-			       struct perf_sample *sample);
-
-	int (*release_event)(struct evsel *evsel,
-			     struct perf_sample *sample);
-};
-
 enum broken_state {
 	BROKEN_ACQUIRE,
 	BROKEN_ACQUIRED,
@@ -557,43 +543,21 @@ end:
 	return 0;
 }
 
-/* lock oriented handlers */
-/* TODO: handlers for CPU oriented, thread oriented */
-static struct trace_lock_handler report_lock_ops  = {
-	.acquire_event		= report_lock_acquire_event,
-	.acquired_event		= report_lock_acquired_event,
-	.contended_event	= report_lock_contended_event,
-	.release_event		= report_lock_release_event,
-};
-
-static struct trace_lock_handler *trace_handler;
-
-static int evsel__process_lock_acquire(struct evsel *evsel, struct perf_sample *sample)
+static int evsel__process_lock(struct evsel *evsel, struct perf_sample *sample)
 {
-	if (trace_handler->acquire_event)
-		return trace_handler->acquire_event(evsel, sample);
-	return 0;
-}
-
-static int evsel__process_lock_acquired(struct evsel *evsel, struct perf_sample *sample)
-{
-	if (trace_handler->acquired_event)
-		return trace_handler->acquired_event(evsel, sample);
-	return 0;
-}
-
-static int evsel__process_lock_contended(struct evsel *evsel, struct perf_sample *sample)
-{
-	if (trace_handler->contended_event)
-		return trace_handler->contended_event(evsel, sample);
-	return 0;
-}
-
-static int evsel__process_lock_release(struct evsel *evsel, struct perf_sample *sample)
-{
-	if (trace_handler->release_event)
-		return trace_handler->release_event(evsel, sample);
-	return 0;
+	if (!strcmp(evsel->name, "lock:lock_acquire")) {
+		return report_lock_acquire_event(evsel, sample);
+	} else if (!strcmp(evsel->name, "lock:lock_acquired")) {
+		return report_lock_acquired_event(evsel, sample);
+	} else if (!strcmp(evsel->name, "lock:lock_contended")) {
+		return report_lock_contended_event(evsel, sample);
+	} else if (!strcmp(evsel->name, "lock:lock_release")) {
+		return report_lock_release_event(evsel, sample);
+	} else {
+		pr_err("Failed to process unknown lock event: %s\n",
+		       evsel->name);
+		return 0;
+	}
 }
 
 static void print_bad_events(int bad, int total)
@@ -760,10 +724,10 @@ static void lock_stat_sort(void)
 }
 
 static const struct evsel_str_handler lock_tracepoints[] = {
-	{ "lock:lock_acquire",	 evsel__process_lock_acquire,   }, /* CONFIG_LOCKDEP */
-	{ "lock:lock_acquired",	 evsel__process_lock_acquired,  }, /* CONFIG_LOCKDEP, CONFIG_LOCK_STAT */
-	{ "lock:lock_contended", evsel__process_lock_contended, }, /* CONFIG_LOCKDEP, CONFIG_LOCK_STAT */
-	{ "lock:lock_release",	 evsel__process_lock_release,   }, /* CONFIG_LOCKDEP */
+	{ "lock:lock_acquire",	 evsel__process_lock, },
+	{ "lock:lock_acquired",	 evsel__process_lock, },
+	{ "lock:lock_contended", evsel__process_lock, },
+	{ "lock:lock_release",	 evsel__process_lock, },
 };
 
 static bool force;
@@ -911,7 +875,6 @@ int cmd_lock(int argc, const char **argv)
 	if (!strncmp(argv[0], "rec", 3)) {
 		return __cmd_record(argc, argv);
 	} else if (!strncmp(argv[0], "report", 6)) {
-		trace_handler = &report_lock_ops;
 		if (argc) {
 			argc = parse_options(argc, argv,
 					     report_options, report_usage, 0);
@@ -930,7 +893,6 @@ int cmd_lock(int argc, const char **argv)
 				usage_with_options(info_usage, info_options);
 		}
 		/* recycling report_lock_ops */
-		trace_handler = &report_lock_ops;
 		rc = __cmd_report(true);
 	} else {
 		usage_with_options(lock_usage, lock_options);
