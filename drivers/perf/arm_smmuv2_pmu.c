@@ -672,8 +672,8 @@ static int smmu_pmu_probe(struct platform_device *pdev)
 	if (IS_ERR(smmu_pmu->reg_base))
 		return PTR_ERR(smmu_pmu->reg_base);
 
-	ceid[0] = readq_relaxed(smmu_pmu->reg_base + SMMU_PMCEID0);
-	ceid[1] = readq_relaxed(smmu_pmu->reg_base + SMMU_PMCEID1);
+	ceid[0] = readl_relaxed(smmu_pmu->reg_base + SMMU_PMCEID0);
+	ceid[1] = readl_relaxed(smmu_pmu->reg_base + SMMU_PMCEID1);
 	bitmap_from_arr32(smmu_pmu->supported_events, ceid,
 			  SMMU_PMU_ARCH_MAX_EVENTS);
 
@@ -700,8 +700,8 @@ static int smmu_pmu_probe(struct platform_device *pdev)
 		return smmu_pmu->irq;
 
 	err = devm_request_irq(smmu_pmu->dev, smmu_pmu->irq, smmu_pmu_handle_irq,
-			       IRQF_NOBALANCING | IRQF_NO_THREAD, "smmuv2-pmu",
-			       smmu_pmu);
+			       IRQF_NOBALANCING | IRQF_SHARED | IRQF_NO_THREAD,
+			       "smmuv2-pmu", smmu_pmu);
 	if (err) {
 		dev_err(dev, "Setup irq failed, PMU @%pa\n", &res->start);
 		return err;
@@ -759,9 +759,15 @@ static void smmu_pmu_shutdown(struct platform_device *pdev)
 	smmu_pmu_disable(&smmu_pmu->pmu);
 }
 
+static const struct of_device_id smmu_pmu_of_match[] = {
+	{ .compatible = "arm,smmu-v2-pmu", },
+	{}
+};
+
 static struct platform_driver smmu_pmu_driver = {
 	.driver = {
 		.name = "arm-smmu-v2-pmu",
+		.of_match_table = smmu_pmu_of_match,
 		.suppress_bind_attrs = true,
 	},
 	.probe = smmu_pmu_probe,
