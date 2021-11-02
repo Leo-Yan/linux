@@ -672,6 +672,13 @@
 		dma-coherent;
 	};
 
+	smmu_usb_pmu: smmu_pmu@7fb30C00 {
+		compatible = "arm,smmu-v2-pmu";
+		reg = <0x0 0x7fb33000 0x0 0x1000>;
+		interrupts = <GIC_SPI 101 IRQ_TYPE_LEVEL_HIGH>;
+		#global-interrupts = <1>;
+	};
+
 	dma@7ff00000 {
 		compatible = "arm,pl330", "arm,primecell";
 		reg = <0x0 0x7ff00000 0 0x1000>;
