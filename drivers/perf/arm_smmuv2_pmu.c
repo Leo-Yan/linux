@@ -93,8 +93,11 @@ static inline void smmu_pmu_enable(struct pmu *pmu)
 {
 	struct smmu_pmu *smmu_pmu = to_smmu_pmu(pmu);
 
-	writel(SMMU_PMCR_EV_CNT_RST | SMMU_PMCR_ENABLE,
-	       smmu_pmu->reg_base + SMMU_PMCR);
+	//writel(SMMU_PMCR_EV_CNT_RST | SMMU_PMCR_ENABLE,
+	writel(SMMU_PMCR_ENABLE, smmu_pmu->reg_base + SMMU_PMCR);
+
+	dev_dbg(smmu_pmu->dev, "%s: PMCR=0x%x\n", __func__,
+		readl(smmu_pmu->reg_base + SMMU_PMCR));
 }
 
 static inline void smmu_pmu_disable(struct pmu *pmu)
@@ -102,24 +105,26 @@ static inline void smmu_pmu_disable(struct pmu *pmu)
 	struct smmu_pmu *smmu_pmu = to_smmu_pmu(pmu);
 
 	writel(0, smmu_pmu->reg_base + SMMU_PMCR);
+
+	dev_dbg(smmu_pmu->dev, "%s: PMCR=0x%x\n", __func__,
+		readl(smmu_pmu->reg_base + SMMU_PMCR));
 }
 
 static inline void smmu_pmu_counter_set_value(struct smmu_pmu *smmu_pmu,
-					      u32 idx, u32 value)
+					      u32 n, u32 value)
 {
-	int n;
-
-	n = idx / 32;
+	dev_dbg(smmu_pmu->dev, "%s: SMMU_PMEVCNTR(%d)=0x%x\n",
+		__func__, n, value);
 	writel(value, smmu_pmu->reg_base + SMMU_PMEVCNTR(n));
 }
 
-static inline u32 smmu_pmu_counter_get_value(struct smmu_pmu *smmu_pmu, u32 idx)
+static inline u32 smmu_pmu_counter_get_value(struct smmu_pmu *smmu_pmu, u32 n)
 {
-	int n;
 	u32 value;
 
-	n = idx / 32;
 	value = readl(smmu_pmu->reg_base + SMMU_PMEVCNTR(n));
+	dev_dbg(smmu_pmu->dev, "%s: SMMU_PMEVCNTR(%d)=0x%x\n",
+		__func__, n, value);
 	return value;
 }
 
@@ -129,6 +134,8 @@ static inline void smmu_pmu_counter_enable(struct smmu_pmu *smmu_pmu, u32 idx)
 
 	n = idx / 32;
 	j = idx % 32;
+	dev_dbg(smmu_pmu->dev, "%s: SMMU_PMCNTENSET(%d)=0x%lx\n",
+		__func__, n, BIT(j));
 	writel(BIT(j), smmu_pmu->reg_base + SMMU_PMCNTENSET(n));
 }
 
@@ -138,6 +145,8 @@ static inline void smmu_pmu_counter_disable(struct smmu_pmu *smmu_pmu, u32 idx)
 
 	n = idx / 32;
 	j = idx % 32;
+	dev_dbg(smmu_pmu->dev, "%s: SMMU_PMCNTENCLR(%d)=0x%lx\n",
+		__func__, n, BIT(j));
 	writel(BIT(j), smmu_pmu->reg_base + SMMU_PMCNTENCLR(n));
 }
 
@@ -147,6 +156,8 @@ static inline void smmu_pmu_interrupt_enable(struct smmu_pmu *smmu_pmu, u32 idx)
 
 	n = idx / 32;
 	j = idx % 32;
+	dev_dbg(smmu_pmu->dev, "%s: SMMU_PMINTENSET(%d)=0x%lx\n",
+		__func__, n, BIT(j));
 	writel(BIT(j), smmu_pmu->reg_base + SMMU_PMINTENSET(n));
 }
 
@@ -157,23 +168,31 @@ static inline void smmu_pmu_interrupt_disable(struct smmu_pmu *smmu_pmu,
 
 	n = idx / 32;
 	j = idx % 32;
+	dev_dbg(smmu_pmu->dev, "%s: SMMU_PMINTENCLR(%d)=0x%lx\n",
+		__func__, n, BIT(j));
 	writel(BIT(j), smmu_pmu->reg_base + SMMU_PMINTENCLR(n));
 }
 
 static inline void smmu_pmu_set_evtyper(struct smmu_pmu *smmu_pmu, u32 idx,
 					u32 val)
 {
+	dev_dbg(smmu_pmu->dev, "%s: SMMU_PMEVTYPER(%d)=0x%x\n",
+		__func__, idx, val);
 	writel(val, smmu_pmu->reg_base + SMMU_PMEVTYPER(idx));
 }
 
 static inline void smmu_pmu_set_group(struct smmu_pmu *smmu_pmu, u32 grp,
 				      u32 val)
 {
+	dev_dbg(smmu_pmu->dev, "%s: SMMU_PMCGCR(%d)=0x%x\n",
+		__func__, grp, val);
 	writel(val, smmu_pmu->reg_base + SMMU_PMCGCR(grp));
 }
 
 static inline void smmu_pmu_set_smr(struct smmu_pmu *smmu_pmu, u32 grp, u32 val)
 {
+	dev_dbg(smmu_pmu->dev, "%s: SMMU_PMCGSMR(%d)=0x%x\n",
+		__func__, grp, val);
 	writel(val, smmu_pmu->reg_base + SMMU_PMCGSMR(grp));
 }
 
@@ -181,7 +200,7 @@ static void smmu_pmu_event_update(struct perf_event *event)
 {
 	struct hw_perf_event *hwc = &event->hw;
 	struct smmu_pmu *smmu_pmu = to_smmu_pmu(event->pmu);
-	u64 delta, prev, now;
+	u32 delta, prev, now;
 	u32 idx = hwc->idx;
 
 	do {
@@ -193,7 +212,13 @@ static void smmu_pmu_event_update(struct perf_event *event)
 	delta = now - prev;
 	delta &= 0xFFFFFFFF;
 
+	dev_dbg(smmu_pmu->dev, "%s: prev=0x%x now=0x%x delta=0x%x\n",
+		__func__, prev, now, delta);
+
 	local64_add(delta, &event->count);
+
+	dev_dbg(smmu_pmu->dev, "%s: event count=0x%lx\n",
+		__func__, local64_read(&event->count));
 }
 
 static void smmu_pmu_set_period(struct smmu_pmu *smmu_pmu,
@@ -212,6 +237,10 @@ static void smmu_pmu_set_period(struct smmu_pmu *smmu_pmu,
 	smmu_pmu_counter_set_value(smmu_pmu, idx, new);
 
 	local64_set(&hwc->prev_count, new);
+
+	dev_dbg(smmu_pmu->dev, "%s: hwc->prev_count=0x%lx event counter=%xlx\n",
+		__func__, local64_read(&hwc->prev_count),
+		smmu_pmu_counter_get_value(smmu_pmu, idx));
 }
 
 static struct smmu_pmu_group *
@@ -300,6 +329,8 @@ static int smmu_pmu_event_init(struct perf_event *event)
 		return -EINVAL;
 	}
 
+	dev_dbg(smmu_pmu->dev, "%s: event_id=0x%x\n", __func__, event_id);
+
 	/* Don't allow groups with mixed PMUs, except for s/w events */
 	if (!is_software_event(event->group_leader)) {
 		if (!smmu_pmu_events_compatible(event->group_leader, event))
@@ -327,7 +358,6 @@ static int smmu_pmu_event_init(struct perf_event *event)
 	 * same cpu context, to avoid races on pmu_enable etc.
 	 */
 	event->cpu = smmu_pmu->on_cpu;
-
 	return 0;
 }
 
@@ -341,11 +371,15 @@ static void smmu_pmu_event_start(struct perf_event *event, int flags)
 
 	hwc->state = 0;
 
+	dev_dbg(smmu_pmu->dev, "%s: event idx=%d\n", __func__, idx);
 	group = smmu_pmu_get_counter_group(smmu_pmu, event);
 	if (atomic_inc_return(&group->ref) == 1) {
 		val = SMMU_PMCGCR_EN;
 		if (group->stream)
 			val |= SMMU_PMCGCR_TCEFCFG_MATCH;
+
+		dev_dbg(smmu_pmu->dev, "%s: counter idx=%d group=%d pmcgcr=0x%x stream=0x%x\n",
+			__func__, idx, group->idx, val, group->stream);
 		smmu_pmu_set_group(smmu_pmu, group->idx, val);
 		smmu_pmu_set_smr(smmu_pmu, group->idx, group->stream);
 	}
@@ -391,6 +425,8 @@ static int smmu_pmu_event_add(struct perf_event *event, int flags)
 	hwc->state = PERF_HES_STOPPED | PERF_HES_UPTODATE;
 	smmu_pmu->events[idx] = event;
 	local64_set(&hwc->prev_count, 0);
+
+	dev_dbg(smmu_pmu->dev, "%s: event idx=%d\n", __func__, hwc->idx);
 
 	smmu_pmu_set_evtyper(smmu_pmu, idx, get_event(event));
 	smmu_pmu_interrupt_enable(smmu_pmu, idx);
@@ -623,13 +659,13 @@ static int smmu_pmu_init_counter_groups(struct smmu_pmu *smmu_pmu)
 		group->sidg = FIELD_GET(SMMU_PMCGCR_SIDG, cgcr);
 		start_idx += group->num_counters;
 		atomic_set(&group->ref, 0);
-		dev_dbg(smmu_pmu->dev, "SMMUv2 group%d, counter %d-%d\n",
-			i, group->counter_start,
-			group->counter_start + group->num_counters - 1);
+		dev_info(smmu_pmu->dev, "SMMUv2 group%d sidg:%d counter:%d-%d\n",
+			 i, group->sidg, group->counter_start,
+			 group->counter_start + group->num_counters - 1);
 	}
 
 	if (start_idx > SMMU_PMU_MAX_COUNTERS) {
-		dev_dbg(smmu_pmu->dev, "SMMUv2 counters are overflow %d\n",
+		dev_err(smmu_pmu->dev, "SMMUv2 counters are overflow %d\n",
 			start_idx);
 		return -EINVAL;
 	}
