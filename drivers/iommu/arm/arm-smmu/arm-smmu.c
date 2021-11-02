@@ -2066,6 +2066,14 @@ err_reset_platform_ops: __maybe_unused;
 	return err;
 }
 
+static void __iomem *arm_smmu_ioremap(struct device *dev, resource_size_t start,
+				      resource_size_t size)
+{
+	struct resource res = DEFINE_RES_MEM(start, size);
+
+	return devm_ioremap_resource(dev, &res);
+}
+
 static int arm_smmu_device_probe(struct platform_device *pdev)
 {
 	struct resource *res;
@@ -2092,9 +2100,15 @@ static int arm_smmu_device_probe(struct platform_device *pdev)
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	ioaddr = res->start;
-	smmu->base = devm_ioremap_resource(dev, res);
+	smmu->base = arm_smmu_ioremap(dev, ioaddr, (2 << 12));
 	if (IS_ERR(smmu->base))
 		return PTR_ERR(smmu->base);
+
+	smmu->base2 = arm_smmu_ioremap(dev, ioaddr + (4 << 12),
+			               resource_size(res) - (4 << 12));
+	if (IS_ERR(smmu->base2))
+		return PTR_ERR(smmu->base2);
+
 	/*
 	 * The resource size should effectively match the value of SMMU_TOP;
 	 * stash that temporarily until we know PAGESIZE to validate it with.

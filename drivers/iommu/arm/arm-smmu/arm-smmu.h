@@ -278,6 +278,7 @@ struct arm_smmu_device {
 	struct device			*dev;
 
 	void __iomem			*base;
+	void __iomem			*base2;
 	unsigned int			numpage;
 	unsigned int			pgshift;
 
@@ -466,7 +467,10 @@ static inline int __arm_smmu_alloc_bitmap(unsigned long *map, int start, int end
 
 static inline void __iomem *arm_smmu_page(struct arm_smmu_device *smmu, int n)
 {
-	return smmu->base + (n << smmu->pgshift);
+	if (n < 4)
+		return smmu->base + (n << smmu->pgshift);
+	else
+		return smmu->base2 + ((n - 4) << smmu->pgshift);
 }
 
 static inline u32 arm_smmu_readl(struct arm_smmu_device *smmu, int page, int offset)
