@@ -578,10 +578,12 @@ static int smmu_pmu_offline_cpu(unsigned int cpu, struct hlist_node *node)
 static irqreturn_t smmu_pmu_handle_irq(int irq_num, void *data)
 {
 	struct smmu_pmu *smmu_pmu = data;
-	u64 ovsr;
+	u32 ovsr;
 	unsigned int idx;
 	int n, i;
 	int handled = 0;
+
+	dev_err(smmu_pmu->dev, "%s: enter\n", __func__);
 
 	n = DIV_ROUND_UP(smmu_pmu->num_counters, 32);
 	for (i = 0; i < n; i++) {
@@ -589,17 +591,23 @@ static irqreturn_t smmu_pmu_handle_irq(int irq_num, void *data)
 		if (!ovsr)
 			continue;
 
+		dev_err(smmu_pmu->dev, "%s: ovsr=0x%x\n", __func__, ovsr);
+
 		writel(ovsr, smmu_pmu->reg_base + SMMU_PMOVSCLR(i));
 
 		for_each_set_bit(idx, (unsigned long *)&ovsr, 32) {
 			struct perf_event *event = smmu_pmu->events[i * 32 + idx];
 			struct hw_perf_event *hwc;
 
+
 			if (WARN_ON_ONCE(!event))
 				continue;
 
 			smmu_pmu_event_update(event);
 			hwc = &event->hw;
+
+			dev_err(smmu_pmu->dev, "%s: event idx=%d hwc->idx=%d\n",
+				__func__, idx, hwc->idx);
 
 			smmu_pmu_set_period(smmu_pmu, hwc);
 		}
