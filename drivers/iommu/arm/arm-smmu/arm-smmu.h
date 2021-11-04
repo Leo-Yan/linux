@@ -245,6 +245,12 @@ enum arm_smmu_cbar_type {
 #define TLB_LOOP_TIMEOUT		1000000	/* 1s! */
 #define TLB_SPIN_COUNT			10
 
+#define ARM_SMMU_PAGE_SIZE_64KB		(1 << 16)
+#define ARM_SMMU_PAGE_SIZE_4KB		(1 << 12)
+
+#define ARM_SMMU_GLB_REG_PAGE_NUM	2
+#define ARM_SMMU_GLB_SSD_PAGE_OFFSET	4
+
 /* Shared driver definitions */
 enum arm_smmu_arch_version {
 	ARM_SMMU_V1,
@@ -278,6 +284,7 @@ struct arm_smmu_device {
 	struct device			*dev;
 
 	void __iomem			*base;
+	void __iomem			*ssd_base;
 	unsigned int			numpage;
 	unsigned int			pgshift;
 
@@ -466,7 +473,13 @@ static inline int __arm_smmu_alloc_bitmap(unsigned long *map, int start, int end
 
 static inline void __iomem *arm_smmu_page(struct arm_smmu_device *smmu, int n)
 {
-	return smmu->base + (n << smmu->pgshift);
+	if (n < ARM_SMMU_GLB_REG_PAGE_NUM)
+		return smmu->base + (n << smmu->pgshift);
+	else if (n >= ARM_SMMU_GLB_SSD_PAGE_OFFSET)
+		return smmu->ssd_base +
+			((n - ARM_SMMU_GLB_SSD_PAGE_OFFSET) << smmu->pgshift);
+	else
+		BUG();
 }
 
 static inline u32 arm_smmu_readl(struct arm_smmu_device *smmu, int page, int offset)

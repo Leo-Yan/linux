@@ -1793,7 +1793,6 @@ static int arm_smmu_device_cfg_probe(struct arm_smmu_device *smmu)
 
 	/* ID1 */
 	id = arm_smmu_gr0_read(smmu, ARM_SMMU_GR0_ID1);
-	smmu->pgshift = (id & ARM_SMMU_ID1_PAGESIZE) ? 16 : 12;
 
 	/* Check for size mismatch of SMMU address space from mapped region */
 	size = 1 << (FIELD_GET(ARM_SMMU_ID1_NUMPAGENDXB, id) + 1);
@@ -2066,6 +2065,59 @@ err_reset_platform_ops: __maybe_unused;
 	return err;
 }
 
+static void __iomem *arm_smmu_ioremap(struct device *dev, resource_size_t start,
+				      resource_size_t size)
+{
+	struct resource res = DEFINE_RES_MEM(start, size);
+
+	return devm_ioremap_resource(dev, &res);
+}
+
+static int arm_smmu_map_regions(struct platform_device *pdev,
+				struct arm_smmu_device *smmu,
+				struct resource *res)
+{
+	resource_size_t ioaddr, size;
+	resource_size_t ssd_offset;
+	u32 id;
+
+	ioaddr = res->start;
+	size = resource_size(res);
+
+	/* Firstly map the start two pages (page size is 4KB) */
+	smmu->base = arm_smmu_ioremap(smmu->dev, ioaddr,
+			ARM_SMMU_PAGE_SIZE_4KB * ARM_SMMU_GLB_REG_PAGE_NUM);
+	if (IS_ERR(smmu->base))
+		return PTR_ERR(smmu->base);
+
+	/* Read out the page size from ID register */
+	id = arm_smmu_gr0_read(smmu, ARM_SMMU_GR0_ID1);
+	smmu->pgshift = (id & ARM_SMMU_ID1_PAGESIZE) ? 16 : 12;
+
+	/* If the page size is not 4KB, remap the first two pages */
+	if ((1 << smmu->pgshift) != ARM_SMMU_PAGE_SIZE_4KB) {
+		iounmap(smmu->base);
+
+		smmu->base = arm_smmu_ioremap(smmu->dev, ioaddr,
+			(ARM_SMMU_GLB_REG_PAGE_NUM << smmu->pgshift));
+		if (IS_ERR(smmu->base))
+			return PTR_ERR(smmu->base);
+	}
+
+	ssd_offset = ARM_SMMU_GLB_SSD_PAGE_OFFSET << smmu->pgshift;
+	smmu->ssd_base = arm_smmu_ioremap(smmu->dev, ioaddr + ssd_offset,
+					  resource_size(res) - ssd_offset);
+	if (IS_ERR(smmu->ssd_base))
+		return PTR_ERR(smmu->ssd_base);
+
+	/*
+	 * The resource size should effectively match the value of SMMU_TOP;
+	 * stash that temporarily until we know PAGESIZE to validate it with.
+	 */
+	smmu->numpage = resource_size(res);
+	return 0;
+}
+
 static int arm_smmu_device_probe(struct platform_device *pdev)
 {
 	struct resource *res;
@@ -2092,14 +2144,10 @@ static int arm_smmu_device_probe(struct platform_device *pdev)
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	ioaddr = res->start;
-	smmu->base = devm_ioremap_resource(dev, res);
-	if (IS_ERR(smmu->base))
-		return PTR_ERR(smmu->base);
-	/*
-	 * The resource size should effectively match the value of SMMU_TOP;
-	 * stash that temporarily until we know PAGESIZE to validate it with.
-	 */
-	smmu->numpage = resource_size(res);
+
+	err = arm_smmu_map_regions(pdev, smmu, res);
+	if (err)
+		return err;
 
 	smmu = arm_smmu_impl_init(smmu);
 	if (IS_ERR(smmu))
