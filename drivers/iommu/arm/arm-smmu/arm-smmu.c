@@ -2118,6 +2118,45 @@ static int arm_smmu_map_regions(struct platform_device *pdev,
 	return 0;
 }
 
+static int arm_smmu_register_pmu_device(struct platform_device *pdev,
+					struct arm_smmu_device *smmu)
+{
+	struct device *dev = &pdev->dev;
+	struct property_entry props[2];
+	int ret;
+
+	smmu->pmu_dev = platform_device_alloc("arm-smmu-pmu", PLATFORM_DEVID_AUTO);
+	if (!smmu->pmu_dev)
+		return -ENOMEM;
+
+	smmu->pmu_dev->dev.parent = dev;
+	smmu->pmu_dev->dev.type = dev->type;
+	smmu->pmu_dev->dev.dma_mask = dev->dma_mask;
+	smmu->pmu_dev->dev.dma_parms = dev->dma_parms;
+	smmu->pmu_dev->dev.coherent_dma_mask = dev->coherent_dma_mask;
+
+	memset(props, 0, sizeof(props));
+	props[0] = PROPERTY_ENTRY_U32("pgshift", smmu->pgshift);
+
+	ret = device_create_managed_software_node(&smmu->pmu_dev->dev, props, NULL);
+	if (ret < 0) {
+		dev_err(&pdev->dev, "failed to add properties\n");
+		goto out;
+	}
+
+	ret = platform_device_add(smmu->pmu_dev);
+	if (ret)
+		dev_err(&pdev->dev, "failed to add device\n");
+
+out:
+	return ret;
+}
+
+static void arm_smmu_unregister_pmu_device(struct arm_smmu_device *smmu)
+{
+	platform_device_unregister(smmu->pmu_dev);
+}
+
 static int arm_smmu_device_probe(struct platform_device *pdev)
 {
 	struct resource *res;
@@ -2265,6 +2304,10 @@ static int arm_smmu_device_probe(struct platform_device *pdev)
 			goto err_unregister_device;
 	}
 
+	err = arm_smmu_register_pmu_device(pdev, smmu);
+	if (err)
+		goto err_unregister_device;
+
 	return 0;
 
 err_unregister_device:
@@ -2280,6 +2323,8 @@ static int arm_smmu_device_remove(struct platform_device *pdev)
 
 	if (!smmu)
 		return -ENODEV;
+
+	arm_smmu_unregister_pmu_device(smmu);
 
 	if (!bitmap_empty(smmu->context_map, ARM_SMMU_MAX_CBS))
 		dev_notice(&pdev->dev, "disabling translation\n");

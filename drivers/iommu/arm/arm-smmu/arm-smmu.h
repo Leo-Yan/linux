@@ -282,6 +282,7 @@ struct arm_smmu_smr {
 
 struct arm_smmu_device {
 	struct device			*dev;
+	struct platform_device		*pmu_dev;
 
 	void __iomem			*base;
 	void __iomem			*ssd_base;
