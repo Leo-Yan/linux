@@ -670,13 +670,15 @@
 		#iommu-cells = <1>;
 		#global-interrupts = <1>;
 		dma-coherent;
-	};
 
-	smmu_usb_pmu: smmu_pmu@7fb30C00 {
-		compatible = "arm,smmu-v2-pmu";
-		reg = <0x0 0x7fb33000 0x0 0x1000>;
-		interrupts = <GIC_SPI 101 IRQ_TYPE_LEVEL_HIGH>;
-		#global-interrupts = <1>;
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges = <0 0x0 0x7fb30000 0x10000>;
+
+		smmu_usb_pmu: smmu_usb_pmu@3000 {
+			compatible = "arm,smmu-v1-pmu";
+			reg = <0x3000 0x1000>;
+		};
 	};
 
 	dma@7ff00000 {

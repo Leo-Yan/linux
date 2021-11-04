@@ -1983,12 +1983,15 @@ static inline int arm_smmu_device_acpi_probe(struct platform_device *pdev,
 }
 #endif
 
+
+
 static int arm_smmu_device_dt_probe(struct platform_device *pdev,
 				    struct arm_smmu_device *smmu)
 {
 	const struct arm_smmu_match_data *data;
 	struct device *dev = &pdev->dev;
 	bool legacy_binding;
+	struct device_node *child;
 
 	if (of_property_read_u32(dev->of_node, "#global-interrupts",
 				 &smmu->num_global_irqs)) {
@@ -2017,7 +2020,106 @@ static int arm_smmu_device_dt_probe(struct platform_device *pdev,
 	if (of_dma_is_coherent(dev->of_node))
 		smmu->features |= ARM_SMMU_FEAT_COHERENT_WALK;
 
+	child = of_get_compatible_child(dev->of_node, "arm,smmu-v1-pmu");
+	if (child) {
+		struct resource res;
+		int ret;
+
+		ret = of_address_to_resource(child, 0, &res);
+		if (ret < 0) {
+			dev_err(dev, "could not get resource for node %pOF\n", child);
+			return ret;
+		}
+
+		smmu->pmu_start = res.start;
+		smmu->pmu_size = resource_size(&res);
+
+		dev_err(dev, "SMMU PMU %pOF start 0x%llx size 0x%llx\n",
+			child, smmu->pmu_start, smmu->pmu_size);
+	}
+
 	return 0;
+}
+
+static struct property_entry arm_smmu_pmu_properties[] = {
+	PROPERTY_ENTRY_U32("pgshift", 12),
+	{}
+};
+
+static const struct software_node arm_smmu_pmu_swnode = {
+	.properties = arm_smmu_pmu_properties,
+};
+
+static int arm_smmu_register_pmu_device(struct platform_device *pdev,
+					struct arm_smmu_device *smmu)
+{
+	struct device *dev = &pdev->dev;
+	struct resource	*res, *child_res = NULL;
+	int ret, irq;
+	struct property_entry props[2];
+
+	smmu->pmu_dev = platform_device_alloc("arm-smmu-v2-pmu", PLATFORM_DEVID_AUTO);
+	if (!smmu->pmu_dev)
+		return -ENOMEM;
+
+	smmu->pmu_dev->dev.parent = dev;
+	smmu->pmu_dev->dev.type = dev->type;
+	smmu->pmu_dev->dev.dma_mask = dev->dma_mask;
+	smmu->pmu_dev->dev.dma_parms = dev->dma_parms;
+	smmu->pmu_dev->dev.coherent_dma_mask = dev->coherent_dma_mask;
+
+	///child_res = kcalloc(2, sizeof(*child_res), GFP_KERNEL);
+	///if (!child_res)
+	///	return -ENOMEM;
+
+	///res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	///if (!res) {
+	///	dev_err(&pdev->dev, "failed to get memory resource\n");
+	///	ret = -ENODEV;
+	///	goto out;
+	///}
+
+	///child_res[0].flags = res->flags;
+	///child_res[0].start = res->start + 0x3000;
+	///child_res[0].end = child_res[0].start + 0x1000;
+
+	///printk("%s: res start=0x%llx end=0x%llx\n", __func__,
+	///	child_res[0].start, child_res[0].end);
+
+	///irq = platform_get_irq(pdev, 0);
+	///if (irq < 0) {
+	///	ret = irq;
+	///	goto out;
+	///}
+	///child_res[1].flags = IORESOURCE_IRQ;
+	///child_res[1].start = child_res[1].end = irq;
+
+	///printk("%s: irq=%d\n", __func__, irq);
+
+	///ret = platform_device_add_resources(smmu->pmu_dev, child_res, 2);
+	///if (ret) {
+	///	dev_err(&pdev->dev, "failed to add resources\n");
+	///	goto out;
+	///}
+
+	//arm_smmu_pmu_properties[0].value.u32_data[0] = smmu->pgshift;
+
+	memset(props, 0, sizeof(props));
+	props[0] = PROPERTY_ENTRY_U32("pgshift", smmu->pgshift);
+
+	ret = device_create_managed_software_node(&smmu->pmu_dev->dev, props, NULL);
+	if (ret < 0) {
+		dev_err(&pdev->dev, "failed to add properties\n");
+		goto out;
+	}
+
+	ret = platform_device_add(smmu->pmu_dev);
+	if (ret)
+		dev_err(&pdev->dev, "failed to add device\n");
+
+out:
+	kfree(child_res);
+	return ret;
 }
 
 static int arm_smmu_bus_init(struct iommu_ops *ops)
@@ -2074,6 +2176,8 @@ static void __iomem *arm_smmu_ioremap(struct device *dev, resource_size_t start,
 	return devm_ioremap_resource(dev, &res);
 }
 
+static struct resource wdt_res;
+
 static int arm_smmu_device_probe(struct platform_device *pdev)
 {
 	struct resource *res;
@@ -2082,6 +2186,7 @@ static int arm_smmu_device_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	int num_irqs, i, err;
 	irqreturn_t (*global_fault)(int irq, void *dev);
+	resource_size_t res_size;
 
 	smmu = devm_kzalloc(dev, sizeof(*smmu), GFP_KERNEL);
 	if (!smmu) {
@@ -2104,10 +2209,20 @@ static int arm_smmu_device_probe(struct platform_device *pdev)
 	if (IS_ERR(smmu->base))
 		return PTR_ERR(smmu->base);
 
+	res_size = resource_size(res);
 	smmu->base2 = arm_smmu_ioremap(dev, ioaddr + (4 << 12),
 			               resource_size(res) - (4 << 12));
 	if (IS_ERR(smmu->base2))
 		return PTR_ERR(smmu->base2);
+
+	adjust_resource(res, res->start, (2 << 12));
+
+	//if (allocate_resource(&iomem_resource, &wdt_res, res_size - (4 << 12),
+	//		      ioaddr + (4 << 12), ioaddr + res_size,
+	//		      0xff, NULL, NULL)) {
+	//	dev_err(&pdev->dev, "MMIO allocation failed\n");
+	//	return -EINVAL;
+	//}
 
 	/*
 	 * The resource size should effectively match the value of SMMU_TOP;
@@ -2231,6 +2346,7 @@ static int arm_smmu_device_probe(struct platform_device *pdev)
 			goto err_unregister_device;
 	}
 
+	arm_smmu_register_pmu_device(pdev, smmu);
 	return 0;
 
 err_unregister_device:

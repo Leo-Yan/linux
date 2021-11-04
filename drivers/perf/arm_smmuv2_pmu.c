@@ -681,6 +681,14 @@ static int smmu_pmu_init_counter_groups(struct smmu_pmu *smmu_pmu)
 	return 0;
 }
 
+static void __iomem *arm_smmu_ioremap(struct device *dev, resource_size_t start,
+				      resource_size_t size)
+{
+	struct resource res = DEFINE_RES_MEM(start, size);
+
+	return devm_ioremap_resource(dev, &res);
+}
+
 static int smmu_pmu_probe(struct platform_device *pdev)
 {
 	struct smmu_pmu *smmu_pmu;
@@ -689,6 +697,20 @@ static int smmu_pmu_probe(struct platform_device *pdev)
 	int err;
 	char *name;
 	struct device *dev = &pdev->dev;
+	struct platform_device *ppdev = to_platform_device(dev->parent);
+	u32 pg_shift;
+	resource_size_t ioaddr;
+
+	err = of_property_read_u32(dev->of_node, "pgshift", &pg_shift);
+
+	if (device_property_read_u32(dev, "pgshift", &pg_shift)) {
+		printk("%s: fail detect pgshift\n", __func__);
+	}
+
+	printk("%s: enter XXXX pg_shift=%u err=%d\n", __func__,
+		pg_shift, err);
+
+	//pg_shift = 12;
 
 	smmu_pmu = devm_kzalloc(dev, sizeof(*smmu_pmu), GFP_KERNEL);
 	if (!smmu_pmu)
@@ -712,7 +734,9 @@ static int smmu_pmu_probe(struct platform_device *pdev)
 		.capabilities	= PERF_PMU_CAP_NO_EXCLUDE,
 	};
 
-	smmu_pmu->reg_base = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
+	res = platform_get_resource(ppdev, IORESOURCE_MEM, 0);
+	ioaddr = res->start + 3 * (1 << pg_shift);
+	smmu_pmu->reg_base = arm_smmu_ioremap(dev, ioaddr, (1 << pg_shift));
 	if (IS_ERR(smmu_pmu->reg_base))
 		return PTR_ERR(smmu_pmu->reg_base);
 
@@ -739,7 +763,7 @@ static int smmu_pmu_probe(struct platform_device *pdev)
 
 	smmu_pmu_reset(smmu_pmu);
 
-	smmu_pmu->irq = platform_get_irq(pdev, 0);
+	smmu_pmu->irq = platform_get_irq(ppdev, 0);
 	if (smmu_pmu->irq < 0)
 		return smmu_pmu->irq;
 
@@ -804,6 +828,7 @@ static void smmu_pmu_shutdown(struct platform_device *pdev)
 }
 
 static const struct of_device_id smmu_pmu_of_match[] = {
+	{ .compatible = "arm,smmu-v1-pmu", },
 	{ .compatible = "arm,smmu-v2-pmu", },
 	{}
 };
@@ -811,7 +836,7 @@ static const struct of_device_id smmu_pmu_of_match[] = {
 static struct platform_driver smmu_pmu_driver = {
 	.driver = {
 		.name = "arm-smmu-v2-pmu",
-		.of_match_table = smmu_pmu_of_match,
+		//.of_match_table = smmu_pmu_of_match,
 		.suppress_bind_attrs = true,
 	},
 	.probe = smmu_pmu_probe,

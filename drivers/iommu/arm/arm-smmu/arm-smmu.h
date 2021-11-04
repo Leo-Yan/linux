@@ -279,6 +279,9 @@ struct arm_smmu_device {
 
 	void __iomem			*base;
 	void __iomem			*base2;
+	struct platform_device		*pmu_dev;
+	phys_addr_t			pmu_start;
+	phys_addr_t			pmu_size;
 	unsigned int			numpage;
 	unsigned int			pgshift;
 
