@@ -1793,7 +1793,6 @@ static int arm_smmu_device_cfg_probe(struct arm_smmu_device *smmu)
 
 	/* ID1 */
 	id = arm_smmu_gr0_read(smmu, ARM_SMMU_GR0_ID1);
-	smmu->pgshift = (id & ARM_SMMU_ID1_PAGESIZE) ? 16 : 12;
 
 	/* Check for size mismatch of SMMU address space from mapped region */
 	size = 1 << (FIELD_GET(ARM_SMMU_ID1_NUMPAGENDXB, id) + 1);
@@ -2058,7 +2057,7 @@ static int arm_smmu_register_pmu_device(struct platform_device *pdev,
 	int ret, irq;
 	struct property_entry props[2];
 
-	smmu->pmu_dev = platform_device_alloc("arm-smmu-v2-pmu", PLATFORM_DEVID_AUTO);
+	smmu->pmu_dev = platform_device_alloc("arm-smmu-pmu", PLATFORM_DEVID_AUTO);
 	if (!smmu->pmu_dev)
 		return -ENOMEM;
 
@@ -2181,12 +2180,13 @@ static struct resource wdt_res;
 static int arm_smmu_device_probe(struct platform_device *pdev)
 {
 	struct resource *res;
-	resource_size_t ioaddr;
+	resource_size_t ioaddr, ssd_offset;
 	struct arm_smmu_device *smmu;
 	struct device *dev = &pdev->dev;
 	int num_irqs, i, err;
 	irqreturn_t (*global_fault)(int irq, void *dev);
 	resource_size_t res_size;
+	u32 id;
 
 	smmu = devm_kzalloc(dev, sizeof(*smmu), GFP_KERNEL);
 	if (!smmu) {
@@ -2205,24 +2205,35 @@ static int arm_smmu_device_probe(struct platform_device *pdev)
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	ioaddr = res->start;
-	smmu->base = arm_smmu_ioremap(dev, ioaddr, (2 << 12));
+	res_size = resource_size(res);
+
+	/*
+	 * Map the first two pages (assume the page size is 4KB) so this
+	 * can allow us to read out the SMMU config info.
+	 */
+	smmu->base = arm_smmu_ioremap(dev, ioaddr,
+			ARM_SMMU_PAGE_SIZE_4KB * ARM_SMMU_GLB_REG_PAGE_NUM);
 	if (IS_ERR(smmu->base))
 		return PTR_ERR(smmu->base);
 
-	res_size = resource_size(res);
-	smmu->base2 = arm_smmu_ioremap(dev, ioaddr + (4 << 12),
-			               resource_size(res) - (4 << 12));
+	id = arm_smmu_gr0_read(smmu, ARM_SMMU_GR0_ID1);
+	smmu->pgshift = (id & ARM_SMMU_ID1_PAGESIZE) ? 16 : 12;
+
+	if ((1 << smmu->pgshift) != ARM_SMMU_PAGE_SIZE_4KB) {
+		iounmap(smmu->base);
+
+		smmu->base = arm_smmu_ioremap(dev, ioaddr,
+			(ARM_SMMU_GLB_REG_PAGE_NUM << smmu->pgshift));
+		if (IS_ERR(smmu->base))
+			return PTR_ERR(smmu->base);
+
+	}
+
+	ssd_offset = ARM_SMMU_GLB_SSD_PAGE_OFFSET << smmu->pgshift;
+	smmu->base2 = arm_smmu_ioremap(dev, ioaddr + ssd_offset,
+			               resource_size(res) - ssd_offset);
 	if (IS_ERR(smmu->base2))
 		return PTR_ERR(smmu->base2);
-
-	adjust_resource(res, res->start, (2 << 12));
-
-	//if (allocate_resource(&iomem_resource, &wdt_res, res_size - (4 << 12),
-	//		      ioaddr + (4 << 12), ioaddr + res_size,
-	//		      0xff, NULL, NULL)) {
-	//	dev_err(&pdev->dev, "MMIO allocation failed\n");
-	//	return -EINVAL;
-	//}
 
 	/*
 	 * The resource size should effectively match the value of SMMU_TOP;

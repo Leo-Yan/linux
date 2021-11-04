@@ -701,16 +701,11 @@ static int smmu_pmu_probe(struct platform_device *pdev)
 	u32 pg_shift;
 	resource_size_t ioaddr;
 
-	err = of_property_read_u32(dev->of_node, "pgshift", &pg_shift);
-
-	if (device_property_read_u32(dev, "pgshift", &pg_shift)) {
-		printk("%s: fail detect pgshift\n", __func__);
+	err = device_property_read_u32(dev, "pgshift", &pg_shift);
+	if (err) {
+		dev_err(dev, "Fail to read out page shift: %d\n", err);
+		return err;
 	}
-
-	printk("%s: enter XXXX pg_shift=%u err=%d\n", __func__,
-		pg_shift, err);
-
-	//pg_shift = 12;
 
 	smmu_pmu = devm_kzalloc(dev, sizeof(*smmu_pmu), GFP_KERNEL);
 	if (!smmu_pmu)
@@ -827,16 +822,9 @@ static void smmu_pmu_shutdown(struct platform_device *pdev)
 	smmu_pmu_disable(&smmu_pmu->pmu);
 }
 
-static const struct of_device_id smmu_pmu_of_match[] = {
-	{ .compatible = "arm,smmu-v1-pmu", },
-	{ .compatible = "arm,smmu-v2-pmu", },
-	{}
-};
-
 static struct platform_driver smmu_pmu_driver = {
 	.driver = {
-		.name = "arm-smmu-v2-pmu",
-		//.of_match_table = smmu_pmu_of_match,
+		.name = "arm-smmu-pmu",
 		.suppress_bind_attrs = true,
 	},
 	.probe = smmu_pmu_probe,
