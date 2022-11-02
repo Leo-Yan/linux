@@ -917,7 +917,7 @@ int kvm_arch_vcpu_ioctl_run(struct kvm_vcpu *vcpu)
 		/**************************************************************
 		 * Enter the guest
 		 */
-		trace_kvm_entry(*vcpu_pc(vcpu));
+		trace_kvm_entry_tp(vcpu);
 		guest_timing_enter_irqoff();
 
 		ret = kvm_arm_vcpu_enter_exit(vcpu);
@@ -974,7 +974,7 @@ int kvm_arch_vcpu_ioctl_run(struct kvm_vcpu *vcpu)
 
 		local_irq_enable();
 
-		trace_kvm_exit(ret, kvm_vcpu_trap_get_class(vcpu), *vcpu_pc(vcpu));
+		trace_kvm_exit_tp(ret, vcpu);
 
 		/* Exit types that need handling before we can be preempted */
 		handle_exit_early(vcpu, ret);
