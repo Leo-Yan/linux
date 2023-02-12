@@ -23,8 +23,12 @@
 #include "util/data.h"
 #include "util/ordered-events.h"
 #include "util/kvm-stat.h"
+#include "ui/browsers/hists.h"
 #include "ui/ui.h"
 #include "util/string2.h"
+#include "ui/progress.h"
+#include "util/hist.h"
+#include "util/sort.h"
 
 #include <sys/prctl.h>
 #ifdef HAVE_TIMERFD_SUPPORT
@@ -341,7 +345,50 @@ static bool skip_event(const char *event)
 	return false;
 }
 
-static bool handle_end_event(struct perf_kvm_stat *kvm,
+struct kvm_ev_stats {
+	char ev_name[32];
+	u64 time;
+};
+
+struct kvm_hists {
+	struct hists		hists;
+	struct perf_hpp_list	list;
+	struct kvm_ev_stats	stats;
+};
+
+struct kvm_hist_entry {
+	struct kvm_ev_stats	stats;
+	struct hist_entry	he;
+};
+
+static struct kvm_hists kvm_hists;
+
+static void *kvm_he_zalloc(size_t size)
+{
+	struct kvm_hist_entry *kvm_he;
+
+	kvm_he = zalloc(size + sizeof(*kvm_he));
+	if (!kvm_he)
+		return NULL;
+
+	return &kvm_he->he;
+}
+
+static void kvm_he_free(void *he)
+{
+	struct kvm_hist_entry *kvm_he;
+
+	kvm_he = container_of(he, struct kvm_hist_entry, he);
+	free(kvm_he);
+}
+
+static struct hist_entry_ops kvm_entry_ops = {
+	.new	= kvm_he_zalloc,
+	.free	= kvm_he_free,
+};
+
+static bool handle_end_event(struct machine *machine,
+			     struct perf_kvm_stat *kvm,
 			     struct vcpu_event_record *vcpu_record,
 			     struct event_key *key,
 			     struct perf_sample *sample)
@@ -349,6 +396,11 @@ static bool handle_end_event(struct perf_kvm_stat *kvm,
 	struct kvm_event *event;
 	u64 time_begin, time_diff;
 	int vcpu;
+	struct hist_entry *he;
+	struct addr_location al;
+	char decode[decode_str_len];
+	struct kvm_hist_entry *kvm_he;
+	struct kvm_ev_stats *stats;
 
 	if (kvm->trace_vcpu == -1)
 		vcpu = -1;
@@ -387,11 +439,9 @@ static bool handle_end_event(struct perf_kvm_stat *kvm,
 	}
 
 	time_diff = sample->time - time_begin;
+	kvm->events_ops->decode_key(kvm, &event->key, decode);
 
 	if (kvm->duration && time_diff > kvm->duration) {
-		char decode[decode_str_len];
-
-		kvm->events_ops->decode_key(kvm, &event->key, decode);
 		if (!skip_event(decode)) {
 			pr_info("%" PRIu64 " VM %d, vcpu %d: %s event took %" PRIu64 "usec\n",
 				 sample->time, sample->pid, vcpu_record->vcpu_id,
@@ -399,6 +449,29 @@ static bool handle_end_event(struct perf_kvm_stat *kvm,
 		}
 	}
 
+	if (machine__resolve(machine, &al, sample) < 0) {
+		pr_err("problem processing event, skipping it.\n");
+		goto update_event;
+	}
+
+	he = hists__add_entry_ops(&kvm_hists.hists, &kvm_entry_ops,
+				  &al, NULL, NULL, NULL, sample, true);
+	if (he == NULL) {
+		pr_debug("Failed to add hist entry\n");
+	} else {
+		kvm_he = container_of(he, struct kvm_hist_entry, he);
+
+		stats = &kvm_he->stats;
+		strncpy(stats->ev_name, decode, decode_str_len);
+		stats->time = time_diff;
+		fprintf(stderr, "event %s duration %lu\n",
+			stats->ev_name, stats->time);
+	}
+
+	hists__inc_nr_samples(&kvm_hists.hists, 0);
+	hist_entry__append_callchain(he, sample);
+
+update_event:
 	return update_kvm_event(event, vcpu, time_diff);
 }
 
@@ -424,7 +497,8 @@ struct vcpu_event_record *per_vcpu_record(struct thread *thread,
 	return thread__priv(thread);
 }
 
-static bool handle_kvm_event(struct perf_kvm_stat *kvm,
+static bool handle_kvm_event(struct machine *machine,
+			     struct perf_kvm_stat *kvm,
 			     struct thread *thread,
 			     struct evsel *evsel,
 			     struct perf_sample *sample)
@@ -449,7 +523,7 @@ static bool handle_kvm_event(struct perf_kvm_stat *kvm,
 		return handle_child_event(kvm, vcpu_record, &key, sample);
 
 	if (kvm->events_ops->is_end_event(evsel, sample, &key))
-		return handle_end_event(kvm, vcpu_record, &key, sample);
+		return handle_end_event(machine, kvm, vcpu_record, &key, sample);
 
 	return true;
 }
@@ -609,6 +683,7 @@ static void print_result(struct perf_kvm_stat *kvm)
 	char decode[decode_str_len];
 	struct kvm_event *event;
 	int vcpu = kvm->trace_vcpu;
+	//struct ui_progress prog;
 
 	if (kvm->live) {
 		puts(CONSOLE_CLEAR);
@@ -697,7 +772,7 @@ static int process_sample_event(struct perf_tool *tool,
 		return -1;
 	}
 
-	if (!handle_kvm_event(kvm, thread, evsel, sample))
+	if (!handle_kvm_event(machine, kvm, thread, evsel, sample))
 		err = -1;
 
 	thread__put(thread);
@@ -880,6 +955,8 @@ static int perf_kvm__handle_timerfd(struct perf_kvm_stat *kvm)
 	uint64_t c;
 	int rc;
 
+	pr_debug("111111111111111111\n");
+
 	rc = read(kvm->timerfd, &c, sizeof(uint64_t));
 	if (rc < 0) {
 		if (errno == EAGAIN)
@@ -957,7 +1034,7 @@ static int kvm_events_live_report(struct perf_kvm_stat *kvm)
 		goto out;
 	}
 
-	set_term_quiet_input(&save);
+	//set_term_quiet_input(&save);
 	init_kvm_event_record(kvm);
 
 	signal(SIGINT, sig_handler);
@@ -1006,6 +1083,7 @@ static int kvm_events_live_report(struct perf_kvm_stat *kvm)
 	if (err == 0) {
 		sort_result(kvm);
 		print_result(kvm);
+
 	}
 
 out:
@@ -1135,10 +1213,433 @@ static int parse_target_str(struct perf_kvm_stat *kvm)
 	return 0;
 }
 
+#define KVM_HEADER_MAX 2
+
+struct kvm_header {
+	struct {
+		const char *text;
+		int	    span;
+	} line[KVM_HEADER_MAX];
+};
+
+struct kvm_dimension {
+	struct kvm_header	 header;
+	const char		*name;
+	int			 width;
+	struct sort_entry	*se;
+
+	int64_t (*cmp)(struct perf_hpp_fmt *fmt,
+		       struct hist_entry *, struct hist_entry *);
+	int   (*entry)(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
+		       struct hist_entry *he);
+	int   (*color)(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
+		       struct hist_entry *he);
+};
+
+struct kvm_fmt {
+	struct perf_hpp_fmt	 fmt;
+	struct kvm_dimension	*dim;
+};
+
+static int64_t
+empty_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
+	  struct hist_entry *left __maybe_unused,
+	  struct hist_entry *right __maybe_unused)
+{
+	return 0;
+}
+
+static int kvm_width(struct perf_hpp_fmt *fmt,
+		     struct perf_hpp *hpp __maybe_unused,
+		     struct hists *hists __maybe_unused)
+{
+	struct kvm_fmt *kvm_fmt;
+
+	kvm_fmt = container_of(fmt, struct kvm_fmt, fmt);
+	return kvm_fmt->dim->width;
+}
+
+static int ev_name_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
+			 struct hist_entry *he)
+{
+	struct kvm_hist_entry *kvm_he;
+	int width = kvm_width(fmt, hpp, he->hists);
+
+	kvm_he = container_of(he, struct kvm_hist_entry, he);
+
+	return scnprintf(hpp->buf, hpp->size, "%*s", width,
+			 kvm_he->stats.ev_name);
+}
+
+#define HEADER_LOW(__h)			\
+	{				\
+		.line[1] = {		\
+			.text = __h,	\
+		},			\
+	}
+
+#define HEADER_BOTH(__h0, __h1)		\
+	{				\
+		.line[0] = {		\
+			.text = __h0,	\
+		},			\
+		.line[1] = {		\
+			.text = __h1,	\
+		},			\
+	}
+
+#define HEADER_SPAN(__h0, __h1, __s)	\
+	{				\
+		.line[0] = {		\
+			.text = __h0,	\
+			.span = __s,	\
+		},			\
+		.line[1] = {		\
+			.text = __h1,	\
+		},			\
+	}
+
+#define HEADER_SPAN_LOW(__h)		\
+	{				\
+		.line[1] = {		\
+			.text = __h,	\
+		},			\
+	}
+
+static struct kvm_dimension dim_event = {
+	.header		= HEADER_SPAN("--- KVM Events ----", "Event name", 2),
+	.name		= "event_name",
+	.cmp		= empty_cmp,
+	.entry		= ev_name_entry,
+	.width		= 18,
+};
+
+static int ev_duration_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
+			     struct hist_entry *he)
+{
+	struct kvm_hist_entry *kvm_he;
+	int width = kvm_width(fmt, hpp, he->hists);
+
+	kvm_he = container_of(he, struct kvm_hist_entry, he);
+
+	return scnprintf(hpp->buf, hpp->size, "%*lu", width,
+			 kvm_he->stats.time);
+}
+
+static int64_t
+ev_duration_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
+		struct hist_entry *left, struct hist_entry *right)
+{
+	struct kvm_hist_entry *kvm_left;
+	struct kvm_hist_entry *kvm_right;
+
+	kvm_left  = container_of(left, struct kvm_hist_entry, he);
+	kvm_right = container_of(right, struct kvm_hist_entry, he);
+
+	return kvm_left->stats.time - kvm_right->stats.time;
+}
+
+static struct kvm_dimension dim_duration = {
+	.header		= HEADER_LOW("Duration"),
+	.name		= "duration",
+	.cmp		= ev_duration_cmp,
+	.entry		= ev_duration_entry,
+	.width		= 4,
+};
+
+static struct kvm_dimension *dimensions[] = {
+	&dim_event,
+	&dim_duration,
+	NULL,
+};
+
+static int kvm_header(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
+		      struct hists *hists, int line, int *span)
+{
+	struct perf_hpp_list *hpp_list = hists->hpp_list;
+	struct kvm_fmt *kvm_fmt;
+	struct kvm_dimension *dim;
+	const char *text = NULL;
+	int width = kvm_width(fmt, hpp, hists);
+
+	kvm_fmt = container_of(fmt, struct kvm_fmt, fmt);
+	dim = kvm_fmt->dim;
+
+	if (dim->se) {
+		text = dim->header.line[line].text;
+		/* Use the last line from sort_entry if not defined. */
+		if (!text && (line == hpp_list->nr_header_lines - 1))
+			text = dim->se->se_header;
+	} else {
+		text = dim->header.line[line].text;
+
+		if (*span) {
+			(*span)--;
+			return 0;
+		} else {
+			*span = dim->header.line[line].span;
+		}
+	}
+
+	if (text == NULL)
+		text = "";
+
+	return scnprintf(hpp->buf, hpp->size, "%*s", width, text);
+}
+
+static bool fmt_equal(struct perf_hpp_fmt *a, struct perf_hpp_fmt *b)
+{
+	struct kvm_fmt *kvm_a = container_of(a, struct kvm_fmt, fmt);
+	struct kvm_fmt *kvm_b = container_of(b, struct kvm_fmt, fmt);
+
+	return kvm_a->dim == kvm_b->dim;
+}
+
+static void fmt_free(struct perf_hpp_fmt *fmt)
+{
+	struct kvm_fmt *kvm_fmt;
+
+	kvm_fmt = container_of(fmt, struct kvm_fmt, fmt);
+	free(kvm_fmt);
+}
+
+static struct kvm_dimension *get_dimension(const char *name)
+{
+	unsigned int i;
+
+	for (i = 0; dimensions[i]; i++) {
+		struct kvm_dimension *dim = dimensions[i];
+
+		if (!strcmp(dim->name, name))
+			return dim;
+	}
+
+	return NULL;
+}
+
+static struct kvm_fmt *get_format(const char *name)
+{
+	struct kvm_dimension *dim = get_dimension(name);
+	struct kvm_fmt *kvm_fmt;
+	struct perf_hpp_fmt *fmt;
+
+	if (!dim)
+		return NULL;
+
+	kvm_fmt = zalloc(sizeof(*kvm_fmt));
+	if (!kvm_fmt)
+		return NULL;
+
+	kvm_fmt->dim = dim;
+
+	fmt = &kvm_fmt->fmt;
+	INIT_LIST_HEAD(&fmt->list);
+	INIT_LIST_HEAD(&fmt->sort_list);
+
+	fmt->cmp	= dim->cmp;
+	fmt->sort	= dim->cmp;
+	fmt->color	= dim->color;
+	fmt->entry	= dim->entry;
+	fmt->header	= kvm_header;
+	fmt->width	= kvm_width;
+	fmt->collapse	= dim->cmp;
+	fmt->equal	= fmt_equal;
+	fmt->free	= fmt_free;
+
+	return kvm_fmt;
+}
+
+static int kvm_hists__init_output(struct perf_hpp_list *hpp_list, char *name)
+{
+	struct kvm_fmt *kvm_fmt = get_format(name);
+
+	if (!kvm_fmt) {
+		reset_dimensions();
+		return output_field_add(hpp_list, name);
+	}
+
+	perf_hpp_list__column_register(hpp_list, &kvm_fmt->fmt);
+	return 0;
+}
+
+static int kvm_hists__init_sort(struct perf_hpp_list *hpp_list, char *name)
+{
+	struct kvm_fmt *kvm_fmt = get_format(name);
+
+	if (!kvm_fmt) {
+		reset_dimensions();
+		return sort_dimension__add(hpp_list, name, NULL, 0);
+	}
+
+	perf_hpp_list__register_sort_field(hpp_list, &kvm_fmt->fmt);
+	return 0;
+}
+
+#define PARSE_LIST(_list, _fn)							\
+	do {									\
+		char *tmp, *tok;						\
+		ret = 0;							\
+										\
+		if (!_list)							\
+			break;							\
+										\
+		for (tok = strtok_r((char *)_list, ", ", &tmp);			\
+				tok; tok = strtok_r(NULL, ", ", &tmp)) {	\
+			ret = _fn(hpp_list, tok);				\
+			if (ret == -EINVAL) {					\
+				pr_err("Invalid --fields key: `%s'", tok);	\
+				break;						\
+			} else if (ret == -ESRCH) {				\
+				pr_err("Unknown --fields key: `%s'", tok);	\
+				break;						\
+			}							\
+		}								\
+	} while (0)
+
+static int hpp_list__parse(struct perf_hpp_list *hpp_list,
+			   const char *output_,
+			   const char *sort_)
+{
+	char *output = output_ ? strdup(output_) : NULL;
+	char *sort   = sort_   ? strdup(sort_) : NULL;
+	int ret;
+
+	PARSE_LIST(output, kvm_hists__init_output);
+	PARSE_LIST(sort,   kvm_hists__init_sort);
+
+	/* copy sort keys to output fields */
+	perf_hpp__setup_output_field(hpp_list);
+
+	/*
+	 * We dont need other sorting keys other than those
+	 * we already specified. It also really slows down
+	 * the processing a lot with big number of output
+	 * fields, so switching this off for c2c.
+	 */
+
+#if 0
+	/* and then copy output fields to sort keys */
+	perf_hpp__append_sort_keys(&hists->list);
+#endif
+
+	free(output);
+	free(sort);
+	return ret;
+}
+
+static int kvm_hists__init(struct kvm_hists *hists,
+			   const char *sort,
+			   int nr_header_lines)
+{
+	__hists__init(&hists->hists, &hists->list);
+	perf_hpp_list__init(&hists->list);
+	hists->list.nr_header_lines = nr_header_lines;
+	return hpp_list__parse(&hists->list, NULL, sort);
+}
+
+static int kvm_browser__title(struct hist_browser *browser,
+			      char *buf, size_t size)
+{
+	scnprintf(buf, size, "KVM events statistics (%lu entries)",
+		  browser->nr_non_filtered_entries);
+	return 0;
+}
+
+static struct hist_browser*
+perf_kvm_browser__new(struct hists *hists)
+{
+	struct hist_browser *browser = hist_browser__new(hists);
+
+	if (browser)
+		browser->title = kvm_browser__title;
+
+	return browser;
+}
+
+#ifdef HAVE_SLANG_SUPPORT
+static void kvm_browser__update_nr_entries(struct hist_browser *hb)
+{
+	u64 nr_entries = 0;
+	struct rb_node *nd = rb_first_cached(&hb->hists->entries);
+
+	fprintf(stderr, "%s: hists->nr_entries=%lu\n", __func__, hb->hists->nr_entries);
+
+	while (nd) {
+		struct hist_entry *he = rb_entry(nd, struct hist_entry, rb_node);
+
+		he->filtered = 0;
+		fprintf(stderr, "%s: filtered=%d\n", __func__, he->filtered);
+
+		if (!he->filtered)
+			nr_entries++;
+
+		nd = rb_next(nd);
+	}
+
+	fprintf(stderr, "%s: nr_entries=%lu\n", __func__, nr_entries);
+	hb->nr_non_filtered_entries = nr_entries;
+}
+#endif
+
+static int kvm__hists_browse(struct hists *hists)
+{
+	struct hist_browser *browser;
+	int key = -1;
+
+	browser = perf_kvm_browser__new(hists);
+	if (browser == NULL)
+		return -1;
+
+	/* reset abort key so that it can get Ctrl-C as a key */
+	SLang_reset_tty();
+	SLang_init_tty(0, 0, 0);
+
+	kvm_browser__update_nr_entries(browser);
+
+	while (1) {
+		key = hist_browser__run(browser, "? - help", true, 0);
+
+		switch (key) {
+		case 'q':
+			goto out;
+		default:
+			break;
+		}
+	}
+
+out:
+	hist_browser__delete(browser);
+	return 0;
+}
+
+static int kvm_hists__reinit(struct kvm_hists *k_hists,
+			     const char *output,
+			     const char *sort)
+{
+	perf_hpp__reset_output_field(&k_hists->list);
+	return hpp_list__parse(&k_hists->list, output, sort);
+}
+
+static int resort_shared_cl_cb(struct hist_entry *he __maybe_unused,
+			       void *arg __maybe_unused)
+{
+	return 0;
+}
+
+#if 0
+static int resort_cl_cb(struct hist_entry *he __maybe_unused,
+			void *arg __maybe_unused)
+{
+	return 0;
+}
+#endif
+
 static int kvm_events_report_vcpu(struct perf_kvm_stat *kvm)
 {
 	int ret = -EINVAL;
 	int vcpu = kvm->trace_vcpu;
+	struct ui_progress prog;
+	const char *output_str, *sort_str = NULL;
 
 	if (parse_target_str(kvm) != 0)
 		goto exit;
@@ -1153,7 +1654,16 @@ static int kvm_events_report_vcpu(struct perf_kvm_stat *kvm)
 		goto exit;
 
 	init_kvm_event_record(kvm);
-	setup_pager();
+
+	use_browser = 1;
+	//setup_pager();
+	setup_browser(false);
+
+	ret = kvm_hists__init(&kvm_hists, "duration", 2);
+	if (ret) {
+		pr_debug("Failed to initialize hists\n");
+		goto exit;
+	}
 
 	ret = read_events(kvm);
 	if (ret)
@@ -1162,6 +1672,18 @@ static int kvm_events_report_vcpu(struct perf_kvm_stat *kvm)
 	sort_result(kvm);
 	print_result(kvm);
 
+	output_str = "event_name,duration";
+	sort_str = "duration";
+
+	kvm_hists__reinit(&kvm_hists, output_str, sort_str);
+
+	ui_progress__init(&prog, kvm_hists.hists.nr_entries, "Sorting...");
+	hists__collapse_resort(&kvm_hists.hists, NULL);
+	hists__output_resort_cb(&kvm_hists.hists, &prog, resort_shared_cl_cb);
+	//hists__iterate_cb(&kvm_hists.hists, resort_cl_cb);
+	ui_progress__finish();
+
+	kvm__hists_browse(&kvm_hists.hists);
 exit:
 	return ret;
 }
@@ -1403,7 +1925,9 @@ static int kvm_events_live(struct perf_kvm_stat *kvm,
 	symbol__init(NULL);
 	disable_buildid_cache();
 
-	use_browser = 0;
+	use_browser = 1;
+
+	setup_browser(false);
 
 	if (argc) {
 		argc = parse_options(argc, argv, live_options,

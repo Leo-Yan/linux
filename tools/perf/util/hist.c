@@ -655,6 +655,7 @@ static struct hist_entry *hists__findnew_entry(struct hists *hists,
 	if (sample_self)
 		hist_entry__add_callchain_period(he, period);
 	hists->nr_entries++;
+	fprintf(stderr, "%s: nr_entries=%lu\n", __func__, hists->nr_entries);
 
 	rb_link_node(&he->rb_node_in, parent, p);
 	rb_insert_color_cached(&he->rb_node_in, hists->entries_in, leftmost);
