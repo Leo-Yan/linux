@@ -7,6 +7,7 @@
 #include "tool.h"
 #include "sort.h"
 #include "stat.h"
+#include "symbol.h"
 #include "record.h"
 
 struct evsel;
@@ -85,6 +86,9 @@ struct perf_kvm_stat {
 	const char *report_event;
 	const char *sort_key;
 	int trace_vcpu;
+
+	/* Used when process events */
+	struct addr_location al;
 
 	struct exit_reasons_table *exit_reasons;
 	const char *exit_reasons_isa;
