@@ -1,0 +1,390 @@
+perf-ring-buffer(1)
+===================
+
+NAME
+----
+perf-ring-buffer - Introduction for perf ring buffer mechanism
+
+Introduction
+------------
+Ring buffer is a fundamental mechanism for data transferring.  perf uses
+ring buffer to transfer event data from kernel to user space, another
+kind of ring buffer which is so called auxiliary (AUX) ring buffer also
+plays an important role for hardware tracing with Intel PT, Arm
+CoreSight, etc.
+
+The ring buffer implementation is critical but it's also a very challenge
+work.  On one hand, the kernel and perf tool in the user space use the
+ring buffer to exchange data and stores data into data file, thus the
+ring buffer needs to transfer data with high throughput; on the other
+hand, the ring buffer management should avoid significant overload to
+distract profiling results.
+
+This documentation dives into the details for perf ring buffer with two
+parts: firstly it explains the perf ring buffer implementation, then in
+the second part it discusses the AUX ring buffer mechanism.
+
+Ring buffer implementation
+--------------------------
+
+Basic algorithm
+~~~~~~~~~~~~~~~
+
+That said, a typical ring buffer is managed by a head pointer and a tail
+pointer; the head pointer is manipulated by a writer and the tail
+pointer is updated by a reader respectively.
+
+            +---------------------------+
+            |   |   |***|***|***|   |   |
+            +---------------------------+
+                  `-> Tail    `-> Head
+
+            * : the data is filled by writer.
+	    Figure 1: Ring buffer
+
+Perf uses the same way to manage its ring buffer.  In implementation
+there have two actors: a page contains a control structure and ring
+buffer; the page containing the control structure is named as "user
+page", the user page and the ring buffer are mapped into user space
+with the continuous virtual address, since the user page and the ring
+buffer are consecutive, from the control structure pointer it's
+easily to know the ring buffer address.
+
+The control structure is named as `perf_event_mmap_page`, it contains a
+head pointer `data_head` and a tail pointer `data_tail`.  When kernel
+starts to fill records into the ring buffer, it updates the head pointer
+to reserve the memory so later can safely store events into the buffer;
+on the other side, the perf tool updates the tail pointer after consumes
+data from the ring buffer.
+
+        user page                          ring buffer
+  +---------+---------+   +---------------------------------------+
+  |data_head|data_tail|...|   |   |***|***|***|***|***|   |   |   |
+  +---------+---------+   +---------------------------------------+
+      `          `--------------^                   ^
+       `--------------------------------------------|
+
+            * : the data is filled by writer.
+	    Figure 2: Perf ring buffer
+
+When using 'perf record' tool, we can specify the ring buffer size with
+option '-m' or '--mmap-pages=', finally the size will be rounded up to
+power of two value of pages.  Though the kernel allocates at once for
+all memory pages, it's deferred to map the the pages to VMA area until
+the perf tool accesses the buffer from the user space.  In other words,
+at the first time accesses the buffer's page from user space in the perf
+tool, a data abort exeception for page fault is taken and the kernel
+uses this occasion to map the page into process VMA, thus the perf tool
+can continue to access the page after return from exception.
+
+The function perf_mmap_fault() is for handling page fault, which invokes
+perf_mmap_to_page() to figure out which page should be mapped.  The
+structure 'vm_fault' has a field 'pgoff' to indicate which page should
+be mapped, if 'pgoff' is zero it maps the ring buffer's user page,
+otherwise, the ring buffer's page is mapped with index 'pgoff-1' (since
+the first page in VMA is for user page, so we need to decrease 1 to get
+the ring buffer's page index).
+
+Ring buffer for different tracing modes
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Perf profiles programs with different modes: per thread mode, per cpu
+mode, and system wide mode.  This section describes what's exactly these
+modes and how the ring buffer meets requirement for them.  At last we
+will review the race conditions caused by these modes.
+
+1. Per-thread mode
+
+By specifying option '--per--thread' in perf command, the ring buffer is
+allocated for every profiled thread.  In this mode, a profiled thread is
+scheduled on a CPU, the events on that CPU will be enabled; and if the
+thread is scheduled out from the CPU, the events on the CPU will be
+disabled.  When the thread is migrated from one CPU to another CPU, the
+events will be disabled on the previous CPU and enabled on the next CPU
+correspondingly.
+
+            T0                                         T1
+          +----+                                     +----+
+  CPU0    |xxxx|                                     |xxxx|
+          +----+-------------------------------------+----+-------->
+            |    T1                                    |
+            |  +-----+                                 |
+  CPU1      |  |xxxxx|                                 |
+          --|--+-----+---------------------------------|----------->
+            |     |                   T1               |
+            |     |                 +----+             |
+  CPU2      |     |                 |xxxx|             |
+          --|-----|-----------------+----+-------------|----------->
+            |     |         T1        |                |
+            |     |  +--------------+ |                |
+  CPU3      |     |  |xxxxxxxxxxxxxx| |                |
+          --|-----|--+--------------+-|----------------|----------->
+            |     |         |         |                |
+            v     v         v         v                v
+          +-----------------------------------------------------+
+          |                  Ring buffer                        |
+          +-----------------------------------------------------+
+
+	    T1: Thread 1
+	    x: Thread is in running state
+	    Figure 3: Ring buffer for per-thread mode
+
+When perf runs in per-thread mode, a ring buffer is allocated for the
+profiled thread T1.  The ring buffer is dedicated for thread T1, if the
+thread T1 is running, the perf events will be recorded into the ring
+buffer; during the thread's sleeping period, all associated events will
+be disabled, thus no any trace data will be recorded into the ring
+buffer.
+
+2. Per-CPU mode
+
+The option '-C' is used to collect samples on the list of CPUs, the ring
+buffers are allocated for the specified CPUs.  For the example in below
+figure, the perf command receives option '-C 0,2', as the result, two
+ring buffers serve for CPU0 and CPU2 separately.
+
+            T0                      T2                 T1
+          +----+              +-----------+          +----+
+  CPU0    |xxxx|              |xxxxxxxxxxx|          |xxxx|
+          +----+--------------+-----------+----------+----+-------->
+            |                       |                  |
+            v                       v                  v
+          +-----------------------------------------------------+
+          |                  Ring buffer 0                      |
+          +-----------------------------------------------------+
+
+                 T1
+               +-----+
+  CPU1         |xxxxx|
+          -----+-----+--------------------------------------------->
+
+                                      T1              T3
+                                    +----+        +-------+
+  CPU2                              |xxxx|        |xxxxxxx|
+          --------------------------+----+--------+-------+-------->
+                                      |               |
+                                      v               v
+          +-----------------------------------------------------+
+          |                  Ring buffer 1                      |
+          +-----------------------------------------------------+
+
+                            T1
+                     +--------------+
+  CPU3               |xxxxxxxxxxxxxx|
+          -----------+--------------+------------------------------>
+
+	    T1: Thread 1; T2: Thread 2; T3: Thread 3
+	    x: Thread is in running state
+	    Figure 4: Ring buffer for per-CPU mode
+
+In above example, even there have tasks running on CPU1 and CPU3, since
+the ring buffer is absent for them, any activities on these two CPUs
+will be ignored.  A usage case is to combine the options for per-thread
+mode and per-CPU mode, e.g. the options '–C 0,2' and '––per–thread' are
+specified together, the samples are recorded only when the profiled
+thread is scheduled on any of the listed CPUs.
+
+3. System wide mode
+
+By default if without specifying mode, or explicitly using option '–a'
+or '––all–cpus', perf collects samples on all CPUs in the system wide
+mode.
+
+In this mode, every CPU has its own ring buffer; all threads are
+monitored during the running state and the samples are recorded into the
+ring buffer belonging to the CPU which the events occurred on.
+
+            T0                      T2                 T1
+          +----+              +-----------+          +----+
+  CPU0    |xxxx|              |xxxxxxxxxxx|          |xxxx|
+          +----+--------------+-----------+----------+----+-------->
+            |                       |                  |
+            v                       v                  v
+          +-----------------------------------------------------+
+          |                  Ring buffer 0                      |
+          +-----------------------------------------------------+
+
+                 T1
+               +-----+
+  CPU1         |xxxxx|
+          -----+-----+--------------------------------------------->
+                  |
+                  v
+          +-----------------------------------------------------+
+          |                  Ring buffer 2                      |
+          +-----------------------------------------------------+
+
+                                      T1              T3
+                                    +----+        +-------+
+  CPU2                              |xxxx|        |xxxxxxx|
+          --------------------------+----+--------+-------+-------->
+                                      |               |
+                                      v               v
+          +-----------------------------------------------------+
+          |                  Ring buffer 1                      |
+          +-----------------------------------------------------+
+
+                            T1
+                     +--------------+
+  CPU3               |xxxxxxxxxxxxxx|
+          -----------+--------------+------------------------------>
+                            |
+                            v
+          +-----------------------------------------------------+
+          |                  Ring buffer 0                      |
+          +-----------------------------------------------------+
+
+	    T1: Thread 1; T2: Thread 2; T3: Thread 3
+	    x: Thread is in running state
+	    Figure 5: Ring buffer for system wide mode
+
+Accessing buffer
+~~~~~~~~~~~~~~~~
+
+Base on our understanding of how the ring buffer is allocated in various
+modes, this section will explain the process of writing or reading the
+ring buffer.
+
+1. Producer-consumer model
+
+In the Linux kernel, the PMU events can produce samples which are stored
+into the ring buffer; the perf in user space consumes the samples by
+reading out data from the ring buffer and finally save the data into the
+file for post analysis.  It’s a typical producer-consumer model for
+using the ring buffer.
+
+Perf process polls on the PMU events and sleeps when no any incoming
+events.  When a sample is recorded into the ring buffer, the kernel event
+core layer will wake up the perf process to read samples from the ring
+buffer.
+
+                    Perf
+                     / \ Read samples
+           Polling  /   ------------\                 Ring buffer
+                   v                 v    ;--------------------v
+  +----------------+     +---------+---------+   +-------------------+
+  |Event wait queue|     |data_head|data_tail|   |***|***|   |   |***|
+  +----------------+     +---------+---------+   +-------------------+
+           ^                  ^ `----------------------^
+           | Wake up tasks    | Store samples
+        +-----------------------------+
+	|  Kernel event core layer    |
+        +-----------------------------+
+
+            * : the data is filled by writer.
+	    Figure 6: Writing and reading the ring buffer
+
+Because multiple events might share the same ring buffer for recording
+samples, when any event sample is stored into the ring buffer, the
+kernel event core layer iterates every event associated to the ring
+buffer and wakes up tasks on the wait queue of the events.  This is
+fulfilled by the kernel function ring_buffer_wakeup().
+
+After perf process is waken up, it starts to check the ring buffers one
+by one, if finds any ring buffer contains samples it will read out the
+samples for statistics or saving into data file.  Given the perf process
+is possible to run on any CPUs, this leads to the ring buffer can be
+accessed from multiple CPUs simultaneously, which causes race conditions
+and should be handled properly. The details for handling race condition
+is described in the section "Reading samples from buffer".
+
+2. Writing samples into buffer
+
+When a hardware event counter is overflow, a sample will be taken and
+saved into the ring buffer; the function __perf_event_output() is used
+to fill samples into the ring buffer, it calls below sub functions:
+
+- The sub function perf_prepare_sample() prepares sample fields based on
+  the sample type;
+- output_begin() is a function pointer, it’s passed dynamically via the
+  argument for different writing directions, its purpose is to prepare
+  the info for writing ring buffer, when return back the ring buffer
+  info is stored in structure perf_output_handle;
+- perf_output_sample() outputs the sample fields into the ring buffer;
+- perf_output_end() updates the head pointer for user page so perf tool
+  can see the latest value.
+
+Let’s examine output_begin() in detail.  As the ring buffer allows
+writing in two directions: backward or forward, the function pointer for
+output_begin() is assigned based on the writing type of the buffer. It
+can be perf_output_begin_forward() or perf_output_begin_backward()
+variant.
+
+In the case of the backward ring buffer, where the user page is mapped
+without ’PROT_WRITE’, the tool in user space is unable to update the
+tail pointer.  As a result, only the head pointer is accessed in this
+scenario, and the tail pointer is not used in perf tool.  The head
+pointer indicates the beginning of a sample, perf tool can read out the
+samples one by one based on sample’s event size.
+
+Alternatively, the forward ring buffer uses both head pointer and tail
+pointer for the buffer management.  This method is more commonly used in
+perf tool, to simplify the description, the following explanation
+focuses on the forward ring buffer.
+
+  +---------------------------+           +--------------------+
+  | struct perf_output_handle |     /---->| struct perf_buffer |
+  +---------------------------+     |     +--------------------+
+  |           *rb;            |-----/     |   local_t head;    |
+  +---------------------------+           +--------------------+
+  |        int page;          |           |    *user_page;     |
+  +---------------------------+           +--------------------+
+  |       void *addr;         |                      |
+  +---------------------------+                      |
+  |   unsigned long size;     |                      |
+  +---------------------------+                      v
+                                     +-----------------------------+
+                                     | struct perf_event_mmap_page |
+                                     +-----------------------------+
+				     |       __u64 data_head;      |
+                                     +-----------------------------+
+				     |       __u64 data_tail;      |
+                                     +-----------------------------+
+
+	    Figure 7: Data structures for writing ring buffer
+
+In Linux kernel, the event core layer uses the structure perf_buffer to
+track the buffer’s latest header, and it keeps the information for
+buffer pages.  The structure perf_buffer manages ring buffer during its
+life cycle, it is allocated once the ring buffer is created and released
+when the ring buffer is destroyed.
+
+It’s possible that multiple events to write buffer concurrently.  For
+instance, a software event and a hardware PMU event both are enabled for
+profiling, when the software event is in the middle of sampling, the
+hardware event maybe be overflow and its interrupt is triggered in this
+case.  This leads to the race condition for updating perf_buffer::head.
+In __perf_output_begin(), Linux kernel uses compare-and-swap atomicity
+local_cmpxchg() to implement the lockless algorithm for protecting
+perf_buffer::head.
+
+The structure perf_output_handle serves as a temporary context for
+tracking the information related to the buffer.  For instance, the
+perf_output_handle::rb field points to the global perf_buffer structure.
+Additionally, the perf_output_handle::addr field, based on the lockless
+algorithm, specifies the destination address where the sample data is to
+be stored.
+
+The advantages of the perf_output_handle structure is that it enables
+concurrent writing to the buffer by different events.  For the previous
+example, two instances of perf_output_handle serve as separate contexts
+for software events and hardware events.  This allows each event to
+reserve its own memory space within the out_begin() function, and
+perf_output_handle::addr is used for populating the samples specific to
+each event.
+
+Once the sample data has been successfully stored in the buffer, the
+header of the ring buffer is synced from perf_buffer::head to
+perf_event_mmap_page::data_head in the function perf_output_end().  This
+synchronization indicates to the perf tool that it is now safe to read
+the newly added samples from the user space.
+
+3. Reading samples from buffer
+
+Simliar to the kernel’s perf_output_handle, the perf_mmap structure
+maintains a context for ring buffer in the user space, this context
+includes information such as buffer’s start address, end address and
+mask of the buffer.  These values are utilized to calculate the buffer
+pointer and size to be read, depending on the specific buffer modes.
+
+
