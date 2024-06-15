@@ -22,6 +22,8 @@ unsigned int perf_mem_events__loads_ldlat = 30;
 static char mem_loads_name[100];
 static char mem_stores_name[100];
 
+static struct perf_arch_mem_event *mem_events_arch_ptr;
+
 struct perf_arch_mem_event __weak *perf_pmu__mem_events_arch_init(void)
 {
 	return NULL;
@@ -46,6 +48,14 @@ static struct perf_pmu *perf_pmus__scan_mem(struct perf_pmu *pmu)
 
 struct perf_pmu *perf_mem_events_find_pmu(void)
 {
+	struct perf_pmu *pmu;
+
+	mem_events_arch_ptr = perf_pmu__mem_events_arch_init();
+	if (!mem_events_arch_ptr) {
+		pr_err("Memory events are not architecturally supported!\n");
+		return NULL;
+	}
+
 	/*
 	 * The current perf mem doesn't support per-PMU configuration.
 	 * The exact same configuration is applied to all the
@@ -57,7 +67,12 @@ struct perf_pmu *perf_mem_events_find_pmu(void)
 	 * is shared among the PMUs. Only configure the first PMU
 	 * is good enough as well.
 	 */
-	return perf_pmus__scan_mem(NULL);
+	pmu = perf_pmus__scan_mem(NULL);
+	if (!pmu)
+		pr_err("Failed: the '%s' PMU is not found for support memory event.\n",
+		       mem_events_arch_ptr->get_dev_name());
+
+	return pmu;
 }
 
 /**

@@ -10,3 +10,17 @@ struct perf_mem_event perf_mem_events_arm[PERF_MEM_EVENTS__MAX] = {
 	E("spe-store",	"%s/ts_enable=1,pa_enable=1,load_filter=0,store_filter=1/",			NULL,	false,	0),
 	E("spe-ldst",	"%s/ts_enable=1,pa_enable=1,load_filter=1,store_filter=1,min_latency=%u/",	NULL,	true,	0),
 };
+
+static const char *mem_events__arm_get_dev_name(void)
+{
+	return "arm_spe_0";
+}
+
+static struct perf_arch_mem_event mem_events__arm = {
+	.get_dev_name = mem_events__arm_get_dev_name,
+};
+
+struct perf_arch_mem_event *perf_pmu__mem_events_arch_init(void)
+{
+	return &mem_events__arm;
+}
