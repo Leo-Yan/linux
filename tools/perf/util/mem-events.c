@@ -22,6 +22,11 @@ unsigned int perf_mem_events__loads_ldlat = 30;
 static char mem_loads_name[100];
 static char mem_stores_name[100];
 
+struct perf_arch_mem_event __weak *perf_pmu__mem_events_arch_init(void)
+{
+	return NULL;
+}
+
 struct perf_mem_event *perf_pmu__mem_events_ptr(struct perf_pmu *pmu, int i)
 {
 	if (i >= PERF_MEM_EVENTS__MAX || !pmu)
