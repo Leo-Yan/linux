@@ -27,7 +27,6 @@ struct mem_info;
 struct perf_pmu;
 
 extern unsigned int perf_mem_events__loads_ldlat;
-extern struct perf_mem_event perf_mem_events[PERF_MEM_EVENTS__MAX];
 
 int perf_pmu__mem_events_parse(struct perf_pmu *pmu, const char *str);
 int perf_pmu__mem_events_init(struct perf_pmu *pmu);

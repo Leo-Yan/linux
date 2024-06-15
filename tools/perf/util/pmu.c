@@ -1053,10 +1053,8 @@ static int pmu_max_precise(int dirfd, struct perf_pmu *pmu)
 }
 
 void __weak
-perf_pmu__arch_init(struct perf_pmu *pmu)
+perf_pmu__arch_init(struct perf_pmu *pmu __maybe_unused)
 {
-	if (pmu->is_core)
-		pmu->mem_events = perf_mem_events;
 }
 
 struct perf_pmu *perf_pmu__lookup(struct list_head *pmus, int dirfd, const char *name,
