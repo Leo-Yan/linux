@@ -3215,10 +3215,8 @@ static int parse_record_events(const struct option *opt,
 	struct perf_pmu *pmu;
 
 	pmu = perf_mem_events_find_pmu();
-	if (!pmu) {
-		pr_err("failed: there is no PMU that supports perf c2c\n");
+	if (!pmu)
 		exit(-1);
-	}
 
 	if (!strcmp(str, "list")) {
 		perf_pmu__mem_events_list(pmu);
@@ -3261,10 +3259,8 @@ static int perf_c2c__record(int argc, const char **argv)
 	};
 
 	pmu = perf_mem_events_find_pmu();
-	if (!pmu) {
-		pr_err("failed: no PMU supports the memory events\n");
+	if (!pmu)
 		return -1;
-	}
 
 	if (perf_pmu__mem_events_init(pmu)) {
 		pr_err("failed: memory events not supported\n");
