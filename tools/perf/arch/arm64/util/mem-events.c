@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
+#include <string.h>
 #include "util/map_symbol.h"
 #include "util/mem-events.h"
+#include "util/pmu.h"
 #include "mem-events.h"
 
 #define E(t, n, s, l, a) { .tag = t, .name = n, .event_name = s, .ldlat = l, .aux_event = a }
@@ -16,8 +18,20 @@ static const char *mem_events__arm_get_dev_name(void)
 	return "arm_spe_0";
 }
 
+static bool mem_events__arm_is_pmu_supported(struct perf_pmu *pmu)
+{
+	if (!pmu)
+		return false;
+
+	if (strstr(pmu->name, mem_events__arm_get_dev_name()))
+		return true;
+
+	return false;
+}
+
 static struct perf_arch_mem_event mem_events__arm = {
 	.get_dev_name = mem_events__arm_get_dev_name,
+	.is_pmu_supported = mem_events__arm_is_pmu_supported,
 };
 
 struct perf_arch_mem_event *perf_pmu__mem_events_arch_init(void)

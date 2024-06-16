@@ -40,7 +40,7 @@ struct perf_mem_event *perf_pmu__mem_events_ptr(struct perf_pmu *pmu, int i)
 static struct perf_pmu *perf_pmus__scan_mem(struct perf_pmu *pmu)
 {
 	while ((pmu = perf_pmus__scan(pmu)) != NULL) {
-		if (pmu->mem_events)
+		if (mem_events_arch_ptr->is_pmu_supported(pmu))
 			return pmu;
 	}
 	return NULL;
@@ -139,7 +139,7 @@ bool is_mem_loads_aux_event(struct evsel *leader)
 	struct perf_pmu *pmu = leader->pmu;
 	struct perf_mem_event *e;
 
-	if (!pmu || !pmu->mem_events)
+	if (!mem_events_arch_ptr->is_pmu_supported(pmu))
 		return false;
 
 	e = &pmu->mem_events[PERF_MEM_EVENTS__LOAD];
