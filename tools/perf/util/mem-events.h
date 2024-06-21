@@ -29,6 +29,7 @@ struct perf_pmu;
 struct perf_arch_mem_event {
 	const char *(*get_dev_name)(void);
 	bool (*is_pmu_supported)(struct perf_pmu *pmu);
+	bool (*is_ev_supported)(struct perf_pmu *pmu, unsigned int event);
 };
 
 extern unsigned int perf_mem_events__loads_ldlat;

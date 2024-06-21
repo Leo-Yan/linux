@@ -41,9 +41,29 @@ static bool mem_events__intel_is_pmu_supported(struct perf_pmu *pmu)
 	return false;
 }
 
+static bool mem_events__intel_is_ev_supported(struct perf_pmu *pmu,
+					      unsigned int event)
+{
+	struct perf_mem_event *mem_event;
+
+	if (perf_pmu__have_event(pmu, "mem-loads-aux"))
+		mem_events = perf_mem_events_intel_aux;
+	else
+		mem_events = perf_mem_events_intel;
+
+	if (event >= PERF_MEM_EVENTS__MAX)
+		return false;
+
+	if (perf_pmu__have_event(pmu, mem_events[event].event_name))
+		return true;
+	else
+		return false;
+}
+
 static struct perf_arch_mem_event mem_events__intel = {
 	.get_dev_name = mem_events__intel_get_dev_name,
 	.is_pmu_supported = mem_events__intel_is_pmu_supported,
+	.is_ev_supported = mem_events__intel_is_ev_supported,
 };
 
 static const char *mem_events__amd_get_dev_name(void)
@@ -62,9 +82,22 @@ static bool mem_events__amd_is_pmu_supported(struct perf_pmu *pmu)
 	return false;
 }
 
+static bool mem_events__amd_is_ev_supported(struct perf_pmu *pmu,
+					    unsigned int event)
+{
+	if (!mem_events__amd_is_pmu_supported(pmu))
+		return false;
+
+	if (event == PERF_MEM_EVENTS__LOAD_STORE)
+		return true;
+	else
+		return false;
+}
+
 static struct perf_arch_mem_event mem_events__amd = {
 	.get_dev_name = mem_events__amd_get_dev_name,
 	.is_pmu_supported = mem_events__amd_is_pmu_supported,
+	.is_ev_supported = mem_events__amd_is_ev_supported,
 };
 
 struct perf_arch_mem_event *perf_pmu__mem_events_arch_init(void)

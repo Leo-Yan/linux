@@ -188,40 +188,15 @@ int perf_pmu__mem_events_parse(struct perf_pmu *pmu, const char *str)
 	return -1;
 }
 
-static bool perf_pmu__mem_events_supported(const char *mnt, struct perf_pmu *pmu,
-				      struct perf_mem_event *e)
-{
-	char path[PATH_MAX];
-	struct stat st;
-
-	if (!e->event_name)
-		return true;
-
-	scnprintf(path, PATH_MAX, "%s/devices/%s/events/%s", mnt, pmu->name, e->event_name);
-
-	return !stat(path, &st);
-}
-
 int perf_pmu__mem_events_init(struct perf_pmu *pmu)
 {
-	const char *mnt = sysfs__mount();
 	bool found = false;
 	int j;
-
-	if (!mnt)
-		return -ENOENT;
 
 	for (j = 0; j < PERF_MEM_EVENTS__MAX; j++) {
 		struct perf_mem_event *e = perf_pmu__mem_events_ptr(pmu, j);
 
-		/*
-		 * If the event entry isn't valid, skip initialization
-		 * and "e->supported" will keep false.
-		 */
-		if (!e->tag)
-			continue;
-
-		e->supported |= perf_pmu__mem_events_supported(mnt, pmu, e);
+		e->supported |= mem_events_arch_ptr->is_ev_supported(pmu, j);
 		if (e->supported)
 			found = true;
 	}
@@ -247,7 +222,6 @@ void perf_pmu__mem_events_list(struct perf_pmu *pmu)
 
 int perf_mem_events__record_args(const char **rec_argv, int *argv_nr)
 {
-	const char *mnt = sysfs__mount();
 	struct perf_pmu *pmu = NULL;
 	struct perf_mem_event *e;
 	int i = *argv_nr;
@@ -268,7 +242,7 @@ int perf_mem_events__record_args(const char **rec_argv, int *argv_nr)
 			}
 
 			s = perf_pmu__mem_events_name(j, pmu);
-			if (!s || !perf_pmu__mem_events_supported(mnt, pmu, e))
+			if (!s || !mem_events_arch_ptr->is_ev_supported(pmu, j))
 				continue;
 
 			copy = strdup(s);
