@@ -41,10 +41,20 @@ static bool mem_events__arm_is_ev_supported(struct perf_pmu *pmu,
 	return true;
 }
 
+static const char *mem_events__arm_get_ev_name(struct perf_pmu *pmu,
+					       unsigned int event)
+{
+	if (!mem_events__arm_is_ev_supported(pmu, event))
+		return NULL;
+
+	return perf_mem_events_arm[event].tag;
+}
+
 static struct perf_arch_mem_event mem_events__arm = {
 	.get_dev_name = mem_events__arm_get_dev_name,
 	.is_pmu_supported = mem_events__arm_is_pmu_supported,
 	.is_ev_supported = mem_events__arm_is_ev_supported,
+	.get_ev_name = mem_events__arm_get_ev_name,
 };
 
 struct perf_arch_mem_event *perf_pmu__mem_events_arch_init(void)

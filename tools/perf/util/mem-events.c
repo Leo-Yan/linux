@@ -168,11 +168,13 @@ int perf_pmu__mem_events_parse(struct perf_pmu *pmu, const char *str)
 	while (tok) {
 		for (j = 0; j < PERF_MEM_EVENTS__MAX; j++) {
 			struct perf_mem_event *e = perf_pmu__mem_events_ptr(pmu, j);
+			const char *ev_name;
 
-			if (!e->tag)
+			ev_name = mem_events_arch_ptr->get_ev_name(pmu, j);
+			if (!ev_name)
 				continue;
 
-			if (strstr(e->tag, tok))
+			if (strstr(ev_name, tok))
 				e->record = found = true;
 		}
 
@@ -210,12 +212,15 @@ void perf_pmu__mem_events_list(struct perf_pmu *pmu)
 
 	for (j = 0; j < PERF_MEM_EVENTS__MAX; j++) {
 		struct perf_mem_event *e = perf_pmu__mem_events_ptr(pmu, j);
+		const char *ev_name = mem_events_arch_ptr->get_ev_name(pmu, j);
+
+		if (!ev_name)
+			continue;
 
 		fprintf(stderr, "%-*s%-*s%s",
-			e->tag ? 13 : 0,
-			e->tag ? : "",
-			e->tag && verbose > 0 ? 25 : 0,
-			e->tag && verbose > 0 ? perf_pmu__mem_events_name(j, pmu) : "",
+			13, ev_name,
+			verbose > 0 ? 25 : 0,
+			verbose > 0 ? perf_pmu__mem_events_name(j, pmu) : "",
 			e->supported ? ": available\n" : "");
 	}
 }
