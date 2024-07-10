@@ -110,6 +110,7 @@ enum arm_spe_pmu_buf_fault_action {
 /* This sysfs gunk was really good fun to write. */
 enum arm_spe_pmu_capabilities {
 	SPE_PMU_CAP_ARCH_INST = 0,
+	SPE_PMU_CAP_LDS,
 	SPE_PMU_CAP_ERND,
 	SPE_PMU_CAP_FEAT_MAX,
 	SPE_PMU_CAP_CNT_SZ = SPE_PMU_CAP_FEAT_MAX,
@@ -118,6 +119,7 @@ enum arm_spe_pmu_capabilities {
 
 static int arm_spe_pmu_feat_caps[SPE_PMU_CAP_FEAT_MAX] = {
 	[SPE_PMU_CAP_ARCH_INST]	= SPE_PMU_FEAT_ARCH_INST,
+	[SPE_PMU_CAP_LDS]	= SPE_PMU_FEAT_LDS,
 	[SPE_PMU_CAP_ERND]	= SPE_PMU_FEAT_ERND,
 };
 
@@ -160,6 +162,7 @@ static ssize_t arm_spe_pmu_cap_show(struct device *dev,
 
 static struct attribute *arm_spe_pmu_cap_attr[] = {
 	SPE_CAP_EXT_ATTR_ENTRY(arch_inst, SPE_PMU_CAP_ARCH_INST),
+	SPE_CAP_EXT_ATTR_ENTRY(lds, SPE_PMU_CAP_LDS),
 	SPE_CAP_EXT_ATTR_ENTRY(ernd, SPE_PMU_CAP_ERND),
 	SPE_CAP_EXT_ATTR_ENTRY(count_size, SPE_PMU_CAP_CNT_SZ),
 	SPE_CAP_EXT_ATTR_ENTRY(min_interval, SPE_PMU_CAP_MIN_IVAL),
