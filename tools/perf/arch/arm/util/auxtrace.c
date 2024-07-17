@@ -125,6 +125,7 @@ struct auxtrace_record
 	struct perf_pmu *found_etm = NULL;
 	struct perf_pmu *found_spe = NULL;
 	struct perf_pmu *found_ptt = NULL;
+	struct auxtrace_record *itr = NULL;
 	int auxtrace_event_cnt = 0;
 	int nr_spes = 0;
 	int nr_ptts = 0;
@@ -147,9 +148,6 @@ struct auxtrace_record
 			found_ptt = find_pmu_for_event(hisi_ptt_pmus, nr_ptts, evsel);
 	}
 
-	free(arm_spe_pmus);
-	free(hisi_ptt_pmus);
-
 	if (found_etm)
 		auxtrace_event_cnt++;
 
@@ -159,31 +157,36 @@ struct auxtrace_record
 	if (found_ptt)
 		auxtrace_event_cnt++;
 
-	if (auxtrace_event_cnt > 1) {
+	if (!auxtrace_event_cnt) {
+		/*
+		 * Clear 'err' even if we haven't found an event - that way perf
+		 * record can still be used even if tracers aren't present.
+		 * The NULL return value will take care of telling the
+		 * infrastructure HW tracing isn't available.
+		 */
+		*err = 0;
+		goto out;
+	} else if (auxtrace_event_cnt > 1) {
 		pr_err("Concurrent AUX trace operation not currently supported\n");
 		*err = -EOPNOTSUPP;
-		return NULL;
+		goto out;
 	}
 
 	if (found_etm)
-		return cs_etm_record_init(err);
+		itr = cs_etm_record_init(err);
 
 #if defined(__aarch64__)
 	if (found_spe)
-		return arm_spe_recording_init(err, found_spe);
+		itr = arm_spe_recording_init(err, found_spe);
 
 	if (found_ptt)
-		return hisi_ptt_recording_init(err, found_ptt);
+		itr = hisi_ptt_recording_init(err, found_ptt);
 #endif
 
-	/*
-	 * Clear 'err' even if we haven't found an event - that way perf
-	 * record can still be used even if tracers aren't present.  The NULL
-	 * return value will take care of telling the infrastructure HW tracing
-	 * isn't available.
-	 */
-	*err = 0;
-	return NULL;
+out:
+	free(arm_spe_pmus);
+	free(hisi_ptt_pmus);
+	return itr;
 }
 
 #if defined(__arm__)
