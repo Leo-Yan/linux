@@ -7,6 +7,7 @@
 #include <dirent.h>
 #include <stdbool.h>
 #include <linux/coresight-pmu.h>
+#include <linux/string.h>
 #include <linux/zalloc.h>
 #include <api/fs/fs.h>
 
@@ -19,144 +20,66 @@
 #include "arm-spe.h"
 #include "hisi-ptt.h"
 
-static struct perf_pmu **find_all_arm_spe_pmus(int *nr_spes, int *err)
+static struct perf_pmu **
+find_auxtrace_pmus_by_name(struct evlist *evlist, const char *name, int *nr_pmu)
 {
-	struct perf_pmu **arm_spe_pmus = NULL;
-	int ret, i, nr_cpus = sysconf(_SC_NPROCESSORS_CONF);
-	/* arm_spe_xxxxxxxxx\0 */
-	char arm_spe_pmu_name[sizeof(ARM_SPE_PMU_NAME) + 10];
+	struct perf_pmu **pmus = NULL;
+	struct evsel *evsel;
+	int i = 0, nr = 0;
 
-	arm_spe_pmus = zalloc(sizeof(struct perf_pmu *) * nr_cpus);
-	if (!arm_spe_pmus) {
-		pr_err("spes alloc failed\n");
-		*err = -ENOMEM;
+	assert(name);
+	assert(nr_pmu);
+
+	*nr_pmu = 0;
+
+	evlist__for_each_entry(evlist, evsel) {
+		if (strstarts(evsel->pmu_name, name))
+			nr++;
+	}
+
+	if (!nr)
+		return NULL;
+
+	pmus = zalloc(sizeof(struct perf_pmu *) * nr);
+	if (!pmus) {
+		pr_err("Failed to allocate PMU pointer arrary.\n");
 		return NULL;
 	}
 
-	for (i = 0; i < nr_cpus; i++) {
-		ret = sprintf(arm_spe_pmu_name, "%s%d", ARM_SPE_PMU_NAME, i);
-		if (ret < 0) {
-			pr_err("sprintf failed\n");
-			*err = -ENOMEM;
-			return NULL;
-		}
-
-		arm_spe_pmus[*nr_spes] = perf_pmus__find(arm_spe_pmu_name);
-		if (arm_spe_pmus[*nr_spes]) {
-			pr_debug2("%s %d: arm_spe_pmu %d type %d name %s\n",
-				 __func__, __LINE__, *nr_spes,
-				 arm_spe_pmus[*nr_spes]->type,
-				 arm_spe_pmus[*nr_spes]->name);
-			(*nr_spes)++;
+	evlist__for_each_entry(evlist, evsel) {
+		if (strstarts(evsel->pmu_name, name)) {
+			pmus[i] = evsel->pmu;
+			i++;
 		}
 	}
 
-	return arm_spe_pmus;
-}
-
-static struct perf_pmu **find_all_hisi_ptt_pmus(int *nr_ptts, int *err)
-{
-	struct perf_pmu **hisi_ptt_pmus = NULL;
-	struct dirent *dent;
-	char path[PATH_MAX];
-	DIR *dir = NULL;
-	int idx = 0;
-
-	perf_pmu__event_source_devices_scnprintf(path, sizeof(path));
-	dir = opendir(path);
-	if (!dir) {
-		pr_err("can't read directory '%s'\n", path);
-		*err = -EINVAL;
-		return NULL;
-	}
-
-	while ((dent = readdir(dir))) {
-		if (strstr(dent->d_name, HISI_PTT_PMU_NAME))
-			(*nr_ptts)++;
-	}
-
-	if (!(*nr_ptts))
-		goto out;
-
-	hisi_ptt_pmus = zalloc(sizeof(struct perf_pmu *) * (*nr_ptts));
-	if (!hisi_ptt_pmus) {
-		pr_err("hisi_ptt alloc failed\n");
-		*err = -ENOMEM;
-		goto out;
-	}
-
-	rewinddir(dir);
-	while ((dent = readdir(dir))) {
-		if (strstr(dent->d_name, HISI_PTT_PMU_NAME) && idx < *nr_ptts) {
-			hisi_ptt_pmus[idx] = perf_pmus__find(dent->d_name);
-			if (hisi_ptt_pmus[idx])
-				idx++;
-		}
-	}
-
-out:
-	closedir(dir);
-	return hisi_ptt_pmus;
-}
-
-static struct perf_pmu *find_pmu_for_event(struct perf_pmu **pmus,
-					   int pmu_nr, struct evsel *evsel)
-{
-	int i;
-
-	if (!pmus)
-		return NULL;
-
-	for (i = 0; i < pmu_nr; i++) {
-		if (evsel->core.attr.type == pmus[i]->type)
-			return pmus[i];
-	}
-
-	return NULL;
+	*nr_pmu = nr;
+	return pmus;
 }
 
 struct auxtrace_record
 *auxtrace_record__init(struct evlist *evlist, int *err)
 {
-	struct perf_pmu	*cs_etm_pmu = NULL;
+	struct perf_pmu	**cs_etm_pmu = NULL;
 	struct perf_pmu **arm_spe_pmus = NULL;
 	struct perf_pmu **hisi_ptt_pmus = NULL;
-	struct evsel *evsel;
-	struct perf_pmu *found_etm = NULL;
-	struct perf_pmu *found_spe = NULL;
-	struct perf_pmu *found_ptt = NULL;
 	struct auxtrace_record *itr = NULL;
 	int auxtrace_event_cnt = 0;
-	int nr_spes = 0;
-	int nr_ptts = 0;
+	int nr_etm = 0;
+	int nr_spe = 0;
+	int nr_ptt = 0;
 
 	if (!evlist)
 		return NULL;
 
-	cs_etm_pmu = perf_pmus__find(CORESIGHT_ETM_PMU_NAME);
-	arm_spe_pmus = find_all_arm_spe_pmus(&nr_spes, err);
-	hisi_ptt_pmus = find_all_hisi_ptt_pmus(&nr_ptts, err);
+	cs_etm_pmu =
+		find_auxtrace_pmus_by_name(evlist, CORESIGHT_ETM_PMU_NAME, &nr_etm);
+	arm_spe_pmus =
+		find_auxtrace_pmus_by_name(evlist, ARM_SPE_PMU_NAME, &nr_spe);
+	hisi_ptt_pmus =
+		find_auxtrace_pmus_by_name(evlist, HISI_PTT_PMU_NAME, &nr_ptt);
 
-	evlist__for_each_entry(evlist, evsel) {
-		if (cs_etm_pmu && !found_etm)
-			found_etm = find_pmu_for_event(&cs_etm_pmu, 1, evsel);
-
-		if (arm_spe_pmus && !found_spe)
-			found_spe = find_pmu_for_event(arm_spe_pmus, nr_spes, evsel);
-
-		if (hisi_ptt_pmus && !found_ptt)
-			found_ptt = find_pmu_for_event(hisi_ptt_pmus, nr_ptts, evsel);
-	}
-
-	if (found_etm)
-		auxtrace_event_cnt++;
-
-	if (found_spe)
-		auxtrace_event_cnt++;
-
-	if (found_ptt)
-		auxtrace_event_cnt++;
-
+	auxtrace_event_cnt = !!nr_etm + !!nr_spe + !!nr_ptt;
 	if (!auxtrace_event_cnt) {
 		/*
 		 * Clear 'err' even if we haven't found an event - that way perf
@@ -172,18 +95,19 @@ struct auxtrace_record
 		goto out;
 	}
 
-	if (found_etm)
+	if (cs_etm_pmu)
 		itr = cs_etm_record_init(err);
 
 #if defined(__aarch64__)
-	if (found_spe)
-		itr = arm_spe_recording_init(err, found_spe);
+	if (arm_spe_pmus)
+		itr = arm_spe_recording_init(err, arm_spe_pmus[0]);
 
-	if (found_ptt)
-		itr = hisi_ptt_recording_init(err, found_ptt);
+	if (hisi_ptt_pmus)
+		itr = hisi_ptt_recording_init(err, hisi_ptt_pmus[0]);
 #endif
 
 out:
+	free(cs_etm_pmu);
 	free(arm_spe_pmus);
 	free(hisi_ptt_pmus);
 	return itr;
