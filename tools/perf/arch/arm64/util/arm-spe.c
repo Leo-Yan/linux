@@ -30,7 +30,7 @@
 
 struct arm_spe_recording {
 	struct auxtrace_record		itr;
-	struct perf_pmu			*arm_spe_pmu;
+	struct perf_pmu			**arm_spe_pmu;
 	struct evlist		*evlist;
 	int			wrapped_cnt;
 	bool			*wrapped;
@@ -50,7 +50,7 @@ static int arm_spe_info_fill(struct auxtrace_record *itr,
 {
 	struct arm_spe_recording *sper =
 			container_of(itr, struct arm_spe_recording, itr);
-	struct perf_pmu *arm_spe_pmu = sper->arm_spe_pmu;
+	struct perf_pmu *arm_spe_pmu = sper->arm_spe_pmu[0];
 
 	if (priv_size != ARM_SPE_AUXTRACE_PRIV_SIZE)
 		return -EINVAL;
@@ -138,7 +138,7 @@ static int arm_spe_recording_options(struct auxtrace_record *itr,
 {
 	struct arm_spe_recording *sper =
 			container_of(itr, struct arm_spe_recording, itr);
-	struct perf_pmu *arm_spe_pmu = sper->arm_spe_pmu;
+	struct perf_pmu *arm_spe_pmu = sper->arm_spe_pmu[0];
 	struct evsel *evsel, *arm_spe_evsel = NULL;
 	struct perf_cpu_map *cpus = evlist->core.user_requested_cpus;
 	bool privileged = perf_event_paranoid_check(-1);
@@ -303,7 +303,7 @@ static int arm_spe_snapshot_start(struct auxtrace_record *itr)
 	struct evsel *evsel;
 
 	evlist__for_each_entry(ptr->evlist, evsel) {
-		if (evsel->core.attr.type == ptr->arm_spe_pmu->type)
+		if (evsel->core.attr.type == ptr->arm_spe_pmu[0]->type)
 			return evsel__disable(evsel);
 	}
 	return -EINVAL;
@@ -316,7 +316,7 @@ static int arm_spe_snapshot_finish(struct auxtrace_record *itr)
 	struct evsel *evsel;
 
 	evlist__for_each_entry(ptr->evlist, evsel) {
-		if (evsel->core.attr.type == ptr->arm_spe_pmu->type)
+		if (evsel->core.attr.type == ptr->arm_spe_pmu[0]->type)
 			return evsel__enable(evsel);
 	}
 	return -EINVAL;
@@ -476,14 +476,17 @@ static void arm_spe_recording_free(struct auxtrace_record *itr)
 	struct arm_spe_recording *sper =
 			container_of(itr, struct arm_spe_recording, itr);
 
+	zfree(&sper->arm_spe_pmu);
 	zfree(&sper->wrapped);
 	free(sper);
 }
 
 struct auxtrace_record *arm_spe_recording_init(int *err,
-					       struct perf_pmu *arm_spe_pmu)
+					       struct perf_pmu **arm_spe_pmu,
+					       int nr_spe)
 {
 	struct arm_spe_recording *sper;
+	struct perf_pmu **pmus;
 
 	if (!arm_spe_pmu) {
 		*err = -ENODEV;
@@ -496,8 +499,16 @@ struct auxtrace_record *arm_spe_recording_init(int *err,
 		return NULL;
 	}
 
-	sper->arm_spe_pmu = arm_spe_pmu;
-	sper->itr.pmu = arm_spe_pmu;
+	pmus = calloc(nr_spe, sizeof(*pmus));
+	if (!pmus) {
+		*err = -ENOMEM;
+		zfree(sper);
+		return NULL;
+	}
+	memcpy(pmus, arm_spe_pmu, sizeof(*pmus) * nr_spe);
+
+	sper->arm_spe_pmu = pmus;
+	sper->itr.pmu = pmus[0];
 	sper->itr.snapshot_start = arm_spe_snapshot_start;
 	sper->itr.snapshot_finish = arm_spe_snapshot_finish;
 	sper->itr.find_snapshot = arm_spe_find_snapshot;
