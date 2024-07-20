@@ -9,6 +9,7 @@
 #include <linux/types.h>
 #include <internal/evsel.h>
 #include <perf/evsel.h>
+#include "auxtrace.h"
 #include "symbol_conf.h"
 #include "pmus.h"
 
@@ -570,5 +571,8 @@ bool arch_evsel__must_be_in_group(const struct evsel *evsel);
 u64 evsel__bitfield_swap_branch_flags(u64 value);
 void evsel__set_config_if_unset(struct perf_pmu *pmu, struct evsel *evsel,
 				const char *config_name, u64 val);
+
+bool evsel__is_auxtrace_event(struct evsel *evsel,
+			      struct auxtrace_record *itr);
 
 #endif /* __PERF_EVSEL_H */

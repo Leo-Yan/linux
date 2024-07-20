@@ -3458,3 +3458,21 @@ void evsel__remove_from_group(struct evsel *evsel, struct evsel *leader)
 		leader->core.nr_members--;
 	}
 }
+
+bool evsel__is_auxtrace_event(struct evsel *evsel,
+			      struct auxtrace_record *itr)
+{
+	struct perf_pmu **pmus = itr->pmus;
+	int nr_pmu = itr->nr_pmu;
+	int i;
+
+	if (!pmus || !nr_pmu)
+		return false;
+
+	for (i = 0; i < nr_pmu; i++) {
+		if (evsel->core.attr.type == pmus[i]->type)
+			return true;
+	}
+
+	return false;
+}
