@@ -866,12 +866,13 @@ static void cs_etm_recording_free(struct auxtrace_record *itr)
 	struct cs_etm_recording *ptr =
 			container_of(itr, struct cs_etm_recording, itr);
 
+	zfree(&itr->pmus);
 	free(ptr);
 }
 
 struct auxtrace_record *cs_etm_record_init(int *err)
 {
-	struct perf_pmu *cs_etm_pmu;
+	struct perf_pmu *cs_etm_pmu, **pmus;
 	struct cs_etm_recording *ptr;
 
 	cs_etm_pmu = perf_pmus__find(CORESIGHT_ETM_PMU_NAME);
@@ -887,8 +888,17 @@ struct auxtrace_record *cs_etm_record_init(int *err)
 		goto out;
 	}
 
-	ptr->cs_etm_pmu			= cs_etm_pmu;
-	ptr->itr.pmu			= cs_etm_pmu;
+	pmus = zalloc(sizeof(*pmus));
+	if (!pmus) {
+		*err = -ENOMEM;
+		zfree(&ptr);
+		return NULL;
+	}
+	memcpy(pmus, &cs_etm_pmu, sizeof(*pmus));
+
+	ptr->cs_etm_pmu			= *pmus;
+	ptr->itr.pmus			= pmus;
+	ptr->itr.nr_pmu			= 1;
 	ptr->itr.parse_snapshot_options	= cs_etm_parse_snapshot_options;
 	ptr->itr.recording_options	= cs_etm_recording_options;
 	ptr->itr.info_priv_size		= cs_etm_info_priv_size;

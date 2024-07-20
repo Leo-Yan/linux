@@ -316,6 +316,7 @@ static void intel_bts_recording_free(struct auxtrace_record *itr)
 			container_of(itr, struct intel_bts_recording, itr);
 
 	intel_bts_free_snapshot_refs(btsr);
+	zfree(&itr->pmus);
 	free(btsr);
 }
 
@@ -433,8 +434,17 @@ struct auxtrace_record *intel_bts_recording_init(int *err)
 		return NULL;
 	}
 
-	btsr->intel_bts_pmu = intel_bts_pmu;
-	btsr->itr.pmu = intel_bts_pmu;
+	pmus = calloc(nr_spe, sizeof(*pmus));
+	if (!pmus) {
+		*err = -ENOMEM;
+		zfree(&btsr);
+		return NULL;
+	}
+	memcpy(pmus, &intel_bts_pmu, sizeof(*pmus));
+
+	btsr->intel_bts_pmu = *pmus;
+	btsr->itr.pmu = pmus;
+	btsr->itr.nr_pmu = 1;
 	btsr->itr.recording_options = intel_bts_recording_options;
 	btsr->itr.info_priv_size = intel_bts_info_priv_size;
 	btsr->itr.info_fill = intel_bts_info_fill;

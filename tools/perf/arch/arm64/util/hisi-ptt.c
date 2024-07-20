@@ -154,6 +154,7 @@ static void hisi_ptt_recording_free(struct auxtrace_record *itr)
 	struct hisi_ptt_recording *pttr =
 			container_of(itr, struct hisi_ptt_recording, itr);
 
+	zfree(&itr->pmus);
 	free(pttr);
 }
 
@@ -161,6 +162,7 @@ struct auxtrace_record *hisi_ptt_recording_init(int *err,
 						struct perf_pmu *hisi_ptt_pmu)
 {
 	struct hisi_ptt_recording *pttr;
+	struct perf_pmu **pmus;
 
 	if (!hisi_ptt_pmu) {
 		*err = -ENODEV;
@@ -173,8 +175,17 @@ struct auxtrace_record *hisi_ptt_recording_init(int *err,
 		return NULL;
 	}
 
-	pttr->hisi_ptt_pmu = hisi_ptt_pmu;
-	pttr->itr.pmu = hisi_ptt_pmu;
+	pmus = zalloc(sizeof(*pmus));
+	if (!pmus) {
+		*err = -ENOMEM;
+		zfree(&pttr);
+		return NULL;
+	}
+	memcpy(pmus, &hisi_ptt_pmu, sizeof(*pmus));
+
+	pttr->hisi_ptt_pmu = *pmus;
+	pttr->itr.pmus = pmus;
+	pttr->itr.nr_pmu = 1;
 	pttr->itr.recording_options = hisi_ptt_recording_options;
 	pttr->itr.info_priv_size = hisi_ptt_info_priv_size;
 	pttr->itr.info_fill = hisi_ptt_info_fill;

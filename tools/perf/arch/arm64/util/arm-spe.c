@@ -477,6 +477,7 @@ static void arm_spe_recording_free(struct auxtrace_record *itr)
 			container_of(itr, struct arm_spe_recording, itr);
 
 	zfree(&sper->wrapped);
+	zfree(&itr->pmus);
 	free(sper);
 }
 
@@ -484,6 +485,7 @@ struct auxtrace_record *arm_spe_recording_init(int *err,
 					       struct perf_pmu *arm_spe_pmu)
 {
 	struct arm_spe_recording *sper;
+	struct perf_pmu **pmus;
 
 	if (!arm_spe_pmu) {
 		*err = -ENODEV;
@@ -496,8 +498,17 @@ struct auxtrace_record *arm_spe_recording_init(int *err,
 		return NULL;
 	}
 
-	sper->arm_spe_pmu = arm_spe_pmu;
-	sper->itr.pmu = arm_spe_pmu;
+	pmus = zalloc(sizeof(*pmus));
+	if (!pmus) {
+		*err = -ENOMEM;
+		zfree(&sper);
+		return NULL;
+	}
+	memcpy(pmus, &arm_spe_pmu, sizeof(*pmus));
+
+	sper->arm_spe_pmu = *pmus;
+	sper->itr.pmus = pmus;
+	sper->itr.nr_pmu = 1;
 	sper->itr.snapshot_start = arm_spe_snapshot_start;
 	sper->itr.snapshot_finish = arm_spe_snapshot_finish;
 	sper->itr.find_snapshot = arm_spe_find_snapshot;

@@ -385,7 +385,8 @@ struct auxtrace_mmap_params {
  * @read_finish: called after reading from an auxtrace mmap
  * @alignment: alignment (if any) for AUX area data
  * @default_aux_sample_size: default sample size for --aux sample option
- * @pmu: associated pmu
+ * @pmus: associated pmus
+ * @nr_pmu: number of associated pmus
  * @evlist: selected events list
  */
 struct auxtrace_record {
@@ -411,7 +412,8 @@ struct auxtrace_record {
 	int (*read_finish)(struct auxtrace_record *itr, int idx);
 	unsigned int alignment;
 	unsigned int default_aux_sample_size;
-	struct perf_pmu *pmu;
+	struct perf_pmu **pmus;
+	int nr_pmu;
 	struct evlist *evlist;
 };
 

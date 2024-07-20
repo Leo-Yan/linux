@@ -943,6 +943,7 @@ static void intel_pt_recording_free(struct auxtrace_record *itr)
 			container_of(itr, struct intel_pt_recording, itr);
 
 	intel_pt_free_snapshot_refs(ptr);
+	zfree(&itr->pmus);
 	free(ptr);
 }
 
@@ -1168,6 +1169,7 @@ struct auxtrace_record *intel_pt_recording_init(int *err)
 {
 	struct perf_pmu *intel_pt_pmu = perf_pmus__find(INTEL_PT_PMU_NAME);
 	struct intel_pt_recording *ptr;
+	struct perf_pmu **pmus;
 
 	if (!intel_pt_pmu)
 		return NULL;
@@ -1183,8 +1185,17 @@ struct auxtrace_record *intel_pt_recording_init(int *err)
 		return NULL;
 	}
 
-	ptr->intel_pt_pmu = intel_pt_pmu;
-	ptr->itr.pmu = intel_pt_pmu;
+	pmus = calloc(nr_spe, sizeof(*pmus));
+	if (!pmus) {
+		*err = -ENOMEM;
+		zfree(&ptr);
+		return NULL;
+	}
+	memcpy(pmus, &intel_pt_pmu, sizeof(*pmus));
+
+	ptr->intel_pt_pmu = *pmus;
+	ptr->itr.pmus = pmus;
+	ptr->itr.nr_pmu = 1;
 	ptr->itr.recording_options = intel_pt_recording_options;
 	ptr->itr.info_priv_size = intel_pt_info_priv_size;
 	ptr->itr.info_fill = intel_pt_info_fill;
