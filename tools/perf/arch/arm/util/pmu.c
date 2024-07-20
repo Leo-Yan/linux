@@ -22,6 +22,7 @@ void perf_pmu__arch_init(struct perf_pmu *pmu __maybe_unused)
 		/* add ETM default config here */
 		pmu->selectable = true;
 		pmu->perf_event_attr_init_default = cs_etm_get_default_config;
+		pmu->auxtrace = true;
 #if defined(__aarch64__)
 	} else if (strstarts(pmu->name, ARM_SPE_PMU_NAME)) {
 		pmu->selectable = true;
@@ -29,8 +30,10 @@ void perf_pmu__arch_init(struct perf_pmu *pmu __maybe_unused)
 		pmu->perf_event_attr_init_default = arm_spe_pmu_default_config;
 		if (strstarts(pmu->name, "arm_spe_"))
 			pmu->mem_events = perf_mem_events_arm;
+		pmu->auxtrace = true;
 	} else if (strstarts(pmu->name, HISI_PTT_PMU_NAME)) {
 		pmu->selectable = true;
+		pmu->auxtrace = true;
 #endif
 	}
 
