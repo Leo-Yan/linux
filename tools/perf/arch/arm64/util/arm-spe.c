@@ -31,7 +31,8 @@
 
 struct arm_spe_recording {
 	struct auxtrace_record		itr;
-	struct perf_pmu			*arm_spe_pmu;
+	struct perf_pmu			**pmu;
+	int				nr_pmu;
 	struct evlist		*evlist;
 	int			wrapped_cnt;
 	bool			*wrapped;
@@ -51,7 +52,7 @@ static int arm_spe_info_fill(struct auxtrace_record *itr,
 {
 	struct arm_spe_recording *sper =
 			container_of(itr, struct arm_spe_recording, itr);
-	struct perf_pmu *arm_spe_pmu = sper->arm_spe_pmu;
+	struct perf_pmu *arm_spe_pmu = sper->pmu[0];
 
 	if (priv_size != ARM_SPE_AUXTRACE_PRIV_SIZE)
 		return -EINVAL;
@@ -494,11 +495,13 @@ static void arm_spe_recording_free(struct auxtrace_record *itr)
 			container_of(itr, struct arm_spe_recording, itr);
 
 	zfree(&sper->wrapped);
+	zfree(&sper->pmu);
 	free(sper);
 }
 
 struct auxtrace_record *arm_spe_recording_init(int *err,
-					       struct perf_pmu *arm_spe_pmu)
+					       struct perf_pmu **arm_spe_pmu,
+					       int nr_pmu)
 {
 	struct arm_spe_recording *sper;
 
@@ -513,7 +516,15 @@ struct auxtrace_record *arm_spe_recording_init(int *err,
 		return NULL;
 	}
 
-	sper->arm_spe_pmu = arm_spe_pmu;
+	sper->pmu = zalloc(sizeof(struct perf_pmu *) * nr_pmu);
+	if (!sper->pmu) {
+		free(sper);
+		*err = -ENOMEM;
+		return NULL;
+	}
+	memcpy(sper->pmu, arm_spe_pmu, sizeof(struct perf_pmu *) * nr_pmu);
+	sper->nr_pmu = nr_pmu;
+
 	sper->itr.snapshot_start = arm_spe_snapshot_start;
 	sper->itr.snapshot_finish = arm_spe_snapshot_finish;
 	sper->itr.find_snapshot = arm_spe_find_snapshot;

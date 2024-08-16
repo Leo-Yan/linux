@@ -100,7 +100,7 @@ struct auxtrace_record
 
 #if defined(__aarch64__)
 	if (arm_spe_pmus)
-		itr = arm_spe_recording_init(err, arm_spe_pmus[0]);
+		itr = arm_spe_recording_init(err, arm_spe_pmus, nr_spe);
 
 	if (hisi_ptt_pmus)
 		itr = hisi_ptt_recording_init(err, hisi_ptt_pmus[0]);

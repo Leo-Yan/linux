@@ -22,7 +22,8 @@ struct perf_session;
 struct perf_pmu;
 
 struct auxtrace_record *arm_spe_recording_init(int *err,
-					       struct perf_pmu *arm_spe_pmu);
+					       struct perf_pmu **arm_spe_pmu,
+					       int nr_pmu);
 
 int arm_spe_process_auxtrace_info(union perf_event *event,
 				  struct perf_session *session);
