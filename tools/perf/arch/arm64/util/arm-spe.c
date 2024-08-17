@@ -73,14 +73,78 @@ arm_spe_info_priv_size(struct auxtrace_record *itr __maybe_unused,
 	return size;
 }
 
+static int arm_spe_save_cpu_header(struct auxtrace_record *itr,
+				   struct perf_cpu cpu, __u64 data[])
+{
+	struct arm_spe_recording *sper =
+			container_of(itr, struct arm_spe_recording, itr);
+	struct perf_pmu *pmu = NULL;
+	struct evsel *evsel;
+	struct perf_pmu tmp_pmu;
+	char cpu_id_str[16];
+	char *cpuid = NULL;
+	u64 val;
+
+	evlist__for_each_entry(sper->evlist, evsel) {
+		if (!evsel__is_aux_event(evsel))
+			continue;
+
+		if (perf_cpu_map__is_empty(evsel->pmu->cpus))
+			continue;
+
+		if (perf_cpu_map__has(evsel->pmu->cpus, cpu)) {
+			pmu = evsel->pmu;
+			break;
+		}
+	}
+
+	data[ARM_SPE_CPU] = cpu.cpu;
+
+	snprintf(cpu_id_str, sizeof(cpu_id_str), "%d", cpu.cpu);
+	tmp_pmu.cpus = perf_cpu_map__new(cpu_id_str);
+	if (!tmp_pmu.cpus)
+		return -ENOMEM;
+
+	cpuid = perf_pmu__getcpuid(&tmp_pmu);
+	if (!cpuid)
+		return -ENOMEM;
+	val = strtol(cpuid, NULL, 16);
+	perf_cpu_map__put(tmp_pmu.cpus);
+
+	data[ARM_SPE_CPU_MIDR] = val;
+
+	if (!pmu) {
+		data[ARM_SPE_CPU_PMU_TYPE] = ULLONG_MAX;
+		data[ARM_SPE_CAP_MIN_IVAL] = 0;
+		data[ARM_SPE_CAP_LDS] = 0;
+	} else {
+		data[ARM_SPE_CPU_PMU_TYPE] = pmu->type;
+
+		if (perf_pmu__scan_file(pmu, "caps/min_interval", "%lu", &val) != 1)
+			val = 0;
+		data[ARM_SPE_CAP_MIN_IVAL] = val;
+
+		if (perf_pmu__scan_file(pmu, "caps/lds", "%lu", &val) != 1)
+			val = 0;
+		data[ARM_SPE_CAP_LDS] = val;
+	}
+
+	return ARM_SPE_PER_CPU_PRIV_MAX;
+}
+
 static int arm_spe_info_fill(struct auxtrace_record *itr,
 			     struct perf_session *session,
 			     struct perf_record_auxtrace_info *auxtrace_info,
 			     size_t priv_size)
 {
+	int i, ret;
+	size_t offset;
 	struct arm_spe_recording *sper =
 			container_of(itr, struct arm_spe_recording, itr);
 	struct perf_pmu *arm_spe_pmu = sper->pmu[0];
+	struct perf_cpu_map *cpu_map = arm_spe_find_cpus(session->evlist);
+	struct perf_cpu cpu;
+	__u64 *data;
 
 	if (priv_size != arm_spe_info_priv_size(itr, session->evlist))
 		return -EINVAL;
@@ -90,7 +154,20 @@ static int arm_spe_info_fill(struct auxtrace_record *itr,
 
 	auxtrace_info->type = PERF_AUXTRACE_ARM_SPE;
 	auxtrace_info->priv[ARM_SPE_PMU_TYPE] = arm_spe_pmu->type;
+	auxtrace_info->priv[ARM_SPE_HEADER_VERSION] = ARM_SPE_HEADER_CURRENT_VERSION;
+	auxtrace_info->priv[ARM_SPE_CPU_NUM] = perf_cpu_map__nr(cpu_map);
 
+	offset = ARM_SPE_CPU_NUM + 1;
+	perf_cpu_map__for_each_cpu(cpu, i, cpu_map) {
+		assert(offset < priv_size);
+		data = &auxtrace_info->priv[offset];
+		ret = arm_spe_save_cpu_header(itr, cpu, data);
+		if (ret < 0)
+			return ret;
+		offset += ret;
+	}
+
+	perf_cpu_map__put(cpu_map);
 	return 0;
 }
 
