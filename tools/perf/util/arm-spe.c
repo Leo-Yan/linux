@@ -78,6 +78,10 @@ struct arm_spe {
 
 	unsigned long			num_events;
 	u8				use_ctx_pkt_for_pid;
+
+	u64				**metadata;
+	u64				metadata_ver;
+	u64				metadata_num_cpu;
 };
 
 struct arm_spe_queue {
@@ -1044,12 +1048,16 @@ static void arm_spe_free_events(struct perf_session *session)
 
 static void arm_spe_free(struct perf_session *session)
 {
+	unsigned int i;
 	struct arm_spe *spe = container_of(session->auxtrace, struct arm_spe,
 					     auxtrace);
 
 	auxtrace_heap__free(&spe->heap);
 	arm_spe_free_events(session);
 	session->auxtrace = NULL;
+	for (i = 0; i < spe->metadata_num_cpu; i++)
+		zfree(&spe->metadata[i]);
+	zfree(&spe->metadata);
 	free(spe);
 }
 
@@ -1256,24 +1264,81 @@ synth_instructions_out:
 	return 0;
 }
 
+static bool
+arm_spe_has_metadata_field(struct perf_record_auxtrace_info *auxtrace_info, int pos)
+{
+	return auxtrace_info->header.size >=
+		sizeof(struct perf_record_auxtrace_info) + (sizeof(u64) * (pos + 1));
+}
+
+static u64 *arm_spe__create_meta_blk(u64 *buf, int per_cpu_size)
+{
+	u64 *metadata = NULL;
+
+	metadata = zalloc(sizeof(*metadata) * per_cpu_size);
+	if (!metadata)
+		return NULL;
+
+	memcpy(metadata, buf, per_cpu_size);
+	return metadata;
+}
+
 int arm_spe_process_auxtrace_info(union perf_event *event,
 				  struct perf_session *session)
 {
 	struct perf_record_auxtrace_info *auxtrace_info = &event->auxtrace_info;
-	size_t min_sz = ARM_SPE_AUXTRACE_V1_PRIV_SIZE;
+	size_t min_sz;
 	struct perf_record_time_conv *tc = &session->time_conv;
 	const char *cpuid = perf_env__cpuid(session->evlist->env);
 	u64 midr = strtol(cpuid, NULL, 16);
 	struct arm_spe *spe;
+	u64 *ptr = NULL;
+	u64 **metadata = NULL;
+	u64 metadata_ver;
+	int num_cpu = 0, i, per_cpu_sz;
 	int err;
+
+	/* First the global part */
+	ptr = (u64 *)auxtrace_info->priv;
+
+	/* Metadata v1 has no the ARM_SPE_HEADER_VERSION field */
+	if (!arm_spe_has_metadata_field(auxtrace_info, ARM_SPE_HEADER_VERSION)) {
+		metadata_ver = 1;
+		num_cpu = 0;
+		min_sz = ARM_SPE_AUXTRACE_V1_PRIV_SIZE;
+		per_cpu_sz = 0;
+		ptr += ARM_SPE_AUXTRACE_V1_PRIV_MAX;
+	} else {
+		metadata_ver = ptr[ARM_SPE_HEADER_VERSION];
+		num_cpu = ptr[ARM_SPE_CPU_NUM];
+		min_sz = ARM_SPE_AUXTRACE_V2_PRIV_SIZE +
+			 ARM_SPE_AUXTRACE_V2_PER_CPU_SIZE * num_cpu;
+		per_cpu_sz = ARM_SPE_AUXTRACE_V2_PER_CPU_SIZE;
+		ptr += ARM_SPE_AUXTRACE_V2_PRIV_MAX;
+	}
 
 	if (auxtrace_info->header.size < sizeof(struct perf_record_auxtrace_info) +
 					min_sz)
 		return -EINVAL;
 
+	if (num_cpu) {
+		metadata = zalloc(sizeof(*metadata) * num_cpu);
+		if (!metadata)
+			return -ENOMEM;
+
+		for (i = 0; i < num_cpu; i++) {
+			metadata[i] = arm_spe__create_meta_blk(ptr, per_cpu_sz);
+			if (!metadata[i]) {
+				err = -ENOMEM;
+				goto err_free_metadata;
+			}
+			ptr += per_cpu_sz / sizeof(u64);
+		}
+	}
+
 	spe = zalloc(sizeof(struct arm_spe));
 	if (!spe)
-		return -ENOMEM;
+		goto err_free_metadata;
 
 	err = auxtrace_queues__init(&spe->queues);
 	if (err)
@@ -1283,6 +1348,9 @@ int arm_spe_process_auxtrace_info(union perf_event *event,
 	spe->machine = &session->machines.host; /* No kvm support */
 	spe->auxtrace_type = auxtrace_info->type;
 	spe->midr = midr;
+	spe->metadata = metadata;
+	spe->metadata_ver = metadata_ver;
+	spe->metadata_num_cpu = num_cpu;
 
 	spe->timeless_decoding = arm_spe__is_timeless_decoding(spe);
 
@@ -1343,5 +1411,9 @@ err_free_queues:
 	session->auxtrace = NULL;
 err_free:
 	free(spe);
+err_free_metadata:
+	for (i = 0; i < num_cpu; i++)
+		zfree(&metadata[i]);
+	zfree(&metadata);
 	return err;
 }
