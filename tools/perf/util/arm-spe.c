@@ -1067,16 +1067,49 @@ static bool arm_spe_evsel_is_auxtrace(struct perf_session *session __maybe_unuse
 	return strstarts(evsel->name, ARM_SPE_PMU_NAME);
 }
 
-static const char * const arm_spe_info_fmts[] = {
-	[ARM_SPE_PMU_TYPE]		= "  PMU Type           %"PRId64"\n",
+static const char * const metadata_hdr_fmts[] = {
+	[ARM_SPE_PMU_TYPE]		= "  PMU Type           :%"PRId64"\n",
+	[ARM_SPE_HEADER_VERSION]	= "  Version            :%"PRId64"\n",
+	[ARM_SPE_CPU_NUM]		= "  Num of CPUs        :%"PRId64"\n",
 };
 
-static void arm_spe_print_info(__u64 *arr)
+static const char * const metadata_per_cpu_fmts[] = {
+	[ARM_SPE_CPU]			= "    CPU #            :%"PRId64"\n",
+	[ARM_SPE_CPU_MIDR]		= "    MIDR             :0x%"PRIx64"\n",
+	[ARM_SPE_CPU_PMU_TYPE]		= "    Bound PMU Type   :%"PRId64"\n",
+	[ARM_SPE_CAP_MIN_IVAL]		= "    Min Interval     :%"PRId64"\n",
+	[ARM_SPE_CAP_LDS]		= "    Load Data Source :%"PRId64"\n",
+};
+
+static void arm_spe_print_info(struct arm_spe *spe, __u64 *arr)
 {
+	unsigned int i, cpu, header_size, cpu_num, per_cpu_size;
+
 	if (!dump_trace)
 		return;
 
-	fprintf(stdout, arm_spe_info_fmts[ARM_SPE_PMU_TYPE], arr[ARM_SPE_PMU_TYPE]);
+	if (spe->metadata_ver == 1) {
+		cpu_num = 0;
+		header_size = ARM_SPE_AUXTRACE_V1_PRIV_MAX;
+		per_cpu_size = 0;
+	} else if (spe->metadata_ver == 2) {
+		cpu_num = arr[ARM_SPE_CPU_NUM];
+		header_size = ARM_SPE_AUXTRACE_V2_PRIV_MAX;
+		per_cpu_size = ARM_SPE_AUXTRACE_V2_PRIV_PER_CPU_MAX;
+	} else {
+		pr_err("Cannot support metadata ver: %ld\n", spe->metadata_ver);
+		return;
+	}
+
+	for (i = 0; i < header_size; i++)
+		fprintf(stdout, metadata_hdr_fmts[i], arr[i]);
+
+	arr += header_size;
+	for (cpu = 0; cpu < cpu_num; cpu++) {
+		for (i = 0; i < per_cpu_size; i++)
+			fprintf(stdout, metadata_per_cpu_fmts[i], arr[i]);
+		arr += per_cpu_size;
+	}
 }
 
 static void arm_spe_set_event_name(struct evlist *evlist, u64 id,
@@ -1383,7 +1416,7 @@ int arm_spe_process_auxtrace_info(union perf_event *event,
 	spe->auxtrace.evsel_is_auxtrace = arm_spe_evsel_is_auxtrace;
 	session->auxtrace = &spe->auxtrace;
 
-	arm_spe_print_info(&auxtrace_info->priv[0]);
+	arm_spe_print_info(spe, &auxtrace_info->priv[0]);
 
 	if (dump_trace)
 		return 0;
