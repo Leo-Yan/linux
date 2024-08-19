@@ -82,6 +82,7 @@ struct arm_spe {
 	u64				**metadata;
 	u64				metadata_ver;
 	u64				metadata_num_cpu;
+	bool				is_homogeneous;
 };
 
 struct arm_spe_queue {
@@ -1316,6 +1317,30 @@ static u64 *arm_spe__create_meta_blk(u64 *buf, int per_cpu_size)
 	return metadata;
 }
 
+static bool arm_spe__is_homogeneous(u64 **metadata, int num_cpu)
+{
+	u64 midr;
+	int i;
+
+	if (!num_cpu)
+		return false;
+
+	for (i = 0; i < num_cpu; i++) {
+		if (!metadata[i])
+			return false;
+
+		if (i == 0) {
+			midr = metadata[i][ARM_SPE_CPU_MIDR];
+			continue;
+		}
+
+		if (midr != metadata[i][ARM_SPE_CPU_MIDR])
+			return false;
+	}
+
+	return true;
+}
+
 int arm_spe_process_auxtrace_info(union perf_event *event,
 				  struct perf_session *session)
 {
@@ -1384,6 +1409,7 @@ int arm_spe_process_auxtrace_info(union perf_event *event,
 	spe->metadata = metadata;
 	spe->metadata_ver = metadata_ver;
 	spe->metadata_num_cpu = num_cpu;
+	spe->is_homogeneous = arm_spe__is_homogeneous(metadata, num_cpu);
 
 	spe->timeless_decoding = arm_spe__is_timeless_decoding(spe);
 
