@@ -46,7 +46,6 @@ struct arm_spe {
 	u32				auxtrace_type;
 	struct perf_session		*session;
 	struct machine			*machine;
-	u64				midr;
 
 	struct perf_tsc_conversion	tc;
 
@@ -1409,8 +1408,6 @@ int arm_spe_process_auxtrace_info(union perf_event *event,
 	struct perf_record_auxtrace_info *auxtrace_info = &event->auxtrace_info;
 	size_t min_sz;
 	struct perf_record_time_conv *tc = &session->time_conv;
-	const char *cpuid = perf_env__cpuid(session->evlist->env);
-	u64 midr = strtol(cpuid, NULL, 16);
 	struct arm_spe *spe;
 	u64 *ptr = NULL;
 	u64 **metadata = NULL;
@@ -1467,7 +1464,6 @@ int arm_spe_process_auxtrace_info(union perf_event *event,
 	spe->session = session;
 	spe->machine = &session->machines.host; /* No kvm support */
 	spe->auxtrace_type = auxtrace_info->type;
-	spe->midr = midr;
 	spe->metadata = metadata;
 	spe->metadata_ver = metadata_ver;
 	spe->metadata_num_cpu = num_cpu;
