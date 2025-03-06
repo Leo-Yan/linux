@@ -2203,6 +2203,7 @@ static int etm4_add_coresight_dev(struct etm4_init_arg *init_arg)
 	}
 
 	etmdrvdata[drvdata->cpu] = drvdata;
+	coresight_set_percpu_source(drvdata->cpu, drvdata->csdev);
 
 	dev_info(&drvdata->csdev->dev, "CPU%d: %s v%d.%d initialized\n",
 		 drvdata->cpu, type_name, major, minor);
@@ -2402,6 +2403,7 @@ static void etm4_remove_dev(struct etmv4_drvdata *drvdata)
 	cpus_read_unlock();
 
 	if (!had_delayed_probe) {
+		coresight_set_percpu_source(drvdata->cpu, NULL);
 		etm_perf_symlink(drvdata->csdev, false);
 		cscfg_unregister_csdev(drvdata->csdev);
 		coresight_unregister(drvdata->csdev);

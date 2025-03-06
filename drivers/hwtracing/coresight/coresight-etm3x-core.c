@@ -879,6 +879,7 @@ static int etm_probe(struct amba_device *adev, const struct amba_id *id)
 	}
 
 	etmdrvdata[drvdata->cpu] = drvdata;
+	coresight_set_percpu_source(drvdata->cpu, drvdata->csdev);
 
 	pm_runtime_put(&adev->dev);
 	dev_info(&drvdata->csdev->dev,
@@ -902,6 +903,7 @@ static void etm_remove(struct amba_device *adev)
 {
 	struct etm_drvdata *drvdata = dev_get_drvdata(&adev->dev);
 
+	coresight_set_percpu_source(drvdata->cpu, NULL);
 	etm_perf_symlink(drvdata->csdev, false);
 
 	/*
