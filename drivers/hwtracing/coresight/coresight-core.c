@@ -596,6 +596,94 @@ err_disable_path:
 	goto out;
 }
 
+static int coresight_save_path(struct coresight_path *path)
+{
+	u32 type;
+	struct coresight_node *nd;
+	struct coresight_device *source, *sink;
+
+	if (!path)
+		return 0;
+
+	source = coresight_get_source(path);
+
+	/*
+	 * Do a sanity check as the source device must have been enabled when
+	 * run at here.
+	 */
+	if (coresight_get_mode(source) == CS_MODE_DISABLED)
+		return -EINVAL;
+
+	sink = coresight_get_sink(path);
+
+	/*
+	 * Disable links. Deliberately to skip disabling the sink to avoid
+	 * latency.
+	 */
+	nd = list_first_entry(&path->path_list, struct coresight_node, link);
+	list_for_each_entry_continue(nd, &path->path_list, link) {
+		struct coresight_device *csdev, *parent, *child;
+
+		csdev = nd->csdev;
+		type = csdev->type;
+
+		/* Adjust type for LINKSINK */
+		if (type == CORESIGHT_DEV_TYPE_LINKSINK)
+			type = (csdev == sink) ? CORESIGHT_DEV_TYPE_SINK :
+						 CORESIGHT_DEV_TYPE_LINK;
+
+		if (type != CORESIGHT_DEV_TYPE_LINK)
+			continue;
+
+		parent = list_prev_entry(nd, link)->csdev;
+		child = list_next_entry(nd, link)->csdev;
+		coresight_disable_link(csdev, parent, child, source);
+	}
+
+	return 0;
+}
+
+static void coresight_restore_path(struct coresight_path *path)
+{
+	int ret;
+	u32 type;
+	struct coresight_device *source, *sink;
+	struct coresight_node *nd;
+
+	if (!path)
+		return;
+
+	source = coresight_get_source(path);
+	if (coresight_get_mode(source) == CS_MODE_DISABLED)
+		return;
+
+	sink = coresight_get_sink(path);
+
+	list_for_each_entry_reverse(nd, &path->path_list, link) {
+		struct coresight_device *csdev, *parent, *child;
+
+		csdev = nd->csdev;
+		type = csdev->type;
+
+		if (type == CORESIGHT_DEV_TYPE_LINKSINK)
+			type = (csdev == sink) ? CORESIGHT_DEV_TYPE_SINK :
+						 CORESIGHT_DEV_TYPE_LINK;
+
+		if (type != CORESIGHT_DEV_TYPE_LINK)
+			continue;
+
+		parent = list_prev_entry(nd, link)->csdev;
+		child = list_next_entry(nd, link)->csdev;
+		ret = coresight_enable_link(csdev, parent, child,
+					    coresight_get_source(path));
+		if (ret) {
+			dev_err(&csdev->dev, "Failed to restore\n");
+			coresight_disable_path_from(path, nd);
+			return;
+		}
+	}
+}
+
 struct coresight_device *coresight_get_sink(struct coresight_path *path)
 {
 	struct coresight_device *csdev;
@@ -1605,9 +1693,15 @@ static int coresight_cpu_pm_notify(struct notifier_block *nb, unsigned long cmd,
 	case CPU_PM_ENTER:
 		if (coresight_save_source(source))
 			return NOTIFY_BAD;
+
+		if (coresight_save_path(source->path)) {
+			coresight_restore_source(source);
+			return NOTIFY_BAD;
+		}
 		break;
 	case CPU_PM_EXIT:
 	case CPU_PM_ENTER_FAILED:
+		coresight_restore_path(source->path);
 		coresight_restore_source(source);
 		break;
 	default:
