@@ -1716,6 +1716,7 @@ static int coresight_starting_cpu(unsigned int cpu)
 		return 0;
 
 	/* Only support SYSFS mode */
+	coresight_enable_path(csdev->path, CS_MODE_SYSFS, NULL);
 	source_ops(csdev)->enable(csdev, NULL, CS_MODE_SYSFS, csdev->path);
 	return 0;
 }
@@ -1735,6 +1736,13 @@ static int coresight_dying_cpu(unsigned int cpu)
 	WARN_ON(coresight_get_mode(csdev) != CS_MODE_SYSFS);
 
 	coresight_disable_source(csdev, NULL);
+
+	/*
+	 * Here, it calls coresight_disable_path_from() instead of invoking
+	 * coresight_disable_path() to avoid cleaning up the path pointer
+	 * in the coresight_device structure.
+	 */
+	coresight_disable_path_from(csdev->path, NULL);
 	return 0;
 }
 
