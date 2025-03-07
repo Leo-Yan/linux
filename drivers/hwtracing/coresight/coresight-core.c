@@ -1703,6 +1703,41 @@ done:
 }
 EXPORT_SYMBOL_GPL(coresight_alloc_device_name);
 
+static int coresight_starting_cpu(unsigned int cpu)
+{
+	struct coresight_device *csdev = per_cpu(csdev_source, cpu);
+
+	/*
+	 * After a CPU is hotpluged-off, source will be disabled and set as
+	 * CS_MODE_DISABLED mode.  Here, if a path is activated, we need to
+	 * re-enable components on the path.
+	 */
+	if (!csdev || !csdev->path)
+		return 0;
+
+	/* Only support SYSFS mode */
+	source_ops(csdev)->enable(csdev, NULL, CS_MODE_SYSFS, csdev->path);
+	return 0;
+}
+
+static int coresight_dying_cpu(unsigned int cpu)
+{
+	struct coresight_device *csdev = per_cpu(csdev_source, cpu);
+
+	/* If a path is activated, we need to disable components on the path. */
+	if (!csdev || !csdev->path)
+		return 0;
+
+	/*
+	 * The perf event layer will disable PMU events in the CPU hotplug.
+	 * CoreSight driver should never handle the CS_MODE_PERF case.
+	 */
+	WARN_ON(coresight_get_mode(csdev) != CS_MODE_SYSFS);
+
+	coresight_disable_source(csdev, NULL);
+	return 0;
+}
+
 static int coresight_cpu_pm_notify(struct notifier_block *nb, unsigned long cmd,
 				   void *v)
 {
@@ -1740,11 +1775,24 @@ static struct notifier_block coresight_cpu_pm_nb = {
 
 static int __init coresight_pm_setup(void)
 {
-	return cpu_pm_register_notifier(&coresight_cpu_pm_nb);
+	int ret;
+
+	ret = cpu_pm_register_notifier(&coresight_cpu_pm_nb);
+	if (ret)
+		return ret;
+
+	ret = cpuhp_setup_state_nocalls(CPUHP_AP_ARM_CORESIGHT_STARTING,
+					"arm/coresight-core:starting",
+					coresight_starting_cpu, coresight_dying_cpu);
+	if (ret)
+		cpu_pm_unregister_notifier(&coresight_cpu_pm_nb);
+
+	return ret;
 }
 
 static void coresight_pm_cleanup(void)
 {
+	cpuhp_remove_state_nocalls(CPUHP_AP_ARM_CORESIGHT_STARTING);
 	cpu_pm_unregister_notifier(&coresight_cpu_pm_nb);
 }
 
