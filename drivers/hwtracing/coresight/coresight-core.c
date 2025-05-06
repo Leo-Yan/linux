@@ -495,6 +495,12 @@ static void coresight_disable_path_from(struct coresight_path *path,
 
 void coresight_disable_path(struct coresight_path *path)
 {
+	struct coresight_device *source;
+
+	source = coresight_get_source(path);
+	if (coresight_is_percpu_source(source))
+		source->path = NULL;
+
 	coresight_disable_path_from(path, NULL);
 }
 EXPORT_SYMBOL_GPL(coresight_disable_path);
@@ -576,6 +582,10 @@ int coresight_enable_path(struct coresight_path *path, enum cs_mode mode,
 			goto err_disable_helpers;
 		}
 	}
+
+	source = coresight_get_source(path);
+	if (coresight_is_percpu_source(source))
+		source->path = path;
 
 out:
 	return ret;
