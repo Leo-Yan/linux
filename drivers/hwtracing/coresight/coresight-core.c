@@ -437,6 +437,21 @@ static void coresight_restore_source(struct coresight_device *csdev)
 		source_ops(csdev)->restore(csdev);
 }
 
+static int coresight_save_sink(struct coresight_device *csdev)
+{
+	if (csdev && sink_ops(csdev)->save)
+		return sink_ops(csdev)->save(csdev);
+
+	/* Return success if callback is not supported */
+	return 0;
+}
+
+static void coresight_restore_sink(struct coresight_device *csdev)
+{
+	if (csdev && sink_ops(csdev)->restore)
+		sink_ops(csdev)->restore(csdev);
+}
+
 /*
  * coresight_disable_path_from : Disable components in the given path beyond
  * @nd in the list. If @nd is NULL, all the components, except the SOURCE are
@@ -616,6 +631,10 @@ static int coresight_save_path(struct coresight_path *path)
 
 	sink = coresight_get_sink(path);
 
+	/* Save per CPU sink and directly bail out */
+	if (coresight_is_percpu_sink(sink))
+		return coresight_save_sink(sink);
+
 	/*
 	 * Disable links. Deliberately to skip disabling the sink to avoid
 	 * latency.
@@ -658,6 +677,10 @@ static void coresight_restore_path(struct coresight_path *path)
 		return;
 
 	sink = coresight_get_sink(path);
+
+	/* Restore per CPU sink and directly bail out */
+	if (coresight_is_percpu_sink(sink))
+		return coresight_restore_sink(sink);
 
 	list_for_each_entry_reverse(nd, &path->path_list, link) {
 		struct coresight_device *csdev, *parent, *child;
