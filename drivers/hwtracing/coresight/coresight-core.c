@@ -508,6 +508,17 @@ static void coresight_disable_path_from(struct coresight_path *path,
 
 void coresight_disable_path(struct coresight_path *path)
 {
+	struct coresight_device *source;
+
+	/*
+	 * The source->path pointer is safe to read while the source device is
+	 * in the active state. so the source->path pointer must be cleared
+	 * after updating the device mode to a disabled state.
+	 */
+	source = coresight_get_source(path);
+	if (coresight_is_percpu_source(source))
+		source->path = NULL;
+
 	coresight_disable_path_from(path, NULL);
 }
 EXPORT_SYMBOL_GPL(coresight_disable_path);
@@ -531,8 +542,8 @@ static int coresight_enable_helpers(struct coresight_device *csdev,
 	return 0;
 }
 
-int coresight_enable_path(struct coresight_path *path, enum cs_mode mode,
-			  void *sink_data)
+static int _coresight_enable_path(struct coresight_path *path,
+				  enum cs_mode mode, void *sink_data)
 {
 	int ret = 0;
 	u32 type;
@@ -597,6 +608,28 @@ err_disable_helpers:
 err_disable_path:
 	coresight_disable_path_from(path, nd);
 	goto out;
+}
+
+int coresight_enable_path(struct coresight_path *path, enum cs_mode mode,
+			  void *sink_data)
+{
+	int ret;
+	struct coresight_device *source;
+
+	ret = _coresight_enable_path(path, mode, sink_data);
+	if (ret)
+		return ret;
+
+	/*
+	 * The source->path pointer must be set before updating the device mode
+	 * to an enabled state. The source->path pointer is safe to read while
+	 * the source device is in the active state.
+	 */
+	source = coresight_get_source(path);
+	if (coresight_is_percpu_source(source))
+		source->path = path;
+
+	return 0;
 }
 
 struct coresight_device *coresight_get_sink(struct coresight_path *path)
