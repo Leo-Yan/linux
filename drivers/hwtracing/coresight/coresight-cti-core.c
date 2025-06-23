@@ -658,72 +658,6 @@ static void cti_remove_conn_xrefs(struct cti_drvdata *drvdata)
 	}
 }
 
-/** cti PM callbacks **/
-static int cti_cpu_pm_notify(struct notifier_block *nb, unsigned long cmd,
-			     void *v)
-{
-	struct cti_drvdata *drvdata;
-	struct coresight_device *csdev;
-	unsigned int cpu = smp_processor_id();
-	int notify_res = NOTIFY_OK;
-
-	if (!cti_cpu_drvdata[cpu])
-		return NOTIFY_OK;
-
-	drvdata = cti_cpu_drvdata[cpu];
-	csdev = drvdata->csdev;
-
-	if (WARN_ON_ONCE(drvdata->ctidev.cpu != cpu))
-		return NOTIFY_BAD;
-
-	raw_spin_lock(&drvdata->spinlock);
-
-	switch (cmd) {
-	case CPU_PM_ENTER:
-		/* CTI regs all static - we have a copy & nothing to save */
-		drvdata->config.hw_powered = false;
-		if (drvdata->config.hw_enabled)
-			coresight_disclaim_device(csdev);
-		break;
-
-	case CPU_PM_ENTER_FAILED:
-		drvdata->config.hw_powered = true;
-		if (drvdata->config.hw_enabled) {
-			if (coresight_claim_device(csdev))
-				drvdata->config.hw_enabled = false;
-		}
-		break;
-
-	case CPU_PM_EXIT:
-		/* write hardware registers to re-enable. */
-		drvdata->config.hw_powered = true;
-		drvdata->config.hw_enabled = false;
-
-		/* check enable reference count to enable HW */
-		if (drvdata->config.enable_req_count) {
-			/* check we can claim the device as we re-power */
-			if (coresight_claim_device(csdev))
-				goto cti_notify_exit;
-
-			drvdata->config.hw_enabled = true;
-			cti_write_all_hw_regs(drvdata);
-		}
-		break;
-
-	default:
-		notify_res = NOTIFY_DONE;
-		break;
-	}
-
-cti_notify_exit:
-	raw_spin_unlock(&drvdata->spinlock);
-	return notify_res;
-}
-
-static struct notifier_block cti_cpu_pm_nb = {
-	.notifier_call = cti_cpu_pm_notify,
-};
-
 /* CPU HP handlers */
 static int cti_starting_cpu(unsigned int cpu)
 {
@@ -771,12 +705,7 @@ static int cti_pm_setup(struct cti_drvdata *drvdata)
 		return ret;
 	}
 
-	ret = cpu_pm_register_notifier(&cti_cpu_pm_nb);
 	cpus_read_unlock();
-	if (ret) {
-		cpuhp_remove_state_nocalls(CPUHP_AP_ARM_CORESIGHT_CTI_STARTING);
-		return ret;
-	}
 
 done:
 	nr_cti_cpu++;
@@ -792,10 +721,8 @@ static void cti_pm_release(struct cti_drvdata *drvdata)
 		return;
 
 	cti_cpu_drvdata[drvdata->ctidev.cpu] = NULL;
-	if (--nr_cti_cpu == 0) {
-		cpu_pm_unregister_notifier(&cti_cpu_pm_nb);
+	if (--nr_cti_cpu == 0)
 		cpuhp_remove_state_nocalls(CPUHP_AP_ARM_CORESIGHT_CTI_STARTING);
-	}
 }
 
 /** cti ect operations **/
