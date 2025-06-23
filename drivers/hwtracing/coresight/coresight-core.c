@@ -437,8 +437,15 @@ static bool coresight_need_save_restore_source(struct coresight_device *csdev)
 
 static int coresight_save_source(struct coresight_device *csdev)
 {
-	if (csdev && source_ops(csdev)->save)
-		return source_ops(csdev)->save(csdev);
+	int ret;
+
+	if (csdev && source_ops(csdev)->save) {
+		ret = source_ops(csdev)->save(csdev);
+		if (ret)
+			return ret;
+
+		coresight_disable_helpers(csdev, NULL);
+	}
 
 	/* Return success if callback is not supported */
 	return 0;
@@ -1655,13 +1662,27 @@ static int coresight_cpu_pm_notify(struct notifier_block *nb, unsigned long cmd,
 	if (!coresight_need_save_restore_source(source))
 		return NOTIFY_OK;
 
+	/*
+	 * When run at here, the source device mode is enabled.
+	 * The activated path pointer must not be NULL.
+	 */
+	if (WARN_ON(!source->path))
+		return NOTIFY_BAD;
+
 	switch (cmd) {
 	case CPU_PM_ENTER:
 		if (coresight_save_source(source))
 			return NOTIFY_BAD;
+
+		coresight_disable_path_from(source->path, NULL, true);
 		break;
 	case CPU_PM_EXIT:
 	case CPU_PM_ENTER_FAILED:
+		if (_coresight_enable_path(source->path,
+					   coresight_get_mode(source),
+					   NULL, true))
+			return NOTIFY_BAD;
+
 		coresight_restore_source(source);
 		break;
 	default:
