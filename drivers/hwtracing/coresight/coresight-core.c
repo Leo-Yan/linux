@@ -1706,6 +1706,7 @@ static int coresight_starting_cpu(unsigned int cpu)
 	if (path->saved_mode != CS_MODE_SYSFS)
 		return 0;
 
+	_coresight_enable_path(path, path->saved_mode, NULL, false);
 	source_ops(source)->enable(source, NULL, path->saved_mode, path);
 	return 0;
 }
@@ -1732,7 +1733,8 @@ static int coresight_dying_cpu(unsigned int cpu)
 	if (WARN_ON(mode == CS_MODE_PERF))
 		return 0;
 
-	source_ops(source)->disable(source, NULL);
+	coresight_disable_source(source, NULL);
+	coresight_disable_path_from(source->path, NULL, false);
 	return 0;
 }
 
