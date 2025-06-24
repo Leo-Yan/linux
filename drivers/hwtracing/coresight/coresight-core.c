@@ -1715,13 +1715,14 @@ static int coresight_starting_cpu(unsigned int cpu)
 		return 0;
 
 	/* Re-enable components on an activated path */
-	path = source->path;
+	path = per_cpu(csdev_cpu_path, cpu);
 	if (!path)
 		return 0;
 
 	if (path->saved_mode != CS_MODE_SYSFS)
 		return 0;
 
+	_coresight_enable_path(path, path->saved_mode, NULL, false);
 	source_ops(source)->enable(source, NULL, path->saved_mode, path);
 	return 0;
 }
@@ -1729,17 +1730,19 @@ static int coresight_starting_cpu(unsigned int cpu)
 static int coresight_dying_cpu(unsigned int cpu)
 {
 	struct coresight_device *source = per_cpu(csdev_source, cpu);
+	struct coresight_path *path;
 	enum cs_mode mode;
 
 	if (!source)
 		return 0;
 
 	/* Don't proceed if no path is activated */
-	if (!source->path)
+	path = per_cpu(csdev_cpu_path, cpu);
+	if (!path)
 		return 0;
 
 	mode = coresight_get_mode(source);
-	source->path->saved_mode = mode;
+	path->saved_mode = mode;
 
 	/*
 	 * The perf event layer will disable PMU events in the CPU hotplug.
@@ -1748,7 +1751,8 @@ static int coresight_dying_cpu(unsigned int cpu)
 	if (WARN_ON(mode == CS_MODE_PERF))
 		return 0;
 
-	source_ops(source)->disable(source, NULL);
+	coresight_disable_source(source, NULL);
+	coresight_disable_path_from(path, NULL, false);
 	return 0;
 }
 
