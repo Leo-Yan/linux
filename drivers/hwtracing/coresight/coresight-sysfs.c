@@ -58,6 +58,9 @@ static int coresight_enable_source_sysfs(struct coresight_device *csdev,
 {
 	int ret;
 
+	trace_printk("%s: mode=%d refcnt=%d\n", __func__,
+		     coresight_get_mode(csdev), csdev->refcnt);
+
 	/*
 	 * Comparison with CS_MODE_SYSFS works without taking any device
 	 * specific spinlock because the truthyness of that comparison can only
@@ -89,6 +92,10 @@ static bool coresight_disable_source_sysfs(struct coresight_device *csdev,
 					   void *data)
 {
 	lockdep_assert_held(&coresight_mutex);
+
+	trace_printk("%s: mode=%d refcnt=%d\n", __func__,
+		     coresight_get_mode(csdev), csdev->refcnt);
+
 	if (coresight_get_mode(csdev) != CS_MODE_SYSFS)
 		return false;
 

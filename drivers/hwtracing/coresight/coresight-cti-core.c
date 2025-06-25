@@ -94,6 +94,11 @@ static int cti_enable_hw(struct cti_drvdata *drvdata, enum cs_mode mode)
 	unsigned long flags;
 	int rc = 0;
 
+	trace_printk("Enter: csdev=%px cpu=%d mode=%d hw_enabled=%d hw_powered=%d enable_req_count=%d\n",
+		     drvdata->csdev, drvdata->ctidev.cpu, coresight_get_mode(drvdata->csdev),
+		     config->hw_enabled, config->hw_powered,
+		     drvdata->config.enable_req_count);
+
 	raw_spin_lock_irqsave(&drvdata->spinlock, flags);
 
 	if (!drvdata->config.enable_req_count) {
@@ -120,6 +125,10 @@ static int cti_enable_hw(struct cti_drvdata *drvdata, enum cs_mode mode)
 	config->hw_enabled = true;
 	drvdata->config.enable_req_count++;
 	raw_spin_unlock_irqrestore(&drvdata->spinlock, flags);
+
+	trace_printk("hw_enabled=%d hw_powered=%d enable_req_count=%d\n",
+		     config->hw_enabled, config->hw_powered,
+		     drvdata->config.enable_req_count);
 	return rc;
 
 cti_state_unchanged:
@@ -169,6 +178,11 @@ static int cti_disable_hw(struct cti_drvdata *drvdata)
 	struct coresight_device *csdev = drvdata->csdev;
 	int ret = 0;
 
+	trace_printk("Enter: csdev=%px cpu=%d mode=%d hw_enabled=%d hw_powered=%d enable_req_count=%d\n",
+		     drvdata->csdev, drvdata->ctidev.cpu, coresight_get_mode(drvdata->csdev),
+		     config->hw_enabled, config->hw_powered,
+		     drvdata->config.enable_req_count);
+
 	raw_spin_lock(&drvdata->spinlock);
 
 	/* don't allow negative refcounts, return an error */
@@ -196,6 +210,11 @@ static int cti_disable_hw(struct cti_drvdata *drvdata)
 	coresight_disclaim_device_unlocked(csdev);
 	CS_LOCK(drvdata->base);
 	raw_spin_unlock(&drvdata->spinlock);
+
+	trace_printk("hw_enabled=%d hw_powered=%d enable_req_count=%d\n",
+		     config->hw_enabled, config->hw_powered,
+		     drvdata->config.enable_req_count);
+
 	return ret;
 
 	/* not disabled this call */
