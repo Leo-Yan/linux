@@ -96,6 +96,8 @@ static int funnel_enable(struct coresight_device *csdev,
 		in->dest_refcnt++;
 	raw_spin_unlock_irqrestore(&drvdata->spinlock, flags);
 
+	trace_printk("%s: dest_refcnt=%d\n", __func__, in->dest_refcnt);
+
 	if (first_enable)
 		dev_dbg(&csdev->dev, "FUNNEL inport %d enabled\n",
 			in->dest_port);
@@ -136,6 +138,8 @@ static void funnel_disable(struct coresight_device *csdev,
 		last_disable = true;
 	}
 	raw_spin_unlock_irqrestore(&drvdata->spinlock, flags);
+
+	trace_printk("%s: dest_refcnt=%d\n", __func__, in->dest_refcnt);
 
 	if (last_disable)
 		dev_dbg(&csdev->dev, "FUNNEL inport %d disabled\n",

@@ -137,6 +137,8 @@ static int replicator_enable(struct coresight_device *csdev,
 		out->src_refcnt++;
 	raw_spin_unlock_irqrestore(&drvdata->spinlock, flags);
 
+	trace_printk("%s: src_refcnt=%d\n", __func__, out->src_refcnt);
+
 	if (first_enable)
 		dev_dbg(&csdev->dev, "REPLICATOR enabled\n");
 	return rc;
@@ -187,6 +189,8 @@ static void replicator_disable(struct coresight_device *csdev,
 		last_disable = true;
 	}
 	raw_spin_unlock_irqrestore(&drvdata->spinlock, flags);
+
+	trace_printk("%s: src_refcnt=%d\n", __func__, out->src_refcnt);
 
 	if (last_disable)
 		dev_dbg(&csdev->dev, "REPLICATOR disabled\n");

@@ -628,6 +628,8 @@ static void etm4_enable_hw_smp_call(void *info)
 		return;
 	}
 
+	trace_printk("%s: mode=%d\n", __func__, coresight_get_mode(csdev));
+
 	arg->rc = etm4_enable_hw(arg->drvdata, true);
 
 	/* The tracer didn't start */
@@ -1040,6 +1042,8 @@ static void etm4_disable_hw_smp_call(void *info)
 	etm4_disable_hw(drvdata);
 
 	coresight_set_mode(drvdata->csdev, CS_MODE_DISABLED);
+
+	trace_printk("%s: mode=%d\n", __func__, coresight_get_mode(drvdata->csdev));
 }
 
 static int etm4_disable_perf(struct coresight_device *csdev,
@@ -2007,6 +2011,8 @@ static int etm4_probe(struct device *dev)
 	if (pm_save_enable == PARAM_PM_SAVE_FIRMWARE)
 		pm_save_enable = coresight_loses_context_with_cpu(dev) ?
 			       PARAM_PM_SAVE_SELF_HOSTED : PARAM_PM_SAVE_NEVER;
+
+	pm_save_enable = PARAM_PM_SAVE_SELF_HOSTED;
 
 	raw_spin_lock_init(&drvdata->spinlock);
 

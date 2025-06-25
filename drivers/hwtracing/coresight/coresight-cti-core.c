@@ -88,6 +88,11 @@ static int cti_enable_hw(struct cti_drvdata *drvdata)
 	unsigned int cpu = smp_processor_id();
 	int rc = 0;
 
+	trace_printk("Enter: : csdev=%px cpu=%d hw_enabled=%d hw_powered=%d enable_req_count=%d\n",
+		     drvdata->csdev, drvdata->ctidev.cpu,
+		     config->hw_enabled, config->hw_powered,
+		     drvdata->config.enable_req_count);
+
 	raw_spin_lock_irqsave(&drvdata->spinlock, flags);
 
 	/* Exiting CPU idle, the associated CTI is enabled */
@@ -108,6 +113,10 @@ static int cti_enable_hw(struct cti_drvdata *drvdata)
 	config->hw_enabled = true;
 	drvdata->config.enable_req_count++;
 	raw_spin_unlock_irqrestore(&drvdata->spinlock, flags);
+
+	trace_printk("hw_enabled=%d hw_powered=%d enable_req_count=%d\n",
+		     config->hw_enabled, config->hw_powered,
+		     drvdata->config.enable_req_count);
 	return rc;
 
 cti_state_unchanged:
@@ -126,6 +135,11 @@ static int cti_disable_hw(struct cti_drvdata *drvdata)
 	struct coresight_device *csdev = drvdata->csdev;
 	unsigned int cpu = smp_processor_id();
 	int ret = 0;
+
+	trace_printk("Enter: : csdev=%px cpu=%d hw_enabled=%d hw_powered=%d enable_req_count=%d\n",
+		     drvdata->csdev, drvdata->ctidev.cpu,
+		     config->hw_enabled, config->hw_powered,
+		     drvdata->config.enable_req_count);
 
 	raw_spin_lock(&drvdata->spinlock);
 
@@ -157,6 +171,10 @@ static int cti_disable_hw(struct cti_drvdata *drvdata)
 		config->hw_powered = false;
 
 	raw_spin_unlock(&drvdata->spinlock);
+
+	trace_printk("hw_enabled=%d hw_powered=%d enable_req_count=%d\n",
+		     config->hw_enabled, config->hw_powered,
+		     drvdata->config.enable_req_count);
 	return ret;
 
 	/* not disabled this call */
