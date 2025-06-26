@@ -801,16 +801,29 @@ static void cti_pm_release(struct cti_drvdata *drvdata)
 /** cti ect operations **/
 int cti_enable(struct coresight_device *csdev, enum cs_mode mode, void *data)
 {
+	int ret;
 	struct cti_drvdata *drvdata = csdev_to_cti_drvdata(csdev);
 
-	return cti_enable_hw(drvdata);
+	if (!coresight_take_mode(csdev, mode))
+		return -EBUSY;
+
+	ret = cti_enable_hw(drvdata);
+	if (ret)
+		coresight_set_mode(csdev, CS_MODE_DISABLED);
+
+	return ret;
 }
 
 int cti_disable(struct coresight_device *csdev, void *data)
 {
+	int ret;
 	struct cti_drvdata *drvdata = csdev_to_cti_drvdata(csdev);
 
-	return cti_disable_hw(drvdata);
+	ret = cti_disable_hw(drvdata);
+	if (!ret)
+		coresight_set_mode(csdev, CS_MODE_DISABLED);
+
+	return ret;
 }
 
 static const struct coresight_ops_helper cti_ops_ect = {
