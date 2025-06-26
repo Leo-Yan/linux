@@ -344,6 +344,7 @@ enum cs_mode {
 	CS_MODE_DISABLED,
 	CS_MODE_SYSFS,
 	CS_MODE_PERF,
+	CS_MODE_DEBUG,
 };
 
 #define coresight_ops(csdev)	csdev->ops
