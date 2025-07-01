@@ -34,6 +34,7 @@
  */
 DEFINE_MUTEX(coresight_mutex);
 static DEFINE_PER_CPU(struct coresight_device *, csdev_sink);
+static DEFINE_PER_CPU(struct coresight_device *, csdev_source);
 
 /**
  * struct coresight_node - elements of a path, from source to sink
@@ -81,6 +82,61 @@ struct coresight_device *coresight_get_percpu_sink(int cpu)
 	return per_cpu(csdev_sink, cpu);
 }
 EXPORT_SYMBOL_GPL(coresight_get_percpu_sink);
+
+static void coresight_set_percpu_source_local(void *csdev)
+{
+	this_cpu_write(csdev_source, csdev);
+}
+
+static void _coresight_set_percpu_source(int cpu, struct coresight_device *csdev)
+{
+	/*
+	 * Directly set per CPU pointer if running on the local CPU.  This
+	 * avoids to acquire CPU lock duplicately if it is called from CPU
+	 * hotplug notifier, see etm4_probe_cpu().
+	 */
+	if (get_cpu() == cpu) {
+		this_cpu_write(csdev_source, csdev);
+		put_cpu();
+		return;
+	}
+
+	put_cpu();
+
+	/* Avoid race condition with CPU hotplug */
+	guard(cpus_read_lock)();
+
+	if (!smp_call_function_single(cpu, coresight_set_percpu_source_local,
+				      csdev, 1))
+		return;
+
+	/*
+	 * If SMP call fails (e.g., the CPU is offline), directly update the
+	 * per CPU pointer as last resort.
+	 */
+	per_cpu(csdev_source, cpu) = csdev;
+}
+
+static void coresight_set_percpu_source(struct coresight_device *csdev)
+{
+	if (!coresight_is_percpu_source(csdev))
+		return;
+
+	_coresight_set_percpu_source(csdev->cpu, csdev);
+}
+
+static void coresight_clear_percpu_source(struct coresight_device *csdev)
+{
+	if (!coresight_is_percpu_source(csdev))
+		return;
+
+	_coresight_set_percpu_source(csdev->cpu, NULL);
+}
+
+static struct coresight_device *coresight_get_percpu_source(int cpu)
+{
+	return per_cpu(csdev_source, cpu);
+}
 
 static struct coresight_device *coresight_get_source(struct coresight_path *path)
 {
@@ -1405,6 +1461,8 @@ struct coresight_device *coresight_register(struct coresight_desc *desc)
 
 	mutex_unlock(&coresight_mutex);
 
+	coresight_set_percpu_source(csdev);
+
 	if (cti_assoc_ops && cti_assoc_ops->add)
 		cti_assoc_ops->add(csdev);
 
@@ -1431,6 +1489,7 @@ void coresight_unregister(struct coresight_device *csdev)
 	if (cti_assoc_ops && cti_assoc_ops->remove)
 		cti_assoc_ops->remove(csdev);
 
+	coresight_clear_percpu_source(csdev);
 	mutex_lock(&coresight_mutex);
 	etm_perf_del_symlink_sink(csdev);
 	coresight_remove_conns(csdev);
