@@ -1663,8 +1663,16 @@ static bool coresight_pm_is_needed(struct coresight_device *csdev)
 
 static int coresight_pm_save(struct coresight_device *csdev)
 {
-	if (csdev && coresight_ops(csdev)->pm_save_disable)
-		return coresight_ops(csdev)->pm_save_disable(csdev);
+	int ret;
+
+	WARN_ON(!csdev->path);
+
+	ret = coresight_ops(csdev)->pm_save_disable(csdev);
+	if (ret)
+		return ret;
+
+	coresight_disable_helpers(csdev, NULL);
+	coresight_disable_path_from(csdev->path, NULL, true);
 
 	/* Return success if callback is not supported */
 	return 0;
@@ -1672,8 +1680,15 @@ static int coresight_pm_save(struct coresight_device *csdev)
 
 static void coresight_pm_restore(struct coresight_device *csdev)
 {
-	if (csdev && coresight_ops(csdev)->pm_restore_enable)
-		coresight_ops(csdev)->pm_restore_enable(csdev);
+	WARN_ON(!csdev->path);
+
+	/*
+	 * During CPU idle, the sink device is not accessed, so it is okay to
+	 * pass a NULL pointer for the 'sink_data' parameter.
+	 */
+	coresight_enable_path_internal(csdev->path, coresight_get_mode(csdev),
+				       NULL, true);
+	coresight_ops(csdev)->pm_restore_enable(csdev);
 }
 
 static int coresight_cpu_pm_notify(struct notifier_block *nb, unsigned long cmd,
