@@ -1757,11 +1757,17 @@ static bool coresight_pm_is_needed(struct coresight_path *path)
 
 static int coresight_pm_device_save(struct coresight_device *csdev)
 {
+	if (!csdev || !coresight_ops(csdev)->pm_save_disable)
+		return 0;
+
 	return coresight_ops(csdev)->pm_save_disable(csdev);
 }
 
 static void coresight_pm_device_restore(struct coresight_device *csdev)
 {
+	if (!csdev || !coresight_ops(csdev)->pm_restore_enable)
+		return;
+
 	coresight_ops(csdev)->pm_restore_enable(csdev);
 }
 
@@ -1780,20 +1786,35 @@ static int coresight_pm_save(struct coresight_path *path)
 	to = list_prev_entry(coresight_path_last_node(path), link);
 	coresight_disable_path_from_to(path, from, to);
 
+	ret = coresight_pm_device_save(coresight_get_sink(path));
+	if (ret)
+		goto failed_out;
+
 	return 0;
+
+failed_out:
+	coresight_enable_path_from_to(path, coresight_get_mode(source),
+				      from, to);
+	coresight_pm_device_restore(source);
+	return ret;
 }
 
 static void coresight_pm_restore(struct coresight_path *path)
 {
 	struct coresight_device *source = coresight_get_source(path);
+	struct coresight_device *sink = coresight_get_sink(path);
 	struct coresight_node *from, *to;
+
+	coresight_pm_device_restore(sink);
 
 	from = coresight_path_first_node(path);
 	/* Up to the node before sink to avoid latency */
 	to = list_prev_entry(coresight_path_last_node(path), link);
 	if (coresight_enable_path_from_to(path, coresight_get_mode(source),
-					  from, to))
+					  from, to)) {
+		coresight_pm_device_save(sink);
 		return;
+	}
 
 	coresight_pm_device_restore(source);
 }
