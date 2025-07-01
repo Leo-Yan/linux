@@ -1661,33 +1661,75 @@ static bool coresight_pm_is_needed(struct coresight_device *csdev)
 	return coresight_ops(csdev)->pm_is_needed(csdev);
 }
 
+static int coresight_pm_percpu_sink_save(struct coresight_device *sink)
+{
+	if (!sink || !coresight_ops(sink)->pm_save_disable)
+		return 0;
+
+	return coresight_ops(sink)->pm_save_disable(sink);
+}
+
 static int coresight_pm_save(struct coresight_device *csdev)
 {
+	struct coresight_device *sink;
 	int ret;
 
-	WARN_ON(!csdev->path);
+	if (WARN_ON(!csdev->path))
+		return NOTIFY_DONE;
 
 	ret = coresight_ops(csdev)->pm_save_disable(csdev);
 	if (ret)
-		return ret;
+		return NOTIFY_BAD;
 
 	coresight_disable_helpers(csdev, NULL);
-	coresight_disable_path_from(csdev->path, NULL, true);
 
-	/* Return success if callback is not supported */
-	return 0;
+	sink = coresight_get_sink(csdev->path);
+	if (coresight_is_percpu_sink(sink)) {
+		ret = coresight_pm_percpu_sink_save(sink);
+		if (ret)
+			goto failed_out;
+
+		return NOTIFY_OK;
+	}
+
+	/* Not per CPU sink case */
+	coresight_disable_path_from(csdev->path, NULL, true);
+	return NOTIFY_OK;
+
+failed_out:
+	coresight_enable_helpers(csdev, coresight_get_mode(csdev), csdev->path);
+	coresight_ops(csdev)->pm_restore_enable(csdev);
+	return NOTIFY_BAD;
+}
+
+static void coresight_pm_percpu_sink_restore(struct coresight_device *csdev)
+{
+	if (!csdev || !coresight_ops(csdev)->pm_restore_enable)
+		return;
+
+	coresight_ops(csdev)->pm_restore_enable(csdev);
 }
 
 static void coresight_pm_restore(struct coresight_device *csdev)
 {
-	WARN_ON(!csdev->path);
+	struct coresight_device *sink;
 
-	/*
-	 * During CPU idle, the sink device is not accessed, so it is okay to
-	 * pass a NULL pointer for the 'sink_data' parameter.
-	 */
-	coresight_enable_path_internal(csdev->path, coresight_get_mode(csdev),
-				       NULL, true);
+	if (WARN_ON(!csdev->path))
+		return;
+
+	sink = coresight_get_sink(csdev->path);
+
+	if (coresight_is_percpu_sink(sink))
+		coresight_pm_percpu_sink_restore(sink);
+	else
+		/*
+		 * During CPU idle, the sink device is not accessed, so it is
+		 * okay to pass a NULL pointer for the 'sink_data' parameter.
+		 */
+		coresight_enable_path_internal(csdev->path,
+					       coresight_get_mode(csdev),
+					       NULL, true);
+
 	coresight_ops(csdev)->pm_restore_enable(csdev);
 }
 
@@ -1702,9 +1744,7 @@ static int coresight_cpu_pm_notify(struct notifier_block *nb, unsigned long cmd,
 
 	switch (cmd) {
 	case CPU_PM_ENTER:
-		if (coresight_pm_save(source))
-			return NOTIFY_BAD;
-		break;
+		return coresight_pm_save(source);
 	case CPU_PM_EXIT:
 	case CPU_PM_ENTER_FAILED:
 		coresight_pm_restore(source);
