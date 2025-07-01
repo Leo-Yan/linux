@@ -1735,7 +1735,7 @@ static void coresight_release_device_list(void)
 
 static bool coresight_pm_is_needed(struct coresight_path *path)
 {
-	struct coresight_device *source;
+	struct coresight_device *source, *sink;
 
 	if (!path)
 		return false;
@@ -1744,10 +1744,20 @@ static bool coresight_pm_is_needed(struct coresight_path *path)
 	if (!source)
 		return false;
 
+	sink = coresight_get_sink(path);
+	if (!sink)
+		return false;
+
 	/* pm_save_disable() and pm_restore_enable() must be paired */
 	if (!coresight_ops(source)->pm_save_disable ||
-	    !coresight_ops(source)->pm_restore_enable)
+	    !coresight_ops(source)->pm_restore_enable) {
+
+		if (coresight_ops(sink)->pm_save_disable &&
+		    coresight_ops(sink)->pm_restore_enable)
+			pr_warn_once("coresight PM skipped: source device has no PM callbacks\n");
+
 		return false;
+	}
 
 	/* Save and restore only if the source is active */
 	if (coresight_get_mode(source))
@@ -1758,11 +1768,17 @@ static bool coresight_pm_is_needed(struct coresight_path *path)
 
 static int coresight_pm_device_save(struct coresight_device *csdev)
 {
+	if (!csdev || !coresight_ops(csdev)->pm_save_disable)
+		return 0;
+
 	return coresight_ops(csdev)->pm_save_disable(csdev);
 }
 
 static void coresight_pm_device_restore(struct coresight_device *csdev)
 {
+	if (!csdev || !coresight_ops(csdev)->pm_restore_enable)
+		return;
+
 	coresight_ops(csdev)->pm_restore_enable(csdev);
 }
 
@@ -1781,14 +1797,31 @@ static int coresight_pm_save(struct coresight_path *path)
 	to = list_prev_entry(coresight_path_last_node(path), link);
 	coresight_disable_path_from_to(path, from, to);
 
+	ret = coresight_pm_device_save(coresight_get_sink(path));
+	if (ret)
+		goto sink_failed;
+
 	return 0;
+
+sink_failed:
+	if (!coresight_enable_path_from_to(path, coresight_get_mode(source),
+					   from, to))
+		coresight_pm_device_restore(source);
+
+	pr_warn_once("Failed in coresight PM save on CPU%d: %d\n",
+		     smp_processor_id(), ret);
+	this_cpu_write(percpu_pm_failed, true);
+	return ret;
 }
 
 static void coresight_pm_restore(struct coresight_path *path)
 {
 	struct coresight_device *source = coresight_get_source(path);
+	struct coresight_device *sink = coresight_get_sink(path);
 	struct coresight_node *from, *to;
 	int ret;
+
+	coresight_pm_device_restore(sink);
 
 	from = coresight_path_first_node(path);
 	/* Up to the node before sink to avoid latency */
@@ -1802,6 +1835,8 @@ static void coresight_pm_restore(struct coresight_path *path)
 	return;
 
 path_failed:
+	coresight_pm_device_save(sink);
+
 	pr_warn_once("Failed in coresight PM restore on CPU%d: %d\n",
 		     smp_processor_id(), ret);
 
