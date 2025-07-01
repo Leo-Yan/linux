@@ -1576,6 +1576,26 @@ done:
 }
 EXPORT_SYMBOL_GPL(coresight_alloc_device_name);
 
+static bool coresight_pm_is_needed(struct coresight_device *csdev)
+{
+	if (!csdev)
+		return false;
+
+	/* pm_save_disable() and pm_restore_enable() must be paired */
+	if (!coresight_ops(csdev)->pm_save_disable ||
+	    !coresight_ops(csdev)->pm_restore_enable)
+		return false;
+
+	/*
+	 * PM callbacks are provided but pm_is_neended() is absent, it means
+	 * no extra check is needed.
+	 */
+	if (!coresight_ops(csdev)->pm_is_needed)
+		return true;
+
+	return coresight_ops(csdev)->pm_is_needed(csdev);
+}
+
 static int coresight_pm_save(struct coresight_device *csdev)
 {
 	if (csdev && coresight_ops(csdev)->pm_save_disable)
@@ -1597,7 +1617,7 @@ static int coresight_cpu_pm_notify(struct notifier_block *nb, unsigned long cmd,
 	unsigned int cpu = smp_processor_id();
 	struct coresight_device *source = per_cpu(csdev_source, cpu);
 
-	if (!source)
+	if (!coresight_pm_is_needed(source))
 		return NOTIFY_OK;
 
 	switch (cmd) {
