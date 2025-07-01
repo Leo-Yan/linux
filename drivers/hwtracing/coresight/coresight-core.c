@@ -1768,13 +1768,32 @@ static void coresight_pm_device_restore(struct coresight_device *csdev)
 static int coresight_pm_save(struct coresight_path *path)
 {
 	struct coresight_device *source = coresight_get_source(path);
+	struct coresight_node *from, *to;
+	int ret;
 
-	return coresight_pm_device_save(source);
+	ret = coresight_pm_device_save(source);
+	if (ret)
+		return ret;
+
+	from = coresight_path_first_node(path);
+	/* Up to the node before sink to avoid latency */
+	to = list_prev_entry(coresight_path_last_node(path), link);
+	coresight_disable_path_from_to(path, from, to);
+
+	return 0;
 }
 
 static void coresight_pm_restore(struct coresight_path *path)
 {
 	struct coresight_device *source = coresight_get_source(path);
+	struct coresight_node *from, *to;
+
+	from = coresight_path_first_node(path);
+	/* Up to the node before sink to avoid latency */
+	to = list_prev_entry(coresight_path_last_node(path), link);
+	if (coresight_enable_path_from_to(path, coresight_get_mode(source),
+					  from, to))
+		return;
 
 	coresight_pm_device_restore(source);
 }
