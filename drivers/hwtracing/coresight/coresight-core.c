@@ -1879,13 +1879,53 @@ static struct notifier_block coresight_cpu_pm_nb = {
 	.notifier_call = coresight_cpu_pm_notify,
 };
 
+static int coresight_dying_cpu(unsigned int cpu)
+{
+	struct coresight_device *source;
+	struct coresight_path *path;
+
+	/* Disable interrupt to avoid race with perf session */
+	scoped_guard(irqsave) {
+		path = coresight_get_percpu_local_path();
+		if (!path)
+			return 0;
+
+		source = coresight_get_source(path);
+		if (!source)
+			return 0;
+
+		/*
+		 * The perf event layer will disable PMU events in the CPU
+		 * hotplug. Here only handles SYSFS case.
+		 */
+		if (coresight_get_mode(source) != CS_MODE_SYSFS)
+			return 0;
+	}
+
+	coresight_disable_sysfs(source);
+	return 0;
+}
+
 static int __init coresight_pm_setup(void)
 {
-	return cpu_pm_register_notifier(&coresight_cpu_pm_nb);
+	int ret;
+
+	ret = cpu_pm_register_notifier(&coresight_cpu_pm_nb);
+	if (ret)
+		return ret;
+
+	ret = cpuhp_setup_state_nocalls(CPUHP_AP_ARM_CORESIGHT_ONLINE,
+					"arm/coresight-core:starting",
+					NULL, coresight_dying_cpu);
+	if (ret)
+		cpu_pm_unregister_notifier(&coresight_cpu_pm_nb);
+
+	return ret;
 }
 
 static void coresight_pm_cleanup(void)
 {
+	cpuhp_remove_state_nocalls(CPUHP_AP_ARM_CORESIGHT_ONLINE);
 	cpu_pm_unregister_notifier(&coresight_cpu_pm_nb);
 }
 
