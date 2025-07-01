@@ -6,6 +6,7 @@
 #include <linux/acpi.h>
 #include <linux/bitfield.h>
 #include <linux/build_bug.h>
+#include <linux/cpu_pm.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/types.h>
@@ -430,6 +431,11 @@ void coresight_set_percpu_local_path(struct coresight_path *path)
 	this_cpu_write(percpu_path, path);
 }
 EXPORT_SYMBOL_GPL(coresight_set_percpu_local_path);
+
+static struct coresight_path *coresight_get_percpu_local_path(void)
+{
+	return this_cpu_read(percpu_path);
+}
 
 /*
  * coresight_disable_path_from : Disable components in the given path beyond
@@ -1647,6 +1653,91 @@ static void coresight_release_device_list(void)
 	}
 }
 
+static bool coresight_pm_is_needed(struct coresight_path *path)
+{
+	struct coresight_device *source;
+
+	if (!path)
+		return false;
+
+	source = coresight_get_source(path);
+	if (!source)
+		return false;
+
+	/* pm_save_disable() and pm_restore_enable() must be paired */
+	if (!coresight_ops(source)->pm_save_disable ||
+	    !coresight_ops(source)->pm_restore_enable)
+		return false;
+
+	/* Save and restore only if the source is active */
+	if (coresight_get_mode(source))
+		return true;
+
+	return false;
+}
+
+static int coresight_pm_device_save(struct coresight_device *csdev)
+{
+	return coresight_ops(csdev)->pm_save_disable(csdev);
+}
+
+static void coresight_pm_device_restore(struct coresight_device *csdev)
+{
+	coresight_ops(csdev)->pm_restore_enable(csdev);
+}
+
+static int coresight_pm_save(struct coresight_path *path)
+{
+	struct coresight_device *source = coresight_get_source(path);
+
+	return coresight_pm_device_save(source);
+}
+
+static void coresight_pm_restore(struct coresight_path *path)
+{
+	struct coresight_device *source = coresight_get_source(path);
+
+	coresight_pm_device_restore(source);
+}
+
+static int coresight_cpu_pm_notify(struct notifier_block *nb, unsigned long cmd,
+				   void *v)
+{
+	struct coresight_path *path = coresight_get_percpu_local_path();
+
+	if (!coresight_pm_is_needed(path))
+		return NOTIFY_OK;
+
+	switch (cmd) {
+	case CPU_PM_ENTER:
+		if (coresight_pm_save(path))
+			return NOTIFY_BAD;
+		break;
+	case CPU_PM_EXIT:
+	case CPU_PM_ENTER_FAILED:
+		coresight_pm_restore(path);
+		break;
+	default:
+		return NOTIFY_DONE;
+	}
+
+	return NOTIFY_OK;
+}
+
+static struct notifier_block coresight_cpu_pm_nb = {
+	.notifier_call = coresight_cpu_pm_notify,
+};
+
+static int __init coresight_pm_setup(void)
+{
+	return cpu_pm_register_notifier(&coresight_cpu_pm_nb);
+}
+
+static void coresight_pm_cleanup(void)
+{
+	cpu_pm_unregister_notifier(&coresight_cpu_pm_nb);
+}
+
 const struct bus_type coresight_bustype = {
 	.name	= "coresight",
 };
@@ -1701,9 +1792,15 @@ static int __init coresight_init(void)
 
 	/* initialise the coresight syscfg API */
 	ret = cscfg_init();
+	if (ret)
+		goto exit_notifier;
+
+	ret = coresight_pm_setup();
 	if (!ret)
 		return 0;
 
+	cscfg_exit();
+exit_notifier:
 	atomic_notifier_chain_unregister(&panic_notifier_list,
 					     &coresight_notifier);
 exit_perf:
@@ -1715,6 +1812,7 @@ exit_bus_unregister:
 
 static void __exit coresight_exit(void)
 {
+	coresight_pm_cleanup();
 	cscfg_exit();
 	atomic_notifier_chain_unregister(&panic_notifier_list,
 					     &coresight_notifier);
