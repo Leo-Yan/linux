@@ -113,6 +113,29 @@ struct coresight_device *coresight_get_percpu_source(int cpu)
 	return per_cpu(csdev_source, cpu);
 }
 
+/*
+ * The source device's csdev->path is always set on the local CPU.
+ * CPU PM notifiers also run on the same CPU, so accesses to
+ * csdev->path are serialized.
+ *
+ * When the path is constructed, each component on the path takes module
+ * reference counts, and the source's csdev->path is set last. Therefore,
+ * when the CPU PM notifier retrieves the path on the local CPU, a non-NULL
+ * csdev->path guarantees that the path is safe to iterate over.
+ */
+static struct coresight_path *coresight_get_local_cpu_path(void)
+{
+	struct coresight_device *csdev;
+
+	guard(raw_spinlock_irqsave)(&coresight_dev_lock);
+
+	csdev = this_cpu_read(csdev_source);
+	if (!csdev)
+		return NULL;
+
+	return csdev->path;
+}
+
 static struct coresight_device *coresight_get_source(struct coresight_path *path)
 {
 	struct coresight_device *csdev;
@@ -1766,8 +1789,14 @@ static void coresight_release_device_list(void)
 	}
 }
 
-static bool coresight_pm_is_needed(struct coresight_device *csdev)
+static bool coresight_pm_is_needed(struct coresight_path *path)
 {
+	struct coresight_device *csdev;
+
+	if (!path)
+		return false;
+
+	csdev = coresight_get_source(path);
 	if (!csdev)
 		return false;
 
@@ -1793,33 +1822,58 @@ static void coresight_pm_device_restore(struct coresight_device *csdev)
 	coresight_ops(csdev)->pm_restore_enable(csdev);
 }
 
-static int coresight_pm_save(struct coresight_device *source)
+static int coresight_pm_save(struct coresight_path *path)
 {
-	return coresight_pm_device_save(source);
+	struct coresight_device *source;
+	struct coresight_node *from, *to;
+	int ret;
+
+	source = coresight_get_source(path);
+	ret = coresight_pm_device_save(source);
+	if (ret)
+		return ret;
+
+	coresight_disable_helpers(source, path);
+
+	from = coresight_path_first_node(path);
+	/* Up to the node before sink to avoid latency */
+	to = list_prev_entry(coresight_path_last_node(path), link);
+	coresight_disable_path_from_to(path, from, to);
+
+	return 0;
 }
 
-static void coresight_pm_restore(struct coresight_device *source)
+static void coresight_pm_restore(struct coresight_path *path)
 {
+	struct coresight_device *source;
+	struct coresight_node *from, *to;
+
+	source = coresight_get_source(path);
+	from = coresight_path_first_node(path);
+	/* Up to the node before sink to avoid latency */
+	to = list_prev_entry(coresight_path_last_node(path), link);
+	coresight_enable_path_from_to(path, coresight_get_mode(source),
+				      from, to);
+
 	coresight_pm_device_restore(source);
 }
 
 static int coresight_cpu_pm_notify(struct notifier_block *nb, unsigned long cmd,
 				   void *v)
 {
-	struct coresight_device *source =
-		coresight_get_percpu_source(smp_processor_id());
+	struct coresight_path *path = coresight_get_local_cpu_path();
 
-	if (!coresight_pm_is_needed(source))
+	if (!coresight_pm_is_needed(path))
 		return NOTIFY_OK;
 
 	switch (cmd) {
 	case CPU_PM_ENTER:
-		if (coresight_pm_save(source))
+		if (coresight_pm_save(path))
 			return NOTIFY_BAD;
 		break;
 	case CPU_PM_EXIT:
 	case CPU_PM_ENTER_FAILED:
-		coresight_pm_restore(source);
+		coresight_pm_restore(path);
 		break;
 	default:
 		return NOTIFY_DONE;
