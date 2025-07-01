@@ -87,24 +87,36 @@ void cti_write_all_hw_regs(struct cti_drvdata *drvdata)
 }
 
 /* write regs to hardware and enable */
-static int cti_enable_hw(struct cti_drvdata *drvdata)
+static int cti_enable_hw(struct cti_drvdata *drvdata, enum cs_mode mode)
 {
+	struct coresight_device	*csdev = drvdata->csdev;
 	struct cti_config *config = &drvdata->config;
+	enum cs_mode curr_mode;
 	int rc;
 
 	guard(raw_spinlock)(&drvdata->spinlock);
+
+	curr_mode = coresight_get_mode(csdev);
+
+	/* The device has been configured with an incompatible mode */
+	if (curr_mode != CS_MODE_DISABLED && curr_mode != mode)
+		return -EBUSY;
 
 	/* no need to do anything if enabled or unpowered*/
 	if (config->hw_enabled || !config->hw_powered)
 		goto cti_state_unchanged;
 
+	if (drvdata->config.enable_req_count)
+		goto cti_state_unchanged;
+
 	/* claim the device */
-	rc = coresight_claim_device(drvdata->csdev);
+	rc = coresight_claim_device(csdev);
 	if (rc)
 		return rc;
 
 	cti_write_all_hw_regs(drvdata);
 
+	coresight_set_mode(csdev, mode);
 	config->hw_enabled = true;
 
 cti_state_unchanged:
@@ -156,6 +168,8 @@ static int cti_disable_hw(struct cti_drvdata *drvdata)
 	/* check refcount - disable on 0 */
 	if (--drvdata->config.enable_req_count > 0)
 		goto cti_not_disabled;
+
+	coresight_set_mode(csdev, CS_MODE_DISABLED);
 
 	/* no need to do anything if disabled or cpu unpowered */
 	if (!config->hw_enabled || !config->hw_powered)
@@ -796,7 +810,7 @@ int cti_enable(struct coresight_device *csdev, enum cs_mode mode,
 {
 	struct cti_drvdata *drvdata = csdev_to_cti_drvdata(csdev);
 
-	return cti_enable_hw(drvdata);
+	return cti_enable_hw(drvdata, mode);
 }
 
 int cti_disable(struct coresight_device *csdev, struct coresight_path *path)
