@@ -914,6 +914,9 @@ static bool arm_spe__synth_ds(struct arm_spe_queue *speq,
 			      union perf_mem_data_src *data_src)
 {
 	struct arm_spe *spe = speq->spe;
+	struct perf_cpu_map *cpus;
+	struct perf_cpu perf_cpu;
+	int16_t cpu_nr;
 	u64 *metadata = NULL;
 	u64 midr;
 	unsigned int i;
@@ -935,13 +938,21 @@ static bool arm_spe__synth_ds(struct arm_spe_queue *speq,
 			if (!spe->is_homogeneous)
 				return false;
 
-			/* In homogeneous system, simply use CPU0's metadata */
-			if (spe->metadata)
-				metadata = spe->metadata[0];
+			cpus = perf_pmus__find_by_type(spe->pmu_type)->cpus;
+			if (!cpus)
+				return false;
+
+			/* In a homogeneous system, fetch the first CPU in the map. */
+			perf_cpu = perf_cpu_map__cpu(cpus, 0);
+			if (perf_cpu.cpu == -1)
+				return false;
+
+			cpu_nr = perf_cpu.cpu;
 		} else {
-			metadata = arm_spe__get_metadata_by_cpu(spe, speq->cpu);
+			cpu_nr = speq->cpu;
 		}
 
+		metadata = arm_spe__get_metadata_by_cpu(spe, cpu_nr);
 		if (!metadata)
 			return false;
 
