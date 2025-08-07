@@ -476,37 +476,54 @@ static unsigned long __trbe_normal_offset(struct perf_output_handle *handle)
 	 * trbe_base			limit	trbe_base + nr_pages
 	 *
 	 * TRBE could write into [head..tail] area. Unless the tail is right at
-	 * the end of the buffer, neither an wrap around nor an IRQ is expected
-	 * while being enabled.
+	 * the end of the buffer, a wrap around is not expected while being
+	 * enabled. A trigger IRQ will notify the tool to read data if the
+	 * watermark is located between the head and the tail, the trigger count
+	 * is calculated based on the wakeup offset (see the following code
+	 * section).
 	 *
 	 * 2) head == tail
 	 *
 	 *	head = tail (size > 0)
 	 * +----|-------------------------------+
-	 * |%%%%|###############################|
+	 * |####|###############################|
 	 * +----|-------------------------------+
 	 * trbe_base				limit = trbe_base + nr_pages
+	 *      Stop on trigger
 	 *
-	 * TRBE should just write into [head..base + nr_pages] area even though
-	 * the entire buffer is empty. Reason being, when the trace reaches the
-	 * end of the buffer, it will just wrap around with an IRQ giving an
-	 * opportunity to reconfigure the buffer.
+	 * TRBE can write to the entire buffer area if the buffer is empty. It
+	 * first writes to the [head .. base + nr_pages] area in the wrap mode.
+	 * When the trace reaches the end of the buffer, it wraps around and an
+	 * IRQ is generated to provide an opportunity to reconfigure the buffer.
+	 * Tracing continues to write data into the [trbe_base..tail] area,
+	 * and the unconsumed data is guarded by the trigger stop before
+	 * reaching the tail.
 	 *
 	 * 3) tail < head
 	 *
 	 *	tail			head
 	 * +----|-----------------------|-------+
-	 * |%%%%|$$$$$$$$$$$$$$$$$$$$$$$|#######|
+	 * |####|$$$$$$$$$$$$$$$$$$$$$$$|#######|
 	 * +----|-----------------------|-------+
 	 * trbe_base				limit = trbe_base + nr_pages
+	 *      Stop on trigger
 	 *
-	 * TRBE should just write into [head..base + nr_pages] area even though
-	 * the [trbe_base..tail] is also empty. Reason being, when the trace
-	 * reaches the end of the buffer, it will just wrap around with an IRQ
-	 * giving an opportunity to reconfigure the buffer.
+	 * TRBE can first write into the [head..base + nr_pages] area. When the
+	 * trace reaches the end of the buffer, it wraps around and an IRQ is
+	 * generated to provide an opportunity to reconfigure the buffer.
+	 * Tracing continues to write data into the [trbe_base..tail] area,
+	 * and the unconsumed data is guarded by the trigger stop before
+	 * reaching the tail.
 	 */
 	if (head < tail)
 		limit = round_down(tail, PAGE_SIZE);
+	/*
+	 * For 'head >= tail' case, set the trigger count for guarding the
+	 * unconsumed data after the buffer wrap up.
+	 */
+	else
+		buf->trbe_count = round_down(handle->size,
+					     cpudata->trbe_hw_align);
 
 	/*
 	 * Wakeup may be arbitrarily far into the future. If it's not in the
@@ -624,22 +641,42 @@ static void set_trbe_limit_pointer_enabled(struct trbe_buf *buf)
 	trblimitr &= ~TRBLIMITR_EL1_LIMIT_MASK;
 
 	/*
-	 * Fill trace buffer mode is used here while configuring the
-	 * TRBE for trace capture. In this particular mode, the trace
-	 * collection is stopped and a maintenance interrupt is raised
-	 * when the current write pointer wraps. This pause in trace
-	 * collection gives the software an opportunity to capture the
+	 * Configure trace buffer mode and trigger mode for maintenance
+	 * interrupt, and it gives the software an opportunity to capture the
 	 * trace data in the interrupt handler, before reconfiguring
 	 * the TRBE.
 	 */
-	trblimitr |= (TRBLIMITR_EL1_FM_FILL << TRBLIMITR_EL1_FM_SHIFT) &
-		     TRBLIMITR_EL1_FM_MASK;
+	if (buf->trbe_write + buf->trbe_count < buf->trbe_limit) {
+		/*
+		 * Fill trace buffer mode is used here while configuring the
+		 * TRBE for trace capture. In this particular mode, the trace
+		 * collection is stopped and a maintenance interrupt is raised
+		 * when the current write pointer wraps.
+		 *
+		 * IRQ on trigger. When a trigger event is raised, the hardware
+		 * trace will continue to collect data.
+		 */
+		trblimitr |= FIELD_PREP(TRBLIMITR_EL1_FM_MASK, TRBLIMITR_EL1_FM_FILL) |
+			     FIELD_PREP(TRBLIMITR_EL1_TM_MASK, TRBLIMITR_EL1_TM_IRQ);
+	} else if (buf->trbe_write + buf->trbe_count > buf->trbe_limit) {
+		/*
+		 * Wrap buffer mode continues trace collection and raises
+		 * maintenance interrupt on current write pointer wrap.
+		 *
+		 * Stop on trigger. Stop collection when a trigger event is
+		 * raised to avoid overwriting.
+		 */
+		trblimitr |= FIELD_PREP(TRBLIMITR_EL1_FM_MASK, TRBLIMITR_EL1_FM_WRAP) |
+			     FIELD_PREP(TRBLIMITR_EL1_TM_MASK, TRBLIMITR_EL1_TM_STOP);
+	} else {
+		/*
+		 * If the trigger position is the same as the limit, stop on
+		 * both fill mode and trigger.
+		 */
+		trblimitr |= FIELD_PREP(TRBLIMITR_EL1_FM_MASK, TRBLIMITR_EL1_FM_FILL) |
+			     FIELD_PREP(TRBLIMITR_EL1_TM_MASK, TRBLIMITR_EL1_TM_STOP);
+	}
 
-	/*
-	 * IRQ on trigger. When a trigger event is raised, the hardware
-	 * trace will continue to collect data.
-	 */
-	trblimitr |= FIELD_PREP(TRBLIMITR_EL1_TM_MASK, TRBLIMITR_EL1_TM_IRQ);
 	trblimitr |= (addr & PAGE_MASK);
 	set_trbe_enabled(buf->cpudata, trblimitr);
 }
@@ -678,7 +715,7 @@ static enum trbe_fault_action trbe_get_fault_act(struct perf_output_handle *hand
 		return TRBE_FAULT_ACT_FATAL;
 
 	if (is_trbe_running(trbsr)) {
-		if (is_trbe_trg(trbsr))
+		if (is_trbe_trg(trbsr) || is_trbe_wrap(trbsr))
 			return TRBE_FAULT_ACT_CONTINUOUS;
 
 		WARN(1, "Unexpected running state (TRBSR=%llx)\n", trbsr);
@@ -733,10 +770,11 @@ static unsigned long trbe_get_trace_size(struct perf_output_handle *handle,
 	end_off = write - buf->trbe_base;
 	start_off = PERF_IDX2OFF(handle->head, buf);
 
-	if (WARN_ON_ONCE(end_off < start_off))
-		return 0;
+	if (end_off >= start_off)
+		size = end_off - start_off;
+	else
+		size = end_off + buf->nr_pages * PAGE_SIZE - start_off;
 
-	size = end_off - start_off;
 	/*
 	 * If the TRBE is affected by the following erratum, we must fill
 	 * the space we skipped with IGNORE packets. And we are always
