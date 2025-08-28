@@ -40,9 +40,13 @@ enum arm_spe_op_type {
 	/* Second level operation type for memory / SIMD */
 	ARM_SPE_OP_GP_REG		= 1 << 8,	/* General purpose reg */
 	ARM_SPE_OP_UNSPEC_REG		= 1 << 9,	/* Unspecified register */
-	ARM_SPE_OP_NV_SYSREG		= 1 << 10,	/* Nested virtualization */
-	ARM_SPE_OP_SIMD_FP		= 1 << 11,	/* SIMD/FP */
-	ARM_SPE_OP_SVE			= 1 << 12,	/* SVE */
+	ARM_SPE_OP_MTE_TAG		= 1 << 10,	/* MTE tag */
+	ARM_SPE_OP_NV_SYSREG		= 1 << 11,	/* Nested virtualization */
+	ARM_SPE_OP_MEMCPY		= 1 << 12,	/* Memcpy */
+	ARM_SPE_OP_MEMSET		= 1 << 13,	/* Memset */
+	ARM_SPE_OP_GCS			= 1 << 14,	/* GCS */
+	ARM_SPE_OP_SIMD_FP		= 1 << 15,	/* SIMD/FP */
+	ARM_SPE_OP_SVE			= 1 << 16,	/* SVE */
 
 	/* Assisted information for memory / SIMD */
 	ARM_SPE_OP_LD			= 1 << 20,	/* Load */
@@ -54,6 +58,7 @@ enum arm_spe_op_type {
 	ARM_SPE_OP_EXCL			= 1 << 26,	/* Exclusive */
 	ARM_SPE_OP_AR			= 1 << 27,	/* Acquire/Release */
 	ARM_SPE_OP_SG			= 1 << 28,	/* Gather/Scatter */
+	ARM_SPE_OP_COMM			= 1 << 30,	/* Common */
 
 	/* Second level operation type for BRANCH_ERET */
 	ARM_SPE_OP_BR_COND		= 1 << 8,
