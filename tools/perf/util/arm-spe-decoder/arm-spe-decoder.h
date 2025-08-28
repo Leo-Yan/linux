@@ -37,32 +37,31 @@ enum arm_spe_op_type {
 	ARM_SPE_OP_LDST		= 1 << 1,
 	ARM_SPE_OP_BRANCH_ERET	= 1 << 2,
 
-	/* Second level operation type for OTHER */
-	ARM_SPE_OP_SVE_OTHER		= 1 << 16,
-	ARM_SPE_OP_SVE_FP		= 1 << 17,
-	ARM_SPE_OP_SVE_PRED_OTHER	= 1 << 18,
+	/* Second level operation type for memory / SIMD */
+	ARM_SPE_OP_GP_REG		= 1 << 8,	/* General purpose reg */
+	ARM_SPE_OP_UNSPEC_REG		= 1 << 9,	/* Unspecified register */
+	ARM_SPE_OP_NV_SYSREG		= 1 << 10,	/* Nested virtualization */
+	ARM_SPE_OP_SIMD_FP		= 1 << 11,	/* SIMD/FP */
+	ARM_SPE_OP_SVE			= 1 << 12,	/* SVE */
 
-	/* Second level operation type for LDST */
-	ARM_SPE_OP_LD			= 1 << 16,
-	ARM_SPE_OP_ST			= 1 << 17,
-	ARM_SPE_OP_ATOMIC		= 1 << 18,
-	ARM_SPE_OP_EXCL			= 1 << 19,
-	ARM_SPE_OP_AR			= 1 << 20,
-	ARM_SPE_OP_SIMD_FP		= 1 << 21,
-	ARM_SPE_OP_GP_REG		= 1 << 22,
-	ARM_SPE_OP_UNSPEC_REG		= 1 << 23,
-	ARM_SPE_OP_NV_SYSREG		= 1 << 24,
-	ARM_SPE_OP_SVE_LDST		= 1 << 25,
-	ARM_SPE_OP_SVE_PRED_LDST	= 1 << 26,
-	ARM_SPE_OP_SVE_SG		= 1 << 27,
+	/* Assisted information for memory / SIMD */
+	ARM_SPE_OP_LD			= 1 << 20,	/* Load */
+	ARM_SPE_OP_ST			= 1 << 21,	/* Store */
+	ARM_SPE_OP_DP			= 1 << 22,	/* Data processing */
+	ARM_SPE_OP_FP			= 1 << 23,	/* Floating-point */
+	ARM_SPE_OP_PRED			= 1 << 24,	/* Predicated */
+	ARM_SPE_OP_ATOMIC		= 1 << 25,	/* Atomic */
+	ARM_SPE_OP_EXCL			= 1 << 26,	/* Exclusive */
+	ARM_SPE_OP_AR			= 1 << 27,	/* Acquire/Release */
+	ARM_SPE_OP_SG			= 1 << 28,	/* Gather/Scatter */
 
 	/* Second level operation type for BRANCH_ERET */
-	ARM_SPE_OP_BR_COND		= 1 << 16,
-	ARM_SPE_OP_BR_INDIRECT		= 1 << 17,
-	ARM_SPE_OP_BR_GCS		= 1 << 18,
-	ARM_SPE_OP_BR_CR_BL		= 1 << 19,
-	ARM_SPE_OP_BR_CR_RET		= 1 << 20,
-	ARM_SPE_OP_BR_CR_NON_BL_RET	= 1 << 21,
+	ARM_SPE_OP_BR_COND		= 1 << 8,
+	ARM_SPE_OP_BR_INDIRECT		= 1 << 9,
+	ARM_SPE_OP_BR_GCS		= 1 << 10,
+	ARM_SPE_OP_BR_CR_BL		= 1 << 11,
+	ARM_SPE_OP_BR_CR_RET		= 1 << 12,
+	ARM_SPE_OP_BR_CR_NON_BL_RET	= 1 << 13,
 };
 
 enum arm_spe_common_data_source {
