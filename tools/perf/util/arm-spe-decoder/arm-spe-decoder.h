@@ -122,6 +122,7 @@ struct arm_spe_record {
 	u64 phys_addr;
 	u64 context_id;
 	u16 source;
+	u32 length;
 };
 
 struct arm_spe_insn;

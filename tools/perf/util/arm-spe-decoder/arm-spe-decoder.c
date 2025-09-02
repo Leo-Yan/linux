@@ -220,6 +220,7 @@ static int arm_spe_read_record(struct arm_spe_decoder *decoder)
 						decoder->record.op |= ARM_SPE_OP_ATOMIC;
 				} else if (SPE_OP_PKT_LDST_SUBCLASS_SVE_SME_REG(payload)) {
 					decoder->record.op |= ARM_SPE_OP_SVE;
+					decoder->record.length = SPE_OP_PKG_SVE_EVL(payload);
 					if (payload & SPE_OP_PKT_SVE_PRED)
 						decoder->record.op |= ARM_SPE_OP_PRED;
 					if (payload & SPE_OP_PKT_SVE_SG)
@@ -239,12 +240,14 @@ static int arm_spe_read_record(struct arm_spe_decoder *decoder)
 				decoder->record.op |= ARM_SPE_OP_OTHER;
 				if (SPE_OP_PKT_OTHER_SUBCLASS_SVE(payload)) {
 					decoder->record.op |= ARM_SPE_OP_SVE | ARM_SPE_OP_DP;
+					decoder->record.length = SPE_OP_PKG_SVE_EVL(payload);
 					if (payload & SPE_OP_PKT_OTHER_FP)
 						decoder->record.op |= ARM_SPE_OP_FP;
 					if (payload & SPE_OP_PKT_SVE_PRED)
 						decoder->record.op |= ARM_SPE_OP_PRED;
 				} else if (SPE_OP_PKT_OTHER_SUBCLASS_SME(payload)) {
 					decoder->record.op |= ARM_SPE_OP_SME;
+					decoder->record.length = SPE_OP_PKG_SME_ETS(payload);
 					if (payload & SPE_OP_PKT_OTHER_FP)
 						decoder->record.op |= ARM_SPE_OP_FP;
 				} else if (SPE_OP_PKT_OTHER_SUBCLASS_OTHER(payload)) {
