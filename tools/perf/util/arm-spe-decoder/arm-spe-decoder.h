@@ -47,6 +47,8 @@ enum arm_spe_op_type {
 	ARM_SPE_OP_GCS			= 1 << 14,	/* GCS */
 	ARM_SPE_OP_SIMD_FP		= 1 << 15,	/* SIMD/FP */
 	ARM_SPE_OP_SVE			= 1 << 16,	/* SVE */
+	ARM_SPE_OP_SME			= 1 << 17,	/* SME */
+	ARM_SPE_OP_ASE			= 1 << 18,	/* Advanced SIMD */
 
 	/* Assisted information for memory / SIMD */
 	ARM_SPE_OP_LD			= 1 << 20,	/* Load */
@@ -59,6 +61,7 @@ enum arm_spe_op_type {
 	ARM_SPE_OP_AR			= 1 << 27,	/* Acquire/Release */
 	ARM_SPE_OP_SG			= 1 << 28,	/* Gather/Scatter */
 	ARM_SPE_OP_COMM			= 1 << 30,	/* Common */
+	ARM_SPE_OP_COND			= 1 << 31,	/* Conditional */
 
 	/* Second level operation type for BRANCH_ERET */
 	ARM_SPE_OP_BR_COND		= 1 << 8,
