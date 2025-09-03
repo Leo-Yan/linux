@@ -1309,14 +1309,18 @@ union perf_mem_data_src {
 			mem_snoopx  :  2, /* Snoop mode, ext */
 			mem_blk     :  3, /* Access blocked */
 			mem_hops    :  3, /* Hop level */
-			mem_rsvd    : 18;
+			mem_op_ext  :  5, /* Extended type of opcode */
+			mem_aff     :  8, /* Affiliate info */
+			mem_rsvd    :  5;
 	};
 };
 #elif defined(__BIG_ENDIAN_BITFIELD)
 union perf_mem_data_src {
 	__u64 val;
 	struct {
-		__u64	mem_rsvd    : 18,
+		__u64	mem_rsvd    :  5,
+			mem_aff     :  8, /* Affiliate info */
+			mem_op_ext  :  5, /* Extended type of opcode */
 			mem_hops    :  3, /* Hop level */
 			mem_blk     :  3, /* Access blocked */
 			mem_snoopx  :  2, /* Snoop mode, ext */
@@ -1425,6 +1429,25 @@ union perf_mem_data_src {
 #define PERF_MEM_HOPS_3				0x0004 /* Remote board */
 /* 5-7 available */
 #define PERF_MEM_HOPS_SHIFT			43
+
+/* Extended type of memory opcode: */
+#define PERF_MEM_EXT_OP_MTE_TAG			0x0001 /* MTE tag */
+#define PERF_MEM_EXT_OP_NESTED_VIRT		0x0002 /* Nested virtualization */
+#define PERF_MEM_EXT_OP_MEMCPY			0x0004 /* Memory copy */
+#define PERF_MEM_EXT_OP_MEMSET			0x0008 /* Memory set */
+#define PERF_MEM_EXT_OP_SIMD			0x0010 /* SIMD */
+#define PERF_MEM_EXT_OP_SHIFT			46
+
+/* Affiliate info */
+#define PERF_MEM_AFF_DP				0x0001 /* Data processing */
+#define PERF_MEM_AFF_FP				0x0002 /* Floating-point */
+#define PERF_MEM_AFF_PRED			0x0004 /* Predicated */
+#define PERF_MEM_AFF_ATOMIC			0x0008 /* Atomic */
+#define PERF_MEM_AFF_EXCLUSIVE			0x0010 /* Exclusive */
+#define PERF_MEM_AFF_AR				0x0020 /* Acquire/release */
+#define PERF_MEM_AFF_SG				0x0040 /* Gather/Scatter */
+#define PERF_MEM_AFF_CONDITIONAL		0x0080 /* Conditional */
+#define PERF_MEM_AFF_SHIFT			51
 
 #define PERF_MEM_S(a, s) \
 	(((__u64)PERF_MEM_##a##_##s) << PERF_MEM_##a##_SHIFT)

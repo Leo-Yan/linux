@@ -46,6 +46,7 @@ int perf_mem__lvl_scnprintf(char *out, size_t sz, const struct mem_info *mem_inf
 int perf_mem__snp_scnprintf(char *out, size_t sz, const struct mem_info *mem_info);
 int perf_mem__lck_scnprintf(char *out, size_t sz, const struct mem_info *mem_info);
 int perf_mem__blk_scnprintf(char *out, size_t sz, const struct mem_info *mem_info);
+int perf_mem__aff_scnprintf(char *out, size_t sz, const struct mem_info *mem_info);
 
 int perf_script__meminfo_scnprintf(char *bf, size_t size, const struct mem_info *mem_info);
 

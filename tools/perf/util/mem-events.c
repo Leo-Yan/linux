@@ -413,11 +413,13 @@ static const char * const mem_hops[] = {
 
 static int perf_mem__op_scnprintf(char *out, size_t sz, const struct mem_info *mem_info)
 {
-	u64 op = PERF_MEM_OP_NA;
+	u64 op = PERF_MEM_OP_NA, sub_op = 0;
 	int l;
 
-	if (mem_info)
+	if (mem_info) {
 		op = mem_info__const_data_src(mem_info)->mem_op;
+		sub_op = mem_info__const_data_src(mem_info)->mem_op_ext;
+	}
 
 	if (op & PERF_MEM_OP_NA)
 		l = scnprintf(out, sz, "N/A");
@@ -431,6 +433,17 @@ static int perf_mem__op_scnprintf(char *out, size_t sz, const struct mem_info *m
 		l = scnprintf(out, sz, "EXEC");
 	else
 		l = scnprintf(out, sz, "No");
+
+	if (sub_op & PERF_MEM_EXT_OP_MTE_TAG)
+		l = scnprintf(out, sz, " MTE");
+	else if (sub_op & PERF_MEM_EXT_OP_NESTED_VIRT)
+		l = scnprintf(out, sz, " NV");
+	else if (sub_op & PERF_MEM_EXT_OP_MEMCPY)
+		l = scnprintf(out, sz, " MEMCPY");
+	else if (sub_op & PERF_MEM_EXT_OP_MEMSET)
+		l = scnprintf(out, sz, " MEMSET");
+	else if (sub_op & PERF_MEM_EXT_OP_SIMD)
+		l = scnprintf(out, sz, " SIMD");
 
 	return l;
 }
@@ -600,6 +613,42 @@ int perf_mem__blk_scnprintf(char *out, size_t sz, const struct mem_info *mem_inf
 	return l;
 }
 
+int perf_mem__aff_scnprintf(char *out, size_t sz, const struct mem_info *mem_info)
+{
+	size_t l = 0;
+	u64 mask = 0;
+
+	sz -= 1; /* -1 for null termination */
+	out[0] = '\0';
+
+	if (mem_info)
+		mask = mem_info__const_data_src(mem_info)->mem_aff;
+
+	if (!mask) {
+		l += scnprintf(out + l, sz - l, " N/A");
+		return l;
+	}
+
+	if (mask & PERF_MEM_AFF_DP)
+		l += scnprintf(out + l, sz - l, " DP");
+	if (mask & PERF_MEM_AFF_FP)
+		l += scnprintf(out + l, sz - l, " FP");
+	if (mask & PERF_MEM_AFF_PRED)
+		l += scnprintf(out + l, sz - l, " PRED");
+	if (mask & PERF_MEM_AFF_ATOMIC)
+		l += scnprintf(out + l, sz - l, " ATOMIC");
+	if (mask & PERF_MEM_AFF_EXCLUSIVE)
+		l += scnprintf(out + l, sz - l, " EX");
+	if (mask & PERF_MEM_AFF_AR)
+		l += scnprintf(out + l, sz - l, " AR");
+	if (mask & PERF_MEM_AFF_SG)
+		l += scnprintf(out + l, sz - l, " SG");
+	if (mask & PERF_MEM_AFF_CONDITIONAL)
+		l += scnprintf(out + l, sz - l, " COND");
+
+	return l;
+}
+
 int perf_script__meminfo_scnprintf(char *out, size_t sz, const struct mem_info *mem_info)
 {
 	int i = 0;
@@ -616,6 +665,8 @@ int perf_script__meminfo_scnprintf(char *out, size_t sz, const struct mem_info *
 	i += perf_mem__lck_scnprintf(out + i, sz - i, mem_info);
 	i += scnprintf(out + i, sz - i, "|BLK ");
 	i += perf_mem__blk_scnprintf(out + i, sz - i, mem_info);
+	i += scnprintf(out + i, sz - i, "|AFF ");
+	i += perf_mem__aff_scnprintf(out + i, sz - i, mem_info);
 
 	return i;
 }
