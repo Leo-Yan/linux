@@ -1017,6 +1017,34 @@ arm_spe__synth_data_source(struct arm_spe_queue *speq,
 	else
 		return data_src;
 
+	if (record->op & ARM_SPE_OP_MTE_TAG)
+		data_src.mem_op_ext = PERF_MEM_EXT_OP_MTE_TAG;
+	else if (record->op & ARM_SPE_OP_NV_SYSREG)
+		data_src.mem_op_ext = PERF_MEM_EXT_OP_NESTED_VIRT;
+	else if (record->op & ARM_SPE_OP_MEMCPY)
+		data_src.mem_op_ext = PERF_MEM_EXT_OP_MEMCPY;
+	else if (record->op & ARM_SPE_OP_MEMSET)
+		data_src.mem_op_ext = PERF_MEM_EXT_OP_MEMSET;
+	else if (record->op & (ARM_SPE_OP_SIMD_FP | ARM_SPE_OP_SVE | ARM_SPE_OP_SME | ARM_SPE_OP_ASE))
+		data_src.mem_op_ext = PERF_MEM_EXT_OP_SIMD;
+
+	if (record->op & ARM_SPE_OP_DP)
+		data_src.mem_aff = PERF_MEM_AFF_DP;
+	if (record->op & ARM_SPE_OP_FP)
+		data_src.mem_aff = PERF_MEM_AFF_FP;
+	if (record->op & ARM_SPE_OP_PRED)
+		data_src.mem_aff = PERF_MEM_AFF_PRED;
+	if (record->op & ARM_SPE_OP_ATOMIC)
+		data_src.mem_aff = PERF_MEM_AFF_ATOMIC;
+	if (record->op & ARM_SPE_OP_EXCL)
+		data_src.mem_aff = PERF_MEM_AFF_EXCLUSIVE;
+	if (record->op & ARM_SPE_OP_AR)
+		data_src.mem_aff = PERF_MEM_AFF_AR;
+	if (record->op & ARM_SPE_OP_SG)
+		data_src.mem_aff = PERF_MEM_AFF_SG;
+	if (record->op & ARM_SPE_OP_COND)
+		data_src.mem_aff = PERF_MEM_AFF_CONDITIONAL;
+
 	arm_spe__synth_ds(speq, record, &data_src);
 	arm_spe__synth_memory_level(speq, record, &data_src);
 
