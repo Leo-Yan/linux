@@ -413,7 +413,7 @@ static const char * const mem_hops[] = {
 
 static int perf_mem__op_scnprintf(char *out, size_t sz, const struct mem_info *mem_info)
 {
-	u64 op = PERF_MEM_LOCK_NA;
+	u64 op = PERF_MEM_OP_NA;
 	int l;
 
 	if (mem_info)
