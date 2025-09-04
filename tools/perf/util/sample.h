@@ -67,16 +67,22 @@ struct aux_sample {
 };
 
 struct simd_flags {
-	u8	arch:1,	/* architecture (isa) */
-		pred:2;	/* predication */
+	u32	arch:  3,	/* architecture (isa) */
+		pred:  4,	/* predication */
+		resv: 25;	/* reserved */
+	u32	len:  32;	/* length */
 };
 
 /* simd architecture flags */
-#define SIMD_OP_FLAGS_ARCH_SVE		0x01	/* ARM SVE */
+#define SIMD_OP_FLAGS_ARCH_SVE		0x01	/* Arm SVE */
+#define SIMD_OP_FLAGS_ARCH_SME		0x02	/* Arm SME */
+#define SIMD_OP_FLAGS_ARCH_ASE		0x04	/* Arm Advanced SIMD */
 
 /* simd predicate flags */
 #define SIMD_OP_FLAGS_PRED_PARTIAL	0x01	/* partial predicate */
 #define SIMD_OP_FLAGS_PRED_EMPTY	0x02	/* empty predicate */
+#define SIMD_OP_FLAGS_PRED_FULL		0x04	/* full predicate */
+#define SIMD_OP_FLAGS_PRED_DISABLED	0x08	/* disabled predicate */
 
 struct perf_sample {
 	u64 ip;
