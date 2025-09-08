@@ -195,6 +195,10 @@ static const char *hist_entry__get_simd_name(struct simd_flags *simd_flags)
 
 	if (arch & SIMD_OP_FLAGS_ARCH_SVE)
 		return "SVE";
+	if (arch & SIMD_OP_FLAGS_ARCH_SME)
+		return "SME";
+	if (arch & SIMD_OP_FLAGS_ARCH_ASE)
+		return "ASE";
 	else
 		return "n/a";
 }
