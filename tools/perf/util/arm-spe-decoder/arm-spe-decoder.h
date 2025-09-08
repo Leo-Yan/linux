@@ -43,7 +43,9 @@ enum arm_spe_op_type {
 	ARM_SPE_OP_NV_SYSREG		= 1 << 10,
 	ARM_SPE_OP_SIMD_FP		= 1 << 11,
 	ARM_SPE_OP_MTE_TAG		= 1 << 12,
-	ARM_SPE_OP_SVE			= 1 << 13,
+	ARM_SPE_OP_MEMCPY		= 1 << 13,
+	ARM_SPE_OP_MEMSET		= 1 << 14,
+	ARM_SPE_OP_SVE			= 1 << 15,
 
 	/* Assisted information for memory / SIMD */
 	ARM_SPE_OP_LD			= 1 << 20,
