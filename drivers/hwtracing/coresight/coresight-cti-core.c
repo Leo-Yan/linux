@@ -91,11 +91,10 @@ static int cti_enable_hw(struct cti_drvdata *drvdata, enum cs_mode mode)
 {
 	struct cti_config *config = &drvdata->config;
 	struct coresight_device	*csdev = drvdata->csdev;
-	unsigned long flags;
 	enum cs_mode curr_mode;
 	int rc = 0;
 
-	raw_spin_lock_irqsave(&drvdata->spinlock, flags);
+	raw_spin_lock(&drvdata->spinlock);
 
 	curr_mode = coresight_get_mode(csdev);
 
@@ -121,7 +120,7 @@ static int cti_enable_hw(struct cti_drvdata *drvdata, enum cs_mode mode)
 
 	config->hw_enabled = true;
 	drvdata->config.enable_req_count++;
-	raw_spin_unlock_irqrestore(&drvdata->spinlock, flags);
+	raw_spin_unlock(&drvdata->spinlock);
 	return rc;
 
 cti_state_unchanged:
@@ -132,7 +131,7 @@ cti_err_not_enabled:
 	if (!drvdata->config.enable_req_count)
 		coresight_set_mode(csdev, CS_MODE_DISABLED);
 cti_err_out:
-	raw_spin_unlock_irqrestore(&drvdata->spinlock, flags);
+	raw_spin_unlock(&drvdata->spinlock);
 	return rc;
 }
 
