@@ -90,10 +90,9 @@ void cti_write_all_hw_regs(struct cti_drvdata *drvdata)
 static int cti_enable_hw(struct cti_drvdata *drvdata)
 {
 	struct cti_config *config = &drvdata->config;
-	unsigned long flags;
-	int rc = 0;
+	int rc;
 
-	raw_spin_lock_irqsave(&drvdata->spinlock, flags);
+	guard(raw_spinlock)(&drvdata->spinlock);
 
 	/* no need to do anything if enabled or unpowered*/
 	if (config->hw_enabled || !config->hw_powered)
@@ -102,22 +101,15 @@ static int cti_enable_hw(struct cti_drvdata *drvdata)
 	/* claim the device */
 	rc = coresight_claim_device(drvdata->csdev);
 	if (rc)
-		goto cti_err_not_enabled;
+		return rc;
 
 	cti_write_all_hw_regs(drvdata);
 
 	config->hw_enabled = true;
-	drvdata->config.enable_req_count++;
-	raw_spin_unlock_irqrestore(&drvdata->spinlock, flags);
-	return rc;
 
 cti_state_unchanged:
 	drvdata->config.enable_req_count++;
-
-	/* cannot enable due to error */
-cti_err_not_enabled:
-	raw_spin_unlock_irqrestore(&drvdata->spinlock, flags);
-	return rc;
+	return 0;
 }
 
 /* re-enable CTI on CPU when using CPU hotplug */
