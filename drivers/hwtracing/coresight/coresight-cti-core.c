@@ -926,17 +926,12 @@ static int cti_probe(struct amba_device *adev, const struct amba_id *id)
 	if (!cti_desc.name)
 		return -ENOMEM;
 
-	/* setup CPU power management handling for CPU bound CTI devices. */
-	ret = cti_pm_setup(drvdata);
-	if (ret)
-		return ret;
-
 	/* create dynamic attributes for connections */
 	ret = cti_create_cons_sysfs(dev, drvdata);
 	if (ret) {
 		dev_err(dev, "%s: create dynamic sysfs entries failed\n",
 			cti_desc.name);
-		goto pm_release;
+		return ret;
 	}
 
 	/* set up coresight component description */
@@ -950,9 +945,14 @@ static int cti_probe(struct amba_device *adev, const struct amba_id *id)
 
 	coresight_clear_self_claim_tag(&cti_desc.access);
 	drvdata->csdev = coresight_register(&cti_desc);
-	if (IS_ERR(drvdata->csdev)) {
-		ret = PTR_ERR(drvdata->csdev);
-		goto pm_release;
+	if (IS_ERR(drvdata->csdev))
+		return PTR_ERR(drvdata->csdev);
+
+	/* setup CPU power management handling for CPU bound CTI devices. */
+	ret = cti_pm_setup(drvdata);
+	if (ret) {
+		coresight_unregister(drvdata->csdev);
+		return ret;
 	}
 
 	/* add to list of CTI devices */
@@ -970,10 +970,6 @@ static int cti_probe(struct amba_device *adev, const struct amba_id *id)
 	pm_runtime_put(&adev->dev);
 	dev_info(&drvdata->csdev->dev, "CTI initialized\n");
 	return 0;
-
-pm_release:
-	cti_pm_release(drvdata);
-	return ret;
 }
 
 static struct amba_cs_uci_id uci_id_cti[] = {
