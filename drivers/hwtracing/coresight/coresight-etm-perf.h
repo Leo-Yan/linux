@@ -8,6 +8,7 @@
 #define _CORESIGHT_ETM_PERF_H
 
 #include <linux/percpu-defs.h>
+#include <kunit/test-bug.h>
 #include "coresight-priv.h"
 
 struct coresight_device;
@@ -67,8 +68,12 @@ int etm_perf_add_symlink_sink(struct coresight_device *csdev);
 void etm_perf_del_symlink_sink(struct coresight_device *csdev);
 static inline void *etm_perf_sink_config(struct perf_output_handle *handle)
 {
-	struct etm_event_data *data = perf_get_aux(handle);
+	struct etm_event_data *data;
 
+	if (kunit_get_current_test())
+		return handle->rb;
+
+	data = perf_get_aux(handle);
 	if (data)
 		return data->snk_config;
 	return NULL;

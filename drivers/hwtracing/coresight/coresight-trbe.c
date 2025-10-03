@@ -19,6 +19,7 @@
 #include <asm/cpufeature.h>
 #include <linux/kvm_host.h>
 #include <linux/vmalloc.h>
+#include <kunit/visibility.h>
 
 #include "coresight-self-hosted-trace.h"
 #include "coresight-trbe.h"
@@ -46,98 +47,16 @@
 #define TRBE_TRACE_MIN_BUF_SIZE		64
 
 enum trbe_fault_action {
-	TRBE_FAULT_ACT_WRAP,
 	TRBE_FAULT_ACT_SPURIOUS,
-	TRBE_FAULT_ACT_CONTINUOUS,
-	TRBE_FAULT_ACT_STOPPED,
+	TRBE_FAULT_ACT_OK,
 	TRBE_FAULT_ACT_FATAL,
 };
-
-struct trbe_buf {
-	/*
-	 * Even though trbe_base represents vmap()
-	 * mapped allocated buffer's start address,
-	 * it's being as unsigned long for various
-	 * arithmetic and comparision operations &
-	 * also to be consistent with trbe_write &
-	 * trbe_limit sibling pointers.
-	 */
-	unsigned long trbe_base;
-	/* The base programmed into the TRBE */
-	unsigned long trbe_hw_base;
-	unsigned long trbe_limit;
-	unsigned long trbe_write;
-	unsigned long trbe_count;
-	int nr_pages;
-	void **pages;
-	bool snapshot;
-	struct trbe_cpudata *cpudata;
-};
-
-/*
- * TRBE erratum list
- *
- * The errata are defined in arm64 generic cpu_errata framework.
- * Since the errata work arounds could be applied individually
- * to the affected CPUs inside the TRBE driver, we need to know if
- * a given CPU is affected by the erratum. Unlike the other erratum
- * work arounds, TRBE driver needs to check multiple times during
- * a trace session. Thus we need a quicker access to per-CPU
- * errata and not issue costly this_cpu_has_cap() everytime.
- * We keep a set of the affected errata in trbe_cpudata, per TRBE.
- *
- * We rely on the corresponding cpucaps to be defined for a given
- * TRBE erratum. We map the given cpucap into a TRBE internal number
- * to make the tracking of the errata lean.
- *
- * This helps in :
- *   - Not duplicating the detection logic
- *   - Streamlined detection of erratum across the system
- */
-#define TRBE_WORKAROUND_OVERWRITE_FILL_MODE	0
-#define TRBE_WORKAROUND_WRITE_OUT_OF_RANGE	1
-#define TRBE_NEEDS_DRAIN_AFTER_DISABLE		2
-#define TRBE_NEEDS_CTXT_SYNC_AFTER_ENABLE	3
-#define TRBE_IS_BROKEN				4
-
-static int trbe_errata_cpucaps[] = {
-	[TRBE_WORKAROUND_OVERWRITE_FILL_MODE] = ARM64_WORKAROUND_TRBE_OVERWRITE_FILL_MODE,
-	[TRBE_WORKAROUND_WRITE_OUT_OF_RANGE] = ARM64_WORKAROUND_TRBE_WRITE_OUT_OF_RANGE,
-	[TRBE_NEEDS_DRAIN_AFTER_DISABLE] = ARM64_WORKAROUND_2064142,
-	[TRBE_NEEDS_CTXT_SYNC_AFTER_ENABLE] = ARM64_WORKAROUND_2038923,
-	[TRBE_IS_BROKEN] = ARM64_WORKAROUND_1902691,
-	-1,		/* Sentinel, must be the last entry */
-};
-
-/* The total number of listed errata in trbe_errata_cpucaps */
-#define TRBE_ERRATA_MAX			(ARRAY_SIZE(trbe_errata_cpucaps) - 1)
 
 /*
  * Safe limit for the number of bytes that may be overwritten
  * when ARM64_WORKAROUND_TRBE_OVERWRITE_FILL_MODE is triggered.
  */
 #define TRBE_WORKAROUND_OVERWRITE_FILL_MODE_SKIP_BYTES	256
-
-/*
- * struct trbe_cpudata: TRBE instance specific data
- * @trbe_flag		- TRBE dirty/access flag support
- * @trbe_hw_align	- Actual TRBE alignment required for TRBPTR_EL1.
- * @trbe_align		- Software alignment used for the TRBPTR_EL1.
- * @cpu			- CPU this TRBE belongs to.
- * @mode		- Mode of current operation. (perf/disabled)
- * @drvdata		- TRBE specific drvdata
- * @errata		- Bit map for the errata on this TRBE.
- */
-struct trbe_cpudata {
-	bool trbe_flag;
-	u64 trbe_hw_align;
-	u64 trbe_align;
-	int cpu;
-	enum cs_mode mode;
-	struct trbe_buf *buf;
-	struct trbe_drvdata *drvdata;
-	DECLARE_BITMAP(errata, TRBE_ERRATA_MAX);
-};
 
 struct trbe_drvdata {
 	struct trbe_cpudata __percpu *cpudata;
@@ -267,34 +186,6 @@ static void trbe_reset_local(struct trbe_cpudata *cpudata)
 	write_sysreg_s(0, SYS_TRBSR_EL1);
 }
 
-static void trbe_report_wrap_event(struct perf_output_handle *handle)
-{
-	/*
-	 * Mark the buffer to indicate that there was a WRAP event by
-	 * setting the COLLISION flag. This indicates to the user that
-	 * the TRBE trace collection was stopped without stopping the
-	 * ETE and thus there might be some amount of trace that was
-	 * lost between the time the WRAP was detected and the IRQ
-	 * was consumed by the CPU.
-	 *
-	 * Setting the TRUNCATED flag would move the event to STOPPED
-	 * state unnecessarily, even when there is space left in the
-	 * ring buffer. Using the COLLISION flag doesn't have this side
-	 * effect. We only set TRUNCATED flag when there is no space
-	 * left in the ring buffer.
-	 */
-	perf_aux_output_flag(handle, PERF_AUX_FLAG_COLLISION);
-}
-
-static void trbe_truncate_event(struct perf_output_handle *handle)
-{
-	struct trbe_buf *buf = etm_perf_sink_config(handle);
-
-	perf_aux_output_flag(handle, PERF_AUX_FLAG_TRUNCATED);
-	perf_aux_output_end(handle, 0);
-	*this_cpu_ptr(buf->cpudata->drvdata->handle) = NULL;
-}
-
 /*
  * TRBE Buffer Management
  *
@@ -348,6 +239,9 @@ static void trbe_pad_buf(struct perf_output_handle *handle, int len)
 	struct trbe_buf *buf = etm_perf_sink_config(handle);
 	u64 head = PERF_IDX2OFF(handle->head, buf);
 
+	if (kunit_get_current_test())
+		return;
+
 	__trbe_pad_buf(buf, head, len);
 	if (!buf->snapshot)
 		perf_aux_output_skip(handle, len);
@@ -380,8 +274,9 @@ static u64 trbe_min_trace_buf_size(struct perf_output_handle *handle)
 	 * page than normal. With this we could then adjust the LIMIT
 	 * pointer down by a PAGE later.
 	 */
-	if (trbe_may_write_out_of_range(cpudata))
-		size += PAGE_SIZE;
+	if (trbe_may_write_out_of_range(cpudata) ||
+	    trbe_may_overwrite_in_fill_mode(cpudata))
+		size = TRBE_WORKAROUND_OVERWRITE_FILL_MODE_SKIP_BYTES;
 	return size;
 }
 
@@ -395,10 +290,9 @@ static u64 trbe_min_trace_buf_size(struct perf_output_handle *handle)
  * %%%% - Free area, disabled, trace will not be written
  * ==== - Free area, padded with ETE_IGNORE_PACKET, trace will be skipped
  */
-static u64 __trbe_next_limit(struct perf_output_handle *handle)
+VISIBLE_IF_KUNIT u64 __trbe_next_limit(struct perf_output_handle *handle)
 {
 	struct trbe_buf *buf = etm_perf_sink_config(handle);
-	struct trbe_cpudata *cpudata = buf->cpudata;
 	const u64 bufsize = buf->nr_pages * PAGE_SIZE;
 	u64 limit = bufsize, head, tail;
 
@@ -411,8 +305,9 @@ static u64 __trbe_next_limit(struct perf_output_handle *handle)
 	 *
 	 * Perf aux buffer does not have any space for the driver to write into.
 	 */
-	if (!handle->size)
-		return 0;
+	if (!handle->size) {
+		goto no_space;
+	}
 
 	/* Compute the tail and wakeup indices now that we've aligned head */
 	head = PERF_IDX2OFF(handle->head, buf);
@@ -495,12 +390,21 @@ static u64 __trbe_next_limit(struct perf_output_handle *handle)
 		return limit;
 
 	trbe_pad_buf(handle, handle->size);
+no_space:
+	if (kunit_get_current_test())
+		return 0;
+
+	perf_aux_output_flag(handle, PERF_AUX_FLAG_TRUNCATED);
+	perf_aux_output_end(handle, 0);
 	return 0;
 }
 
-static u64 __trbe_next_count(struct perf_output_handle *handle)
+EXPORT_SYMBOL_IF_KUNIT(__trbe_next_limit);
+
+VISIBLE_IF_KUNIT u64 __trbe_next_count(struct perf_output_handle *handle)
 {
 	struct trbe_buf *buf = etm_perf_sink_config(handle);
+	struct trbe_cpudata *cpudata = buf->cpudata;
 	u64 count = handle->size;
 	u64 limit = buf->trbe_limit - buf->trbe_base;
 	u64 head = PERF_IDX2OFF(handle->head, buf);
@@ -514,7 +418,7 @@ static u64 __trbe_next_count(struct perf_output_handle *handle)
 	 * take effect until a non-zero value is calculated.
 	 */
 	if (limit < buf->nr_pages * PAGE_SIZE)
-		count = min(u64, count, limit - head);
+		count = min_t(u64, count, limit - head);
 
 	/*
 	 * Wakeup may be arbitrarily far into the future. If it's not in the
@@ -547,6 +451,8 @@ static u64 __trbe_next_count(struct perf_output_handle *handle)
 	return count;
 }
 
+EXPORT_SYMBOL_IF_KUNIT(__trbe_next_count);
+
 static int trbe_compute_normal_next(struct perf_output_handle *handle)
 {
 	struct trbe_buf *buf = etm_perf_sink_config(handle);
@@ -557,9 +463,10 @@ static int trbe_compute_normal_next(struct perf_output_handle *handle)
 	 * If the head has come too close to the end of the buffer,
 	 * then pad to the end and recompute the limit.
 	 */
-	if (limit && (limit - head < trbe_min_trace_buf_size(handle))) {
+	while (limit && (limit - head < trbe_min_trace_buf_size(handle))) {
 		trbe_pad_buf(handle, limit - head);
 		limit = __trbe_next_limit(handle);
+		head = PERF_IDX2OFF(handle->head, buf);
 	}
 
 	if (!limit)
@@ -596,16 +503,9 @@ static void clr_trbe_status(void)
 
 static void set_trbe_limit_pointer_enabled(struct trbe_buf *buf)
 {
-	u64 trblimitr = read_sysreg_s(SYS_TRBLIMITR_EL1);
-	unsigned long addr = buf->trbe_limit;
+	unsigned long limit = buf->trbe_limit;
 
-	WARN_ON(!IS_ALIGNED(addr, (1UL << TRBLIMITR_EL1_LIMIT_SHIFT)));
-	WARN_ON(!IS_ALIGNED(addr, PAGE_SIZE));
-
-	trblimitr &= ~TRBLIMITR_EL1_nVM;
-	trblimitr &= ~TRBLIMITR_EL1_FM_MASK;
-	trblimitr &= ~TRBLIMITR_EL1_TM_MASK;
-	trblimitr &= ~TRBLIMITR_EL1_LIMIT_MASK;
+	WARN_ON(!IS_ALIGNED(limit, PAGE_SIZE));
 
 	/*
 	 * Configure trace buffer mode and trigger mode for maintenance
@@ -623,8 +523,8 @@ static void set_trbe_limit_pointer_enabled(struct trbe_buf *buf)
 		 * IRQ on trigger. When a trigger event is raised, the hardware
 		 * trace will continue to collect data.
 		 */
-		trblimitr |= FIELD_PREP(TRBLIMITR_EL1_FM_MASK, TRBLIMITR_EL1_FM_FILL) |
-			     FIELD_PREP(TRBLIMITR_EL1_TM_MASK, TRBLIMITR_EL1_TM_IRQ);
+		limit |= FIELD_PREP(TRBLIMITR_EL1_FM_MASK, TRBLIMITR_EL1_FM_FILL) |
+			 FIELD_PREP(TRBLIMITR_EL1_TM_MASK, TRBLIMITR_EL1_TM_IRQ);
 	} else if (buf->trbe_write + buf->trbe_count > buf->trbe_limit) {
 		/*
 		 * Wrap buffer mode continues trace collection and raises
@@ -633,29 +533,33 @@ static void set_trbe_limit_pointer_enabled(struct trbe_buf *buf)
 		 * Stop on trigger. Stop collection when a trigger event is
 		 * raised to avoid overwriting.
 		 */
-		trblimitr |= FIELD_PREP(TRBLIMITR_EL1_FM_MASK, TRBLIMITR_EL1_FM_WRAP) |
-			     FIELD_PREP(TRBLIMITR_EL1_TM_MASK, TRBLIMITR_EL1_TM_STOP);
+		limit |= FIELD_PREP(TRBLIMITR_EL1_FM_MASK, TRBLIMITR_EL1_FM_WRAP) |
+			 FIELD_PREP(TRBLIMITR_EL1_TM_MASK, TRBLIMITR_EL1_TM_STOP);
 	} else {
 		/*
 		 * If the trigger position is the same as the limit, stop on
 		 * both fill mode and trigger.
 		 */
-		trblimitr |= FIELD_PREP(TRBLIMITR_EL1_FM_MASK, TRBLIMITR_EL1_FM_FILL) |
-			     FIELD_PREP(TRBLIMITR_EL1_TM_MASK, TRBLIMITR_EL1_TM_STOP);
+		limit |= FIELD_PREP(TRBLIMITR_EL1_FM_MASK, TRBLIMITR_EL1_FM_FILL) |
+			 FIELD_PREP(TRBLIMITR_EL1_TM_MASK, TRBLIMITR_EL1_TM_STOP);
 	}
 
-	trblimitr |= (addr & PAGE_MASK);
-	set_trbe_enabled(buf->cpudata, trblimitr);
+	trace_printk("[Hardware]: TRBBASER=%llx TRBLIMITR=%llx(->%lx) TRBPTR=%llx TRBTRG=%llx TRBSR=%llx\n",
+		     read_sysreg_s(SYS_TRBBASER_EL1),
+		     read_sysreg_s(SYS_TRBLIMITR_EL1), limit,
+		     read_sysreg_s(SYS_TRBPTR_EL1),
+		     read_sysreg_s(SYS_TRBTRG_EL1),
+		     read_sysreg_s(SYS_TRBSR_EL1));
+
+	set_trbe_enabled(buf->cpudata, limit);
 }
 
 static void trbe_enable_hw(struct trbe_buf *buf)
 {
-	WARN_ON(buf->trbe_hw_base < buf->trbe_base);
-	WARN_ON(buf->trbe_write < buf->trbe_hw_base);
+	WARN_ON(buf->trbe_write < buf->trbe_base);
 	WARN_ON(buf->trbe_write >= buf->trbe_limit);
-	set_trbe_disabled(buf->cpudata);
-	clr_trbe_status();
-	set_trbe_base_pointer(buf->trbe_hw_base);
+
+	set_trbe_base_pointer(buf->trbe_base);
 	set_trbe_write_pointer(buf->trbe_write);
 	set_trbe_trigger_count(buf->trbe_count);
 
@@ -670,68 +574,67 @@ static void trbe_enable_hw(struct trbe_buf *buf)
 static enum trbe_fault_action trbe_get_fault_act(struct perf_output_handle *handle,
 						 u64 trbsr)
 {
+	const char *err_str;
 	int ec = get_trbe_ec(trbsr);
 	int bsc = get_trbe_bsc(trbsr);
-	struct trbe_buf *buf = etm_perf_sink_config(handle);
-	struct trbe_cpudata *cpudata = buf->cpudata;
 
 	if (is_trbe_abort(trbsr))
 		return TRBE_FAULT_ACT_FATAL;
 
-	if ((ec == TRBE_EC_STAGE1_ABORT) || (ec == TRBE_EC_STAGE2_ABORT))
-		return TRBE_FAULT_ACT_FATAL;
-
-	if (is_trbe_running(trbsr)) {
-		if (is_trbe_trg(trbsr) || is_trbe_wrap(trbsr))
-			return TRBE_FAULT_ACT_CONTINUOUS;
-
-		WARN(1, "Unexpected running state (TRBSR=%llx)\n", trbsr);
+	switch (ec) {
+	case TRBE_EC_BUF_MGMT:
+	case TRBE_EC_BUF_MGMT_IMPL:
+		break;
+	case TRBE_EC_GPT_FAULT:
+	case TRBE_EC_STAGE1_ABORT:
+	case TRBE_EC_STAGE2_ABORT:
+		err_str = "Buffer fault";
+		goto out_fatal;
+	default:
+		err_str = "Unknown error code";
+		goto out_fatal;
 	}
 
-	if (ec == TRBE_EC_OTHERS &&
-		(bsc == TRBE_BSC_FILLED || bsc == TRBE_BSC_TRIGGERED))
-		return TRBE_FAULT_ACT_STOPPED;
+	switch (bsc) {
+	case TRBE_BSC_NOT_STOPPED:
+		break;
+	case TRBE_BSC_FILLED:
+	case TRBE_BSC_TRIGGERED:
+		break;
+	default:
+		err_str = "Unexpected buffer status code";
+		goto out_fatal;
+	}
 
 	/*
-	 * If the trbe is affected by TRBE_WORKAROUND_OVERWRITE_FILL_MODE,
-	 * it might write data after a WRAP event in the fill mode.
-	 * Thus the check TRBPTR == TRBBASER will not be honored.
+	 * If we've lost data, disable profiling and also set the PARTIAL
+	 * flag to indicate that the last record is corrupted.
 	 */
-	//if ((is_trbe_wrap(trbsr) && (ec == TRBE_EC_OTHERS) && (bsc == TRBE_BSC_FILLED)) &&
-	//    (trbe_may_overwrite_in_fill_mode(cpudata) ||
-	//     get_trbe_write_pointer() == get_trbe_base_pointer()))
-	//	return TRBE_FAULT_ACT_WRAP;
+	if (!is_trbe_running(trbsr))
+		perf_aux_output_flag(handle, PERF_AUX_FLAG_TRUNCATED |
+					     PERF_AUX_FLAG_PARTIAL);
+
+	if (is_trbe_trg(trbsr) || is_trbe_wrap(trbsr))
+		return TRBE_FAULT_ACT_OK;
 
 	return TRBE_FAULT_ACT_SPURIOUS;
+
+out_fatal:
+	pr_err_ratelimited("%s on CPU %d [TRBSR=0x%016llx, TRBPTR=0x%016llx, TRBLIMITR=0x%016llx]\n",
+			   err_str, smp_processor_id(), trbsr,
+			   read_sysreg_s(SYS_TRBPTR_EL1),
+			   read_sysreg_s(SYS_TRBLIMITR_EL1));
+	return TRBE_FAULT_ACT_FATAL;
 }
 
 static unsigned long trbe_get_trace_size(struct perf_output_handle *handle,
-					 struct trbe_buf *buf, bool wrap)
+					 struct trbe_buf *buf)
 {
 	u64 write;
 	u64 start_off, end_off;
 	u64 size;
-	u64 overwrite_skip = TRBE_WORKAROUND_OVERWRITE_FILL_MODE_SKIP_BYTES;
 
-	/*
-	 * If the TRBE has wrapped around the write pointer has
-	 * wrapped and should be treated as limit.
-	 *
-	 * When the TRBE is affected by TRBE_WORKAROUND_WRITE_OUT_OF_RANGE,
-	 * it may write upto 64bytes beyond the "LIMIT". The driver already
-	 * keeps a valid page next to the LIMIT and we could potentially
-	 * consume the trace data that may have been collected there. But we
-	 * cannot be really sure it is available, and the TRBPTR may not
-	 * indicate the same. Also, affected cores are also affected by another
-	 * erratum which forces the PAGE_SIZE alignment on the TRBPTR, and thus
-	 * could potentially pad an entire PAGE_SIZE - 64bytes, to get those
-	 * 64bytes. Thus we ignore the potential triggering of the erratum
-	 * on WRAP and limit the data to LIMIT.
-	 */
-	if (wrap)
-		write = get_trbe_limit_pointer();
-	else
-		write = get_trbe_write_pointer();
+	write = get_trbe_write_pointer();
 
 	/*
 	 * TRBE may use a different base address than the base
@@ -745,15 +648,6 @@ static unsigned long trbe_get_trace_size(struct perf_output_handle *handle,
 		size = end_off - start_off;
 	else
 		size = end_off + buf->nr_pages * PAGE_SIZE - start_off;
-
-	/*
-	 * If the TRBE is affected by the following erratum, we must fill
-	 * the space we skipped with IGNORE packets. And we are always
-	 * guaranteed to have at least a PAGE_SIZE space in the buffer.
-	 */
-	if (trbe_has_erratum(buf->cpudata, TRBE_WORKAROUND_OVERWRITE_FILL_MODE) &&
-	    !WARN_ON(size < overwrite_skip))
-		__trbe_pad_buf(buf, start_off, overwrite_skip);
 
 	return size;
 }
@@ -818,27 +712,12 @@ static unsigned long arm_trbe_update_buffer(struct coresight_device *csdev,
 	struct trbe_drvdata *drvdata = dev_get_drvdata(csdev->dev.parent);
 	struct trbe_cpudata *cpudata = dev_get_drvdata(&csdev->dev);
 	struct trbe_buf *buf = config;
-	enum trbe_fault_action act;
 	unsigned long size, status;
-	unsigned long flags;
-	bool wrap = false;
+	enum trbe_fault_action act;
 
 	WARN_ON(buf->cpudata != cpudata);
 	WARN_ON(cpudata->cpu != smp_processor_id());
 	WARN_ON(cpudata->drvdata != drvdata);
-	if (cpudata->mode != CS_MODE_PERF)
-		return 0;
-
-	/*
-	 * We are about to disable the TRBE. And this could in turn
-	 * fill up the buffer triggering, an IRQ. This could be consumed
-	 * by the PE asynchronously, causing a race here against
-	 * the IRQ handler in closing out the handle. So, let us
-	 * make sure the IRQ can't trigger while we are collecting
-	 * the buffer. We also make sure that a WRAP event is handled
-	 * accordingly.
-	 */
-	local_irq_save(flags);
 
 	/*
 	 * If the TRBE was disabled due to lack of space in the AUX buffer or a
@@ -873,142 +752,41 @@ static unsigned long arm_trbe_update_buffer(struct coresight_device *csdev,
 		 */
 		clr_trbe_irq();
 		isb();
-
-		act = trbe_get_fault_act(handle, status);
-		/*
-		 * If this was not due to a WRAP event, we have some
-		 * errors and as such buffer is empty.
-		 */
-		if (act != TRBE_FAULT_ACT_WRAP) {
-			size = 0;
-			goto done;
-		}
-
-		trbe_report_wrap_event(handle);
-		wrap = true;
 	}
 
-	size = trbe_get_trace_size(handle, buf, wrap);
+	act = trbe_get_fault_act(handle, status);
+	if (act != TRBE_FAULT_ACT_SPURIOUS)
+		clr_trbe_status();
+
+	size = trbe_get_trace_size(handle, buf);
 
 done:
-	local_irq_restore(flags);
-
 	if (buf->snapshot)
 		handle->head += size;
 	return size;
 }
 
-
 static int trbe_apply_work_around_before_enable(struct trbe_buf *buf)
 {
-	/*
-	 * TRBE_WORKAROUND_OVERWRITE_FILL_MODE causes the TRBE to overwrite a few cache
-	 * line size from the "TRBBASER_EL1" in the event of a "FILL".
-	 * Thus, we could loose some amount of the trace at the base.
-	 *
-	 * Before Fix:
-	 *
-	 *  normal-BASE     head (normal-TRBPTR)         tail (normal-LIMIT)
-	 *  |                   \/                       /
-	 *   -------------------------------------------------------------
-	 *  |   Pg0      |   Pg1       |           |          |  PgN     |
-	 *   -------------------------------------------------------------
-	 *
-	 * In the normal course of action, we would set the TRBBASER to the
-	 * beginning of the ring-buffer (normal-BASE). But with the erratum,
-	 * the TRBE could overwrite the contents at the "normal-BASE", after
-	 * hitting the "normal-LIMIT", since it doesn't stop as expected. And
-	 * this is wrong. This could result in overwriting trace collected in
-	 * one of the previous runs, being consumed by the user. So we must
-	 * always make sure that the TRBBASER is within the region
-	 * [head, head+size]. Note that TRBBASER must be PAGE aligned,
-	 *
-	 *  After moving the BASE:
-	 *
-	 *  normal-BASE     head (normal-TRBPTR)         tail (normal-LIMIT)
-	 *  |                   \/                       /
-	 *   -------------------------------------------------------------
-	 *  |         |          |xyzdef.     |..   tuvw|                |
-	 *   -------------------------------------------------------------
-	 *                      /
-	 *              New-BASER
-	 *
-	 * Also, we would set the TRBPTR to head (after adjusting for
-	 * alignment) at normal-PTR. This would mean that the last few bytes
-	 * of the trace (say, "xyz") might overwrite the first few bytes of
-	 * trace written ("abc"). More importantly they will appear in what
-	 * userspace sees as the beginning of the trace, which is wrong. We may
-	 * not always have space to move the latest trace "xyz" to the correct
-	 * order as it must appear beyond the LIMIT. (i.e, [head..head+size]).
-	 * Thus it is easier to ignore those bytes than to complicate the
-	 * driver to move it, assuming that the erratum was triggered and
-	 * doing additional checks to see if there is indeed allowed space at
-	 * TRBLIMITR.LIMIT.
-	 *
-	 *  Thus the full workaround will move the BASE and the PTR and would
-	 *  look like (after padding at the skipped bytes at the end of
-	 *  session) :
-	 *
-	 *  normal-BASE     head (normal-TRBPTR)         tail (normal-LIMIT)
-	 *  |                   \/                       /
-	 *   -------------------------------------------------------------
-	 *  |         |          |///abc..     |..  rst|                |
-	 *   -------------------------------------------------------------
-	 *                      /    |
-	 *              New-BASER    New-TRBPTR
-	 *
-	 * To summarize, with the work around:
-	 *
-	 *  - We always align the offset for the next session to PAGE_SIZE
-	 *    (This is to ensure we can program the TRBBASER to this offset
-	 *    within the region [head...head+size]).
-	 *
-	 *  - At TRBE enable:
-	 *     - Set the TRBBASER to the page aligned offset of the current
-	 *       proposed write offset. (which is guaranteed to be aligned
-	 *       as above)
-	 *     - Move the TRBPTR to skip first 256bytes (that might be
-	 *       overwritten with the erratum). This ensures that the trace
-	 *       generated in the session is not re-written.
-	 *
-	 *  - At trace collection:
-	 *     - Pad the 256bytes skipped above again with IGNORE packets.
-	 */
-	if (trbe_has_erratum(buf->cpudata, TRBE_WORKAROUND_OVERWRITE_FILL_MODE)) {
-		if (WARN_ON(!IS_ALIGNED(buf->trbe_write, PAGE_SIZE)))
-			return -EINVAL;
-		buf->trbe_hw_base = buf->trbe_write;
-		buf->trbe_write += TRBE_WORKAROUND_OVERWRITE_FILL_MODE_SKIP_BYTES;
-	}
+	struct trbe_cpudata *cpudata = buf->cpudata;
+	s64 safe_count;
 
-	/*
-	 * TRBE_WORKAROUND_WRITE_OUT_OF_RANGE could cause the TRBE to write to
-	 * the next page after the TRBLIMITR.LIMIT. For perf, the "next page"
-	 * may be:
-	 *     - The page beyond the ring buffer. This could mean, TRBE could
-	 *       corrupt another entity (kernel / user)
-	 *     - A portion of the "ring buffer" consumed by the userspace.
-	 *       i.e, a page outisde [head, head + size].
-	 *
-	 * We work around this by:
-	 *     - Making sure that we have at least an extra space of PAGE left
-	 *       in the ring buffer [head, head + size], than we normally do
-	 *       without the erratum. See trbe_min_trace_buf_size().
-	 *
-	 *     - Adjust the TRBLIMITR.LIMIT to leave the extra PAGE outside
-	 *       the TRBE's range (i.e [TRBBASER, TRBLIMITR.LIMI] ).
-	 */
-	if (trbe_has_erratum(buf->cpudata, TRBE_WORKAROUND_WRITE_OUT_OF_RANGE)) {
-		s64 space = buf->trbe_limit - buf->trbe_write;
-		/*
-		 * We must have more than a PAGE_SIZE worth space in the proposed
-		 * range for the TRBE.
-		 */
-		if (WARN_ON(space <= PAGE_SIZE ||
-			    !IS_ALIGNED(buf->trbe_limit, PAGE_SIZE)))
-			return -EINVAL;
-		buf->trbe_limit -= PAGE_SIZE;
-	}
+	if (!trbe_may_overwrite_in_fill_mode(cpudata) ||
+	    !trbe_may_write_out_of_range(cpudata))
+		return 0;
+
+	safe_count = buf->trbe_limit - buf->trbe_base -
+		TRBE_WORKAROUND_OVERWRITE_FILL_MODE_SKIP_BYTES;
+
+	if (WARN_ON(safe_count < 0))
+		return -1;
+
+	safe_count = round_down(safe_count, buf->cpudata->trbe_hw_align);
+
+	if (!buf->trbe_count)
+		buf->trbe_count = safe_count;
+	else
+		buf->trbe_count = min_t(u64, buf->trbe_count, safe_count);
 
 	return 0;
 }
@@ -1016,66 +794,71 @@ static int trbe_apply_work_around_before_enable(struct trbe_buf *buf)
 static int __arm_trbe_enable(struct trbe_buf *buf,
 			     struct perf_output_handle *handle)
 {
-	int ret = 0;
+	int ret;
+
+	trace_printk("%s: head=0x%lx size=0x%lx\n", __func__,
+		     handle->head, handle->size);
 
 	perf_aux_output_flag(handle, PERF_AUX_FLAG_CORESIGHT_FORMAT_RAW);
 	ret = trbe_compute_next(handle);
 	if (ret)
-		goto err;
-
-	buf->trbe_write = buf->trbe_base + PERF_IDX2OFF(handle->head, buf);
-
-	/* Set the base of the TRBE to the buffer base */
-	buf->trbe_hw_base = buf->trbe_base;
+		return ret;
 
 	ret = trbe_apply_work_around_before_enable(buf);
 	if (ret)
-		goto err;
+		return ret;
 
-	*this_cpu_ptr(buf->cpudata->drvdata->handle) = handle;
+	buf->trbe_write = buf->trbe_base + PERF_IDX2OFF(handle->head, buf);
+
+	trace_printk("%s: base=0x%lx write=0x%lx count=0x%lx limit=0x%lx\n",
+		     __func__, buf->trbe_base, buf->trbe_write,
+		     buf->trbe_count, buf->trbe_limit);
+
 	trbe_enable_hw(buf);
 	return 0;
-err:
-	trbe_truncate_event(handle);
-	return ret;
 }
 
 static int arm_trbe_enable(struct coresight_device *csdev, enum cs_mode mode,
 			   void *data)
 {
-	struct trbe_drvdata *drvdata = dev_get_drvdata(csdev->dev.parent);
 	struct trbe_cpudata *cpudata = dev_get_drvdata(&csdev->dev);
 	struct perf_output_handle *handle = data;
 	struct trbe_buf *buf = etm_perf_sink_config(handle);
+	u64 head;
 
-	WARN_ON(cpudata->cpu != smp_processor_id());
-	WARN_ON(cpudata->drvdata != drvdata);
 	if (mode != CS_MODE_PERF)
 		return -EINVAL;
 
+	WARN_ON(cpudata->cpu != smp_processor_id());
+
 	cpudata->buf = buf;
-	cpudata->mode = mode;
 	buf->cpudata = cpudata;
+	*this_cpu_ptr(buf->cpudata->drvdata->handle) = handle;
+
+	head = PERF_IDX2OFF(handle->head, buf);
+
+	if (!IS_ALIGNED(head, cpudata->trbe_hw_align)) {
+		unsigned long delta = roundup(head, cpudata->trbe_hw_align) - head;
+		delta = min(delta, handle->size);
+		trbe_pad_buf(handle, delta);
+	}
 
 	return __arm_trbe_enable(buf, handle);
 }
 
 static int arm_trbe_disable(struct coresight_device *csdev)
 {
-	struct trbe_drvdata *drvdata = dev_get_drvdata(csdev->dev.parent);
 	struct trbe_cpudata *cpudata = dev_get_drvdata(&csdev->dev);
 	struct trbe_buf *buf = cpudata->buf;
 
 	WARN_ON(buf->cpudata != cpudata);
 	WARN_ON(cpudata->cpu != smp_processor_id());
-	WARN_ON(cpudata->drvdata != drvdata);
-	if (cpudata->mode != CS_MODE_PERF)
-		return -EINVAL;
 
 	trbe_drain_and_disable_local(cpudata);
+
+	*this_cpu_ptr(buf->cpudata->drvdata->handle) = NULL;
 	buf->cpudata = NULL;
 	cpudata->buf = NULL;
-	cpudata->mode = CS_MODE_DISABLED;
 	return 0;
 }
 
@@ -1092,41 +875,35 @@ static void trbe_handle_spurious(struct perf_output_handle *handle)
 	set_trbe_enabled(buf->cpudata, trblimitr);
 }
 
-static int trbe_handle_overflow(struct perf_output_handle *handle,
-				bool wrap, bool stopped)
+static void trbe_perf_aux_output_end(struct perf_output_handle *handle)
 {
-	struct perf_event *event = handle->event;
 	struct trbe_buf *buf = etm_perf_sink_config(handle);
-	struct trbe_cpudata *cpudata = buf->cpudata;
 	unsigned long size;
-	struct etm_event_data *event_data;
-	u64 head;
 
-	size = trbe_get_trace_size(handle, buf, wrap);
+	size = trbe_get_trace_size(handle, buf);
 	if (buf->snapshot)
 		handle->head += size;
 
-	trbe_report_wrap_event(handle);
 	perf_aux_output_end(handle, size);
-	event_data = perf_aux_output_begin(handle, event);
-	if (!event_data) {
-		/*
-		 * We are unable to restart the trace collection,
-		 * thus leave the TRBE disabled. The etm-perf driver
-		 * is able to detect this with a disconnected handle
-		 * (handle->event = NULL).
-		 */
-		trbe_drain_and_disable_local(buf->cpudata);
-		*this_cpu_ptr(buf->cpudata->drvdata->handle) = NULL;
+}
+
+static int trbe_handle_overflow(struct perf_output_handle *handle)
+{
+	struct perf_event *event = handle->event;
+	struct trbe_buf *buf = etm_perf_sink_config(handle);
+	struct etm_event_data *event_data;
+
+	if (WARN_ON(!handle)) {
+		trace_printk("detected null handle\n");
 		return -EINVAL;
 	}
 
-	head = PERF_IDX2OFF(handle->head, buf);
+	trbe_perf_aux_output_end(handle);
 
-	if (stopped && !IS_ALIGNED(head, cpudata->trbe_align)) {
-		unsigned long delta = roundup(head, cpudata->trbe_align) - head;
-		delta = min(delta, handle->size);
-		trbe_pad_buf(handle, delta);
+	event_data = perf_aux_output_begin(handle, event);
+	if (!event_data) {
+		event->hw.state |= PERF_HES_STOPPED;
+		return -EINVAL;
 	}
 
 	return __arm_trbe_enable(buf, handle);
@@ -1139,11 +916,8 @@ static bool is_perf_trbe(struct perf_output_handle *handle)
 	struct trbe_drvdata *drvdata = cpudata->drvdata;
 	int cpu = smp_processor_id();
 
-	WARN_ON(buf->trbe_hw_base != get_trbe_base_pointer());
+	WARN_ON(buf->trbe_base != get_trbe_base_pointer());
 	WARN_ON(buf->trbe_limit != get_trbe_limit_pointer());
-
-	if (cpudata->mode != CS_MODE_PERF)
-		return false;
 
 	if (cpudata->cpu != cpu)
 		return false;
@@ -1176,6 +950,9 @@ static irqreturn_t arm_trbe_irq_handler(int irq, void *dev)
 
 	/* Reads to TRBSR_EL1 is fine when TRBE is active */
 	status = read_sysreg_s(SYS_TRBSR_EL1);
+
+	trace_printk("TRBSR: %llx\n", status);
+
 	/*
 	 * If the pending IRQ was handled by update_buffer callback
 	 * we have nothing to do here.
@@ -1193,6 +970,13 @@ static irqreturn_t arm_trbe_irq_handler(int irq, void *dev)
 	clr_trbe_irq();
 	isb();
 
+	trace_printk("[IRQ]: TRBBASER=%llx TRBLIMITR=%llx TRBPTR=%llx TRBTRG=%llx TRBSR=%llx\n",
+		     read_sysreg_s(SYS_TRBBASER_EL1),
+		     read_sysreg_s(SYS_TRBLIMITR_EL1),
+		     read_sysreg_s(SYS_TRBPTR_EL1),
+		     read_sysreg_s(SYS_TRBTRG_EL1),
+		     read_sysreg_s(SYS_TRBSR_EL1));
+
 	if (WARN_ON_ONCE(!handle) || !perf_get_aux(handle))
 		return IRQ_NONE;
 
@@ -1200,19 +984,23 @@ static irqreturn_t arm_trbe_irq_handler(int irq, void *dev)
 		return IRQ_NONE;
 
 	act = trbe_get_fault_act(handle, status);
+
+	if (act == TRBE_FAULT_ACT_SPURIOUS) {
+		trbe_handle_spurious(handle);
+		return IRQ_NONE;
+	}
+
+	clr_trbe_status();
+
 	switch (act) {
-	case TRBE_FAULT_ACT_WRAP:
-	case TRBE_FAULT_ACT_CONTINUOUS:
-	case TRBE_FAULT_ACT_STOPPED:
-		truncated = !!trbe_handle_overflow(handle,
-				act == TRBE_FAULT_ACT_WRAP ? true : false);
+	case TRBE_FAULT_ACT_OK:
+		if (!(handle->aux_flags & PERF_AUX_FLAG_TRUNCATED))
+			truncated = !!trbe_handle_overflow(handle);
 		break;
 	case TRBE_FAULT_ACT_SPURIOUS:
-		trbe_handle_spurious(handle);
 		break;
 	case TRBE_FAULT_ACT_FATAL:
-		trbe_truncate_event(handle);
-		truncated = true;
+		trbe_perf_aux_output_end(handle);
 		break;
 	}
 
@@ -1429,10 +1217,8 @@ static int arm_trbe_probe_coresight(struct trbe_drvdata *drvdata)
 		/* If we fail to probe the CPU, let us defer it to hotplug callbacks */
 		if (smp_call_function_single(cpu, arm_trbe_probe_cpu, drvdata, 1))
 			continue;
-		if (cpumask_test_cpu(cpu, &drvdata->supported_cpus))
-			arm_trbe_register_coresight_cpu(drvdata, cpu);
-		if (cpumask_test_cpu(cpu, &drvdata->supported_cpus))
-			smp_call_function_single(cpu, arm_trbe_enable_cpu, drvdata, 1);
+		arm_trbe_register_coresight_cpu(drvdata, cpu);
+		smp_call_function_single(cpu, arm_trbe_enable_cpu, drvdata, 1);
 	}
 	return 0;
 }
@@ -1468,10 +1254,8 @@ static int arm_trbe_cpu_startup(unsigned int cpu, struct hlist_node *node)
 		 */
 		if (!coresight_get_percpu_sink(cpu)) {
 			arm_trbe_probe_hotplugged_cpu(drvdata);
-			if (cpumask_test_cpu(cpu, &drvdata->supported_cpus))
-				arm_trbe_register_coresight_cpu(drvdata, cpu);
-			if (cpumask_test_cpu(cpu, &drvdata->supported_cpus))
-				arm_trbe_enable_cpu(drvdata);
+			arm_trbe_register_coresight_cpu(drvdata, cpu);
+			arm_trbe_enable_cpu(drvdata);
 		} else {
 			arm_trbe_enable_cpu(drvdata);
 		}
