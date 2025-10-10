@@ -547,7 +547,8 @@ static void set_trbe_limit_pointer_enabled(struct trbe_buf *buf)
 			 FIELD_PREP(TRBLIMITR_EL1_TM_MASK, TRBLIMITR_EL1_TM_STOP);
 	}
 
-	trace_printk("[Hardware]: TRBBASER=%llx TRBLIMITR=%llx(->%lx) TRBPTR=%llx TRBTRG=%llx TRBSR=%llx\n",
+	trace_printk("[Hardware]: TRFCR=%llx TRBBASER=%llx TRBLIMITR=%llx(->%lx) TRBPTR=%llx TRBTRG=%llx TRBSR=%llx\n",
+		     read_trfcr(),
 		     read_sysreg_s(SYS_TRBBASER_EL1),
 		     read_sysreg_s(SYS_TRBLIMITR_EL1), limit,
 		     read_sysreg_s(SYS_TRBPTR_EL1),
@@ -562,6 +563,8 @@ static void trbe_enable_hw(struct trbe_buf *buf)
 	WARN_ON(buf->trbe_write < buf->trbe_base);
 	WARN_ON(buf->trbe_write >= buf->trbe_limit);
 
+	set_trbe_disabled(buf->cpudata);
+	clr_trbe_status();
 	set_trbe_base_pointer(buf->trbe_base);
 	set_trbe_write_pointer(buf->trbe_write);
 	set_trbe_trigger_count(buf->trbe_count);
@@ -614,8 +617,7 @@ static enum trbe_fault_action trbe_get_fault_act(struct perf_output_handle *hand
 	 * flag to indicate that the last record is corrupted.
 	 */
 	if (!is_trbe_running(trbsr))
-		perf_aux_output_flag(handle, PERF_AUX_FLAG_TRUNCATED |
-					     PERF_AUX_FLAG_PARTIAL);
+		perf_aux_output_flag(handle, PERF_AUX_FLAG_PARTIAL);
 
 	if (is_trbe_trg(trbsr) || is_trbe_wrap(trbsr))
 		return TRBE_FAULT_ACT_OK;
@@ -635,7 +637,7 @@ static unsigned long trbe_get_trace_size(struct perf_output_handle *handle,
 {
 	u64 write;
 	u64 start_off, end_off;
-	u64 size;
+	u64 size, buf_size;
 
 	write = get_trbe_write_pointer();
 
@@ -646,11 +648,12 @@ static unsigned long trbe_get_trace_size(struct perf_output_handle *handle,
 	 */
 	end_off = write - buf->trbe_base;
 	start_off = PERF_IDX2OFF(handle->head, buf);
+	buf_size = buf->trbe_limit - buf->trbe_base;
 
 	if (end_off >= start_off)
 		size = end_off - start_off;
 	else
-		size = end_off + buf->nr_pages * PAGE_SIZE - start_off;
+		size = end_off + buf_size - start_off;
 
 	return size;
 }
@@ -746,9 +749,6 @@ static unsigned long arm_trbe_update_buffer(struct coresight_device *csdev,
 
 	/* Check if there is a pending interrupt and handle it here */
 	status = read_sysreg_s(SYS_TRBSR_EL1);
-
-	trace_printk("TRBSR: %lx\n", status);
-
 	if (is_trbe_irq(status)) {
 
 		/*
@@ -802,8 +802,8 @@ static int __arm_trbe_enable(struct trbe_buf *buf,
 {
 	int ret;
 
-	trace_printk("%s: head=0x%lx size=0x%lx\n", __func__,
-		     handle->head, handle->size);
+	trace_printk("%s: head=0x%lx size=0x%lx wakeup=0x%lx\n", __func__,
+		     handle->head, handle->size, handle->wakeup);
 
 	perf_aux_output_flag(handle, PERF_AUX_FLAG_CORESIGHT_FORMAT_RAW);
 	ret = trbe_compute_next(handle);
@@ -837,13 +837,6 @@ static int arm_trbe_enable(struct coresight_device *csdev, enum cs_mode mode,
 
 	WARN_ON(cpudata->cpu != smp_processor_id());
 
-	trace_printk("[Pre ENABLE]: TRBBASER=%llx TRBLIMITR=%llx TRBPTR=%llx TRBTRG=%llx TRBSR=%llx\n",
-			     read_sysreg_s(SYS_TRBBASER_EL1),
-			     read_sysreg_s(SYS_TRBLIMITR_EL1),
-			     read_sysreg_s(SYS_TRBPTR_EL1),
-			     read_sysreg_s(SYS_TRBTRG_EL1),
-			     read_sysreg_s(SYS_TRBSR_EL1));
-
 	cpudata->buf = buf;
 	buf->cpudata = cpudata;
 	*this_cpu_ptr(buf->cpudata->drvdata->handle) = handle;
@@ -868,13 +861,7 @@ static int arm_trbe_disable(struct coresight_device *csdev)
 	WARN_ON(cpudata->cpu != smp_processor_id());
 
 	trbe_drain_and_disable_local(cpudata);
-
-	trace_printk("[DISABLE]: TRBBASER=%llx TRBLIMITR=%llx TRBPTR=%llx TRBTRG=%llx TRBSR=%llx\n",
-			     read_sysreg_s(SYS_TRBBASER_EL1),
-			     read_sysreg_s(SYS_TRBLIMITR_EL1),
-			     read_sysreg_s(SYS_TRBPTR_EL1),
-			     read_sysreg_s(SYS_TRBTRG_EL1),
-			     read_sysreg_s(SYS_TRBSR_EL1));
+	clr_trbe_status();
 
 	*this_cpu_ptr(buf->cpudata->drvdata->handle) = NULL;
 	buf->cpudata = NULL;
@@ -920,11 +907,12 @@ static int trbe_handle_overflow(struct perf_output_handle *handle)
 
 	trbe_perf_aux_output_end(handle);
 
+ 	if (handle->aux_flags & PERF_AUX_FLAG_TRUNCATED)
+		return -EBUSY;
+
 	event_data = perf_aux_output_begin(handle, event);
-	if (!event_data) {
-		event->hw.state |= PERF_HES_STOPPED;
+	if (!event_data)
 		return -EINVAL;
-	}
 
 	return __arm_trbe_enable(buf, handle);
 }
@@ -1007,27 +995,16 @@ static irqreturn_t arm_trbe_irq_handler(int irq, void *dev)
 
 	if (act == TRBE_FAULT_ACT_SPURIOUS) {
 		trbe_handle_spurious(handle);
-
-		trace_printk("[SPURIOUS]: TRBBASER=%llx TRBLIMITR=%llx TRBPTR=%llx TRBTRG=%llx TRBSR=%llx\n",
-			     read_sysreg_s(SYS_TRBBASER_EL1),
-			     read_sysreg_s(SYS_TRBLIMITR_EL1),
-			     read_sysreg_s(SYS_TRBPTR_EL1),
-			     read_sysreg_s(SYS_TRBTRG_EL1),
-			     read_sysreg_s(SYS_TRBSR_EL1));
-
 		return IRQ_NONE;
 	}
 
 	clr_trbe_status();
 
-	trace_printk("act=%d\n", act);
-
 	switch (act) {
 	case TRBE_FAULT_ACT_OK:
-		if (!(handle->aux_flags & PERF_AUX_FLAG_TRUNCATED))
-			truncated = !!trbe_handle_overflow(handle);
-		else
-			trbe_perf_aux_output_end(handle);
+		trbe_handle_overflow(handle);
+ 		if (handle->aux_flags & PERF_AUX_FLAG_TRUNCATED)
+			truncated = true;
 		break;
 	case TRBE_FAULT_ACT_SPURIOUS:
 		break;
@@ -1048,12 +1025,13 @@ static irqreturn_t arm_trbe_irq_handler(int irq, void *dev)
 	else
 		write_trfcr(trfcr);
 
-	trace_printk("[EXIT IRQ]: TRBBASER=%llx TRBLIMITR=%llx TRBPTR=%llx TRBTRG=%llx TRBSR=%llx\n",
-			     read_sysreg_s(SYS_TRBBASER_EL1),
-			     read_sysreg_s(SYS_TRBLIMITR_EL1),
-			     read_sysreg_s(SYS_TRBPTR_EL1),
-			     read_sysreg_s(SYS_TRBTRG_EL1),
-			     read_sysreg_s(SYS_TRBSR_EL1));
+	trace_printk("[EXIT IRQ]: truncated=%d TRFCR=%llx TRBBASER=%llx TRBLIMITR=%llx TRBPTR=%llx TRBTRG=%llx TRBSR=%llx\n",
+		      truncated, read_trfcr(),
+		      read_sysreg_s(SYS_TRBBASER_EL1),
+		      read_sysreg_s(SYS_TRBLIMITR_EL1),
+		      read_sysreg_s(SYS_TRBPTR_EL1),
+		      read_sysreg_s(SYS_TRBTRG_EL1),
+		      read_sysreg_s(SYS_TRBSR_EL1));
 
 	return IRQ_HANDLED;
 }
