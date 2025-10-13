@@ -816,9 +816,9 @@ static int __arm_trbe_enable(struct trbe_buf *buf,
 
 	buf->trbe_write = buf->trbe_base + PERF_IDX2OFF(handle->head, buf);
 
-	trace_printk("%s: base=0x%lx write=0x%lx count=0x%lx limit=0x%lx\n",
-		     __func__, buf->trbe_base, buf->trbe_write,
-		     buf->trbe_count, buf->trbe_limit);
+	//trace_printk("%s: base=0x%lx write=0x%lx count=0x%lx limit=0x%lx\n",
+	//	     __func__, buf->trbe_base, buf->trbe_write,
+	//	     buf->trbe_count, buf->trbe_limit);
 
 	trbe_enable_hw(buf);
 	return 0;
@@ -959,7 +959,7 @@ static irqreturn_t arm_trbe_irq_handler(int irq, void *dev)
 	/* Reads to TRBSR_EL1 is fine when TRBE is active */
 	status = read_sysreg_s(SYS_TRBSR_EL1);
 
-	trace_printk("TRBSR: %llx\n", status);
+	//trace_printk("TRBSR: %llx\n", status);
 
 	/*
 	 * If the pending IRQ was handled by update_buffer callback
@@ -1025,13 +1025,13 @@ static irqreturn_t arm_trbe_irq_handler(int irq, void *dev)
 	else
 		write_trfcr(trfcr);
 
-	trace_printk("[EXIT IRQ]: truncated=%d TRFCR=%llx TRBBASER=%llx TRBLIMITR=%llx TRBPTR=%llx TRBTRG=%llx TRBSR=%llx\n",
-		      truncated, read_trfcr(),
-		      read_sysreg_s(SYS_TRBBASER_EL1),
-		      read_sysreg_s(SYS_TRBLIMITR_EL1),
-		      read_sysreg_s(SYS_TRBPTR_EL1),
-		      read_sysreg_s(SYS_TRBTRG_EL1),
-		      read_sysreg_s(SYS_TRBSR_EL1));
+	//trace_printk("[EXIT IRQ]: truncated=%d TRFCR=%llx TRBBASER=%llx TRBLIMITR=%llx TRBPTR=%llx TRBTRG=%llx TRBSR=%llx\n",
+	//	      truncated, read_trfcr(),
+	//	      read_sysreg_s(SYS_TRBBASER_EL1),
+	//	      read_sysreg_s(SYS_TRBLIMITR_EL1),
+	//	      read_sysreg_s(SYS_TRBPTR_EL1),
+	//	      read_sysreg_s(SYS_TRBTRG_EL1),
+	//	      read_sysreg_s(SYS_TRBSR_EL1));
 
 	return IRQ_HANDLED;
 }
