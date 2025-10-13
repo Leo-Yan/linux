@@ -1889,6 +1889,26 @@ int __weak compat_auxtrace_mmap__write_tail(struct auxtrace_mmap *mm, u64 tail)
 	return 0;
 }
 
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+
+static void trace_write(const char *fmt, ...)
+{
+	va_list ap;
+	char buf[256];
+	int trace_fd, n;
+
+	trace_fd = open("/sys/kernel/debug/tracing/trace_marker", O_WRONLY);
+	if (trace_fd < 0)
+		return;
+
+	va_start(ap, fmt);
+	n = vsnprintf(buf, 256, fmt, ap);
+	va_end(ap);
+	write(trace_fd, buf, n);
+}
+
 static int __auxtrace_mmap__read(struct mmap *map,
 				 struct auxtrace_record *itr, struct perf_env *env,
 				 const struct perf_tool *tool, process_auxtrace_t fn,
@@ -1926,6 +1946,9 @@ static int __auxtrace_mmap__read(struct mmap *map,
 		size = head_off - old_off;
 	else
 		size = mm->len - (old_off - head_off);
+
+	 trace_write("%s: old_offset=0x%lx head_offset=0x%lx size=0x%lx\n",
+		     __func__, old_off, head_off, size);
 
 	if (snapshot && size > snapshot_size)
 		size = snapshot_size;

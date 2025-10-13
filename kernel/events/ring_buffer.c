@@ -504,6 +504,9 @@ void perf_aux_output_end(struct perf_output_handle *handle, unsigned long size)
 		rb->aux_head += size;
 	}
 
+	trace_printk("old_head=0x%lx new_head=0x%lx size=0x%lx\n",
+		     aux_head, rb->aux_head, size);
+
 	/*
 	 * Only send RECORD_AUX if we have something useful to communicate
 	 *
