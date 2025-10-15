@@ -510,6 +510,11 @@ static void set_trbe_limit_pointer_enabled(struct trbe_buf *buf)
 
 	WARN_ON(!IS_ALIGNED(limit, PAGE_SIZE));
 
+	if (buf->snapshot) {
+		limit |= FIELD_PREP(TRBLIMITR_EL1_FM_MASK, TRBLIMITR_EL1_FM_CBUF);
+		goto out_enable;
+	}
+
 	/*
 	 * Configure trace buffer mode and trigger mode for maintenance
 	 * interrupt, and it gives the software an opportunity to capture the
@@ -546,6 +551,8 @@ static void set_trbe_limit_pointer_enabled(struct trbe_buf *buf)
 		limit |= FIELD_PREP(TRBLIMITR_EL1_FM_MASK, TRBLIMITR_EL1_FM_FILL) |
 			 FIELD_PREP(TRBLIMITR_EL1_TM_MASK, TRBLIMITR_EL1_TM_STOP);
 	}
+
+out_enable:
 
 	trace_printk("[Hardware]: TRFCR=%llx TRBBASER=%llx TRBLIMITR=%llx(->%lx) TRBPTR=%llx TRBTRG=%llx TRBSR=%llx\n",
 		     read_trfcr(),
