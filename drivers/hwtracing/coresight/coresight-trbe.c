@@ -563,8 +563,8 @@ static void trbe_enable_hw(struct trbe_buf *buf)
 	WARN_ON(buf->trbe_write < buf->trbe_base);
 	WARN_ON(buf->trbe_write >= buf->trbe_limit);
 
-	set_trbe_disabled(buf->cpudata);
-	clr_trbe_status();
+	//set_trbe_disabled(buf->cpudata);
+	//clr_trbe_status();
 	set_trbe_base_pointer(buf->trbe_base);
 	set_trbe_write_pointer(buf->trbe_write);
 	set_trbe_trigger_count(buf->trbe_count);
@@ -837,6 +837,14 @@ static int arm_trbe_enable(struct coresight_device *csdev, enum cs_mode mode,
 
 	WARN_ON(cpudata->cpu != smp_processor_id());
 
+	trace_printk("[Before enable]: TRFCR=%llx TRBBASER=%llx TRBLIMITR=%llx TRBPTR=%llx TRBTRG=%llx TRBSR=%llx\n",
+		     read_trfcr(),
+		     read_sysreg_s(SYS_TRBBASER_EL1),
+		     read_sysreg_s(SYS_TRBLIMITR_EL1),
+		     read_sysreg_s(SYS_TRBPTR_EL1),
+		     read_sysreg_s(SYS_TRBTRG_EL1),
+		     read_sysreg_s(SYS_TRBSR_EL1));
+
 	cpudata->buf = buf;
 	buf->cpudata = cpudata;
 	*this_cpu_ptr(buf->cpudata->drvdata->handle) = handle;
@@ -862,6 +870,14 @@ static int arm_trbe_disable(struct coresight_device *csdev)
 
 	trbe_drain_and_disable_local(cpudata);
 	clr_trbe_status();
+
+	trace_printk("[After disable]: TRFCR=%llx TRBBASER=%llx TRBLIMITR=%llx TRBPTR=%llx TRBTRG=%llx TRBSR=%llx\n",
+		     read_trfcr(),
+		     read_sysreg_s(SYS_TRBBASER_EL1),
+		     read_sysreg_s(SYS_TRBLIMITR_EL1),
+		     read_sysreg_s(SYS_TRBPTR_EL1),
+		     read_sysreg_s(SYS_TRBTRG_EL1),
+		     read_sysreg_s(SYS_TRBSR_EL1));
 
 	*this_cpu_ptr(buf->cpudata->drvdata->handle) = NULL;
 	buf->cpudata = NULL;
@@ -955,6 +971,7 @@ static irqreturn_t arm_trbe_irq_handler(int irq, void *dev)
 	u64 status;
 	bool truncated = false;
 	u64 trfcr;
+	irqreturn_t ret;
 
 	/* Reads to TRBSR_EL1 is fine when TRBE is active */
 	status = read_sysreg_s(SYS_TRBSR_EL1);
@@ -985,17 +1002,22 @@ static irqreturn_t arm_trbe_irq_handler(int irq, void *dev)
 		     read_sysreg_s(SYS_TRBTRG_EL1),
 		     read_sysreg_s(SYS_TRBSR_EL1));
 
-	if (WARN_ON_ONCE(!handle) || !perf_get_aux(handle))
-		return IRQ_NONE;
+	if (WARN_ON_ONCE(!handle) || !perf_get_aux(handle)) {
+		ret = IRQ_NONE;
+		goto out;
+	}
 
-	if (!is_perf_trbe(handle))
-		return IRQ_NONE;
+	if (!is_perf_trbe(handle)) {
+		ret = IRQ_NONE;
+		goto out;
+	}
 
 	act = trbe_get_fault_act(handle, status);
 
 	if (act == TRBE_FAULT_ACT_SPURIOUS) {
 		trbe_handle_spurious(handle);
-		return IRQ_NONE;
+		ret = IRQ_NONE;
+		goto out;
 	}
 
 	clr_trbe_status();
@@ -1022,18 +1044,21 @@ static irqreturn_t arm_trbe_irq_handler(int irq, void *dev)
 	 */
 	if (truncated)
 		irq_work_run();
-	else
-		write_trfcr(trfcr);
 
-	//trace_printk("[EXIT IRQ]: truncated=%d TRFCR=%llx TRBBASER=%llx TRBLIMITR=%llx TRBPTR=%llx TRBTRG=%llx TRBSR=%llx\n",
-	//	      truncated, read_trfcr(),
-	//	      read_sysreg_s(SYS_TRBBASER_EL1),
-	//	      read_sysreg_s(SYS_TRBLIMITR_EL1),
-	//	      read_sysreg_s(SYS_TRBPTR_EL1),
-	//	      read_sysreg_s(SYS_TRBTRG_EL1),
-	//	      read_sysreg_s(SYS_TRBSR_EL1));
+	ret = IRQ_HANDLED;
 
-	return IRQ_HANDLED;
+out:
+	write_trfcr(trfcr);
+
+	trace_printk("[EXIT IRQ]: truncated=%d TRFCR=%llx TRBBASER=%llx TRBLIMITR=%llx TRBPTR=%llx TRBTRG=%llx TRBSR=%llx\n",
+		      truncated, read_trfcr(),
+		      read_sysreg_s(SYS_TRBBASER_EL1),
+		      read_sysreg_s(SYS_TRBLIMITR_EL1),
+		      read_sysreg_s(SYS_TRBPTR_EL1),
+		      read_sysreg_s(SYS_TRBTRG_EL1),
+		      read_sysreg_s(SYS_TRBSR_EL1));
+
+	return ret;
 }
 
 static const struct coresight_ops_sink arm_trbe_sink_ops = {
