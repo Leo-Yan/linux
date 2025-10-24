@@ -399,13 +399,52 @@ int coresight_enable_source(struct coresight_device *csdev,
 			    struct perf_event *event, enum cs_mode mode,
 			    struct coresight_path *path)
 {
-	return source_ops(csdev)->enable(csdev, event, mode, path);
+	int ret;
+
+	/*
+	 * Record the path in the source device. The path pointer is first
+	 * assigned, followed by transitioning from DISABLED mode to an enabled
+	 * state on the target CPU. Conversely, during the disable flow, the
+	 * device mode is set to DISABLED before the path pointer is cleared.
+	 *
+	 * This ordering ensures the path pointer to be safely access under the
+	 * following race condition:
+	 *
+	 *  CPU(a)                       CPU(b)
+	 *
+	 *  coresight_enable_source()
+	 *    STORE source->path
+	 *    `> Enable source      ---> etm4_enable_sysfs_smp_call()
+	 *                                 STORE source->mode
+	 *
+	 *                               Entering CPU idle: coresight_pm_save()
+	 *                                 LOAD source->mode
+	 *                                 LOAD source->path
+	 *
+	 * Once the device mode is detected as enabled on CPU(b) during the idle
+	 * flow, it is guaranteed that accessing the path pointer is safe.
+	 */
+	csdev->path = path;
+
+	/* Synchronization between csdev->path and csdev->mode */
+	smp_mb();
+
+	ret = source_ops(csdev)->enable(csdev, event, mode, path);
+	if (ret)
+		csdev->path = NULL;
+
+	return ret;
 }
 EXPORT_SYMBOL_GPL(coresight_enable_source);
 
 void coresight_disable_source(struct coresight_device *csdev, void *data)
 {
 	source_ops(csdev)->disable(csdev, data);
+
+	/* Synchronization between csdev->path and csdev->mode */
+	smp_mb();
+	csdev->path = NULL;
+
 	coresight_disable_helpers(csdev, NULL);
 }
 EXPORT_SYMBOL_GPL(coresight_disable_source);
