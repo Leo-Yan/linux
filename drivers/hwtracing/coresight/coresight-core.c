@@ -35,6 +35,8 @@
 DEFINE_MUTEX(coresight_mutex);
 static DEFINE_PER_CPU(struct coresight_device *, csdev_sink);
 
+static DEFINE_PER_CPU(struct coresight_path *, percpu_path);
+
 /**
  * struct coresight_node - elements of a path, from source to sink
  * @csdev:	Address of an element.
@@ -422,6 +424,12 @@ int coresight_resume_source(struct coresight_device *csdev)
 	return source_ops(csdev)->resume_perf(csdev);
 }
 EXPORT_SYMBOL_GPL(coresight_resume_source);
+
+void coresight_set_percpu_local_path(struct coresight_path *path)
+{
+	this_cpu_write(percpu_path, path);
+}
+EXPORT_SYMBOL_GPL(coresight_set_percpu_local_path);
 
 /*
  * coresight_disable_path_from : Disable components in the given path beyond

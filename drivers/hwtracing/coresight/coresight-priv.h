@@ -251,5 +251,6 @@ struct coresight_device *coresight_get_percpu_sink(int cpu);
 void coresight_disable_source(struct coresight_device *csdev, void *data);
 void coresight_pause_source(struct coresight_device *csdev);
 int coresight_resume_source(struct coresight_device *csdev);
+void coresight_set_percpu_local_path(struct coresight_path *path);
 
 #endif
