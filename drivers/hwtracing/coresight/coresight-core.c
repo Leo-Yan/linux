@@ -1647,6 +1647,22 @@ static bool coresight_pm_is_needed(struct coresight_device *csdev)
 	return coresight_ops(csdev)->pm_is_needed(csdev);
 }
 
+static int coresight_pm_sink_save(struct coresight_device *sink)
+{
+	if (!sink || !coresight_ops(sink)->pm_save_disable)
+		return 0;
+
+	return coresight_ops(sink)->pm_save_disable(sink);
+}
+
+static void coresight_pm_sink_restore(struct coresight_device *sink)
+{
+	if (!sink || !coresight_ops(sink)->pm_restore_enable)
+		return;
+
+	coresight_ops(sink)->pm_restore_enable(sink);
+}
+
 static int coresight_pm_save(struct coresight_device *csdev)
 {
 	int ret;
@@ -1665,7 +1681,18 @@ static int coresight_pm_save(struct coresight_device *csdev)
 
 	coresight_disable_helpers(csdev, csdev->path);
 	coresight_disable_path(csdev->path);
+
+	ret = coresight_pm_sink_save(coresight_get_sink(csdev->path));
+	if (ret)
+		goto failed_out;
+
 	return 0;
+
+failed_out:
+	coresight_enable_path(csdev->path, coresight_get_mode(csdev));
+	coresight_ops(csdev)->pm_restore_enable(csdev);
+	csdev->path->in_idle = false;
+	return ret;
 }
 
 static void coresight_pm_restore(struct coresight_device *csdev)
@@ -1673,6 +1700,7 @@ static void coresight_pm_restore(struct coresight_device *csdev)
 	if (WARN_ON(!csdev->path))
 		return;
 
+	coresight_pm_sink_restore(coresight_get_sink(csdev->path));
 	coresight_enable_path(csdev->path, coresight_get_mode(csdev));
 	coresight_ops(csdev)->pm_restore_enable(csdev);
 	csdev->path->in_idle = false;
