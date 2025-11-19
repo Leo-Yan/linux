@@ -414,14 +414,32 @@ int coresight_enable_source(struct coresight_device *csdev,
 			    struct perf_event *event, enum cs_mode mode,
 			    struct coresight_path *path)
 {
-	return source_ops(csdev)->enable(csdev, event, mode, path);
+	int ret;
+
+
+	ret = source_ops(csdev)->enable(csdev, event, mode, path);
+	if (ret)
+		return ret;
+
+	/*
+	 * The per-CPU source has updated its path pointer in the enable()
+	 * callback, ensuring synchronization on the target CPU. Set the
+	 * path pointer here for non per-CPU sources.
+	 */
+	if (!coresight_is_percpu_source(csdev))
+		csdev->path = path;
+
+	return 0;
 }
 EXPORT_SYMBOL_GPL(coresight_enable_source);
 
 void coresight_disable_source(struct coresight_device *csdev, void *data)
 {
 	source_ops(csdev)->disable(csdev, data);
-	coresight_disable_helpers(csdev, NULL);
+	coresight_disable_helpers(csdev, csdev->path);
+
+	if (!coresight_is_percpu_source(csdev))
+		csdev->path = NULL;
 }
 EXPORT_SYMBOL_GPL(coresight_disable_source);
 
