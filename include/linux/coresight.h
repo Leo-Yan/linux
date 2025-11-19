@@ -337,11 +337,13 @@ static struct coresight_dev_list (var) = {				\
  * @path_list:		path from source to sink.
  * @trace_id:		trace_id of the whole path.
  * @handle:		handle of the aux_event.
+ * @in_idle:		A flag to indicate if it is in CPU idle.
  */
 struct coresight_path {
 	struct list_head		path_list;
 	u8				trace_id;
 	struct perf_output_handle	*handle;
+	bool				in_idle;
 };
 
 enum cs_mode {
