@@ -1425,6 +1425,7 @@ static int tpdm_probe(struct device *dev, struct resource *res)
 	desc.pdata = dev->platform_data;
 	desc.dev = dev;
 	desc.access = CSDEV_ACCESS_IOMEM(base);
+	desc.cpu = -1;
 	if (res)
 		desc.groups = tpdm_attr_grps;
 	drvdata->csdev = coresight_register(&desc);
