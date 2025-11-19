@@ -400,15 +400,24 @@ static void coresight_disable_helpers(struct coresight_device *csdev,
 }
 
 /*
- * Helper function to call source_ops(csdev)->disable and also disable the
- * helpers.
+ * coresight_enable_source() only enables the source but does nothing for the
+ * associated helpers. In contrast, coresight_disable_source() calls
+ * source_ops(csdev)->disable() and also disables the helpers.
  *
  * There is an imbalance between coresight_enable_path() and
  * coresight_disable_path(). Enabling also enables the source's helpers as part
  * of the path, but disabling always skips the first item in the path (which is
  * the source), so sources and their helpers don't get disabled as part of that
- * function and we need the extra step here.
+ * function and we need the extra step in coresight_disable_source().
  */
+int coresight_enable_source(struct coresight_device *csdev,
+			    struct perf_event *event, enum cs_mode mode,
+			    struct coresight_path *path)
+{
+	return source_ops(csdev)->enable(csdev, event, mode, path);
+}
+EXPORT_SYMBOL_GPL(coresight_enable_source);
+
 void coresight_disable_source(struct coresight_device *csdev, void *data)
 {
 	source_ops(csdev)->disable(csdev, data);
