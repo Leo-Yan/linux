@@ -1649,12 +1649,33 @@ static bool coresight_pm_is_needed(struct coresight_device *csdev)
 
 static int coresight_pm_save(struct coresight_device *csdev)
 {
-	return coresight_ops(csdev)->pm_save_disable(csdev);
+	int ret;
+
+	if (WARN_ON(!csdev->path))
+		return -EINVAL;
+
+	/* in_idle flag will be used for path controlling */
+	csdev->path->in_idle = true;
+
+	ret = coresight_ops(csdev)->pm_save_disable(csdev);
+	if (ret) {
+		csdev->path->in_idle = false;
+		return ret;
+	}
+
+	coresight_disable_helpers(csdev, csdev->path);
+	coresight_disable_path(csdev->path);
+	return 0;
 }
 
 static void coresight_pm_restore(struct coresight_device *csdev)
 {
+	if (WARN_ON(!csdev->path))
+		return;
+
+	coresight_enable_path(csdev->path, coresight_get_mode(csdev));
 	coresight_ops(csdev)->pm_restore_enable(csdev);
+	csdev->path->in_idle = false;
 }
 
 static int coresight_cpu_pm_notify(struct notifier_block *nb, unsigned long cmd,
