@@ -1601,7 +1601,14 @@ static bool coresight_pm_is_needed(struct coresight_device *csdev)
 	    !coresight_ops(csdev)->pm_restore_enable)
 		return false;
 
-	return true;
+	/*
+	 * PM callbacks are provided but pm_is_neended() is absent, it means
+	 * no extra check is needed.
+	 */
+	if (!coresight_ops(csdev)->pm_is_needed)
+		return true;
+
+	return coresight_ops(csdev)->pm_is_needed(csdev);
 }
 
 static int coresight_pm_save(struct coresight_device *csdev)

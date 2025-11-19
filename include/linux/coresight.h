@@ -444,6 +444,7 @@ struct coresight_ops {
 			struct coresight_device *sink);
 	int (*pm_save_disable)(struct coresight_device *csdev);
 	void (*pm_restore_enable)(struct coresight_device *csdev);
+	bool (*pm_is_needed)(struct coresight_device *csdev);
 	const struct coresight_ops_sink *sink_ops;
 	const struct coresight_ops_link *link_ops;
 	const struct coresight_ops_source *source_ops;
