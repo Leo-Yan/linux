@@ -104,7 +104,7 @@ arm_acpi_register_pmu_device(struct platform_device *pdev, u8 len,
 			gsi = this_gsi;
 		} else if (hetid != this_hetid || gsi != this_gsi) {
 			pr_warn("ACPI: %s: must be homogeneous\n", pdev->name);
-			return -ENXIO;
+			//return -ENXIO;
 		}
 	}
 
