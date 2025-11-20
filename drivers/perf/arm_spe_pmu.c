@@ -1344,6 +1344,11 @@ static int arm_spe_pmu_irq_probe(struct arm_spe_pmu *spe_pmu)
 
 	cpumask_copy(&spe_pmu->supported_cpus, affinity);
 
+	cpumask_clear_cpu(1, &spe_pmu->supported_cpus);
+	cpumask_clear_cpu(2, &spe_pmu->supported_cpus);
+	cpumask_clear_cpu(3, &spe_pmu->supported_cpus);
+	cpumask_clear_cpu(4, &spe_pmu->supported_cpus);
+
 	spe_pmu->irq = irq;
 	return 0;
 }
