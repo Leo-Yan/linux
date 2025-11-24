@@ -17,6 +17,7 @@
 
 #include <asm/barrier.h>
 #include <asm/cpufeature.h>
+#include <linux/jump_label.h>
 #include <linux/kvm_host.h>
 #include <linux/vmalloc.h>
 
@@ -116,6 +117,8 @@ static int trbe_errata_cpucaps[] = {
  */
 #define TRBE_WORKAROUND_OVERWRITE_FILL_MODE_SKIP_BYTES	256
 
+DEFINE_STATIC_KEY_FALSE(trbe_trigger_mode_bypass_key);
+
 /*
  * struct trbe_cpudata: TRBE instance specific data
  * @trbe_flag		- TRBE dirty/access flag support
@@ -146,20 +149,6 @@ struct trbe_drvdata {
 	enum cpuhp_state trbe_online;
 	struct platform_device *pdev;
 };
-
-static void trbe_check_errata(struct trbe_cpudata *cpudata)
-{
-	int i;
-
-	for (i = 0; i < TRBE_ERRATA_MAX; i++) {
-		int cap = trbe_errata_cpucaps[i];
-
-		if (WARN_ON_ONCE(cap < 0))
-			return;
-		if (this_cpu_has_cap(cap))
-			set_bit(i, cpudata->errata);
-	}
-}
 
 static bool trbe_has_erratum(struct trbe_cpudata *cpudata, int i)
 {
@@ -200,6 +189,24 @@ static bool trbe_needs_ctxt_sync_after_enable(struct trbe_cpudata *cpudata)
 static bool trbe_is_broken(struct trbe_cpudata *cpudata)
 {
 	return trbe_has_erratum(cpudata, TRBE_IS_BROKEN);
+}
+
+static void trbe_check_errata(struct trbe_cpudata *cpudata)
+{
+	int i;
+
+	for (i = 0; i < TRBE_ERRATA_MAX; i++) {
+		int cap = trbe_errata_cpucaps[i];
+
+		if (WARN_ON_ONCE(cap < 0))
+			return;
+		if (this_cpu_has_cap(cap))
+			set_bit(i, cpudata->errata);
+	}
+
+	if (trbe_may_overwrite_in_fill_mode(cpudata) ||
+	    trbe_may_write_out_of_range(cpudata))
+		static_branch_inc(&trbe_trigger_mode_bypass_key);
 }
 
 static int trbe_alloc_node(struct perf_event *event)
@@ -1239,6 +1246,10 @@ static void arm_trbe_disable_cpu(void *info)
 {
 	struct trbe_drvdata *drvdata = info;
 	struct trbe_cpudata *cpudata = this_cpu_ptr(drvdata->cpudata);
+
+	if (trbe_may_overwrite_in_fill_mode(cpudata) ||
+	    trbe_may_write_out_of_range(cpudata))
+	        static_branch_dec(&trbe_trigger_mode_bypass_key);
 
 	disable_percpu_irq(drvdata->irq);
 	trbe_reset_local(cpudata);
