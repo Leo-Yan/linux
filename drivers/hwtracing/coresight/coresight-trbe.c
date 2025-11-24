@@ -695,6 +695,8 @@ static unsigned long trbe_get_trace_size(struct perf_output_handle *handle,
 	u64 size;
 	u64 overwrite_skip = TRBE_WORKAROUND_OVERWRITE_FILL_MODE_SKIP_BYTES;
 
+	write = get_trbe_write_pointer();
+
 	/*
 	 * If the TRBE has wrapped around the write pointer has
 	 * wrapped and should be treated as limit.
@@ -710,10 +712,8 @@ static unsigned long trbe_get_trace_size(struct perf_output_handle *handle,
 	 * 64bytes. Thus we ignore the potential triggering of the erratum
 	 * on WRAP and limit the data to LIMIT.
 	 */
-	if (wrap)
+	if (wrap && trbe_may_overwrite_in_fill_mode(buf->cpudata))
 		write = get_trbe_limit_pointer();
-	else
-		write = get_trbe_write_pointer();
 
 	/*
 	 * TRBE may use a different base address than the base
@@ -727,13 +727,12 @@ static unsigned long trbe_get_trace_size(struct perf_output_handle *handle,
 		return 0;
 
 	size = end_off - start_off;
+
 	/*
 	 * If the TRBE is affected by the following erratum, we must fill
-	 * the space we skipped with IGNORE packets. And we are always
-	 * guaranteed to have at least a PAGE_SIZE space in the buffer.
+	 * the space we skipped with IGNORE packets.
 	 */
-	if (trbe_may_overwrite_in_fill_mode(buf->cpudata) &&
-	    !WARN_ON(size < overwrite_skip))
+	if (wrap && trbe_may_overwrite_in_fill_mode(buf->cpudata))
 		__trbe_pad_buf(buf, start_off, overwrite_skip);
 
 	return size;
