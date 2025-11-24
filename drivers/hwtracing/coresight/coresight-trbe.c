@@ -17,6 +17,7 @@
 
 #include <asm/barrier.h>
 #include <asm/cpufeature.h>
+#include <linux/jump_label.h>
 #include <linux/kvm_host.h>
 #include <linux/vmalloc.h>
 
@@ -146,6 +147,8 @@ struct trbe_drvdata {
 	enum cpuhp_state trbe_online;
 	struct platform_device *pdev;
 };
+
+DEFINE_STATIC_KEY_FALSE(trbe_trigger_mode_bypass_key);
 
 static void trbe_check_errata(struct trbe_cpudata *cpudata)
 {
@@ -1250,12 +1253,20 @@ static void arm_trbe_enable_cpu(void *info)
 
 	trbe_reset_local(cpudata);
 	enable_percpu_irq(drvdata->irq, IRQ_TYPE_NONE);
+
+	if (trbe_may_overwrite_in_fill_mode(cpudata) ||
+	    trbe_may_write_out_of_range(cpudata))
+		static_branch_inc(&trbe_trigger_mode_bypass_key);
 }
 
 static void arm_trbe_disable_cpu(void *info)
 {
 	struct trbe_drvdata *drvdata = info;
 	struct trbe_cpudata *cpudata = this_cpu_ptr(drvdata->cpudata);
+
+	if (trbe_may_overwrite_in_fill_mode(cpudata) ||
+	    trbe_may_write_out_of_range(cpudata))
+		static_branch_dec(&trbe_trigger_mode_bypass_key);
 
 	disable_percpu_irq(drvdata->irq);
 	trbe_reset_local(cpudata);
