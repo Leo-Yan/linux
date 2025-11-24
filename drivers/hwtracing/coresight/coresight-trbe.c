@@ -568,7 +568,7 @@ static void clr_trbe_status(void)
 	u64 trbsr = read_sysreg_s(SYS_TRBSR_EL1);
 
 	WARN_ON(is_trbe_enabled());
-	trbsr &= ~TRBSR_EL1_IRQ;
+
 	trbsr &= ~TRBSR_EL1_TRG;
 	trbsr &= ~TRBSR_EL1_WRAP;
 	trbsr &= ~TRBSR_EL1_EC_MASK;
