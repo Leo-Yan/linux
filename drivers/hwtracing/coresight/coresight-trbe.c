@@ -844,17 +844,11 @@ static unsigned long arm_trbe_update_buffer(struct coresight_device *csdev,
 		 */
 		clr_trbe_irq();
 		isb();
+	}
 
-		act = trbe_get_fault_act(handle, status);
-		/*
-		 * If this was not due to a WRAP event, we have some
-		 * errors and as such buffer is empty.
-		 */
-		if (act != TRBE_FAULT_ACT_WRAP) {
-			size = 0;
-			goto done;
-		}
+	act = trbe_get_fault_act(handle, status);
 
+	if (act == TRBE_FAULT_ACT_WRAP) {
 		trbe_report_wrap_event(handle);
 		wrap = true;
 	}
