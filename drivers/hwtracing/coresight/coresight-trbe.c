@@ -812,17 +812,6 @@ static unsigned long arm_trbe_update_buffer(struct coresight_device *csdev,
 		return 0;
 
 	/*
-	 * We are about to disable the TRBE. And this could in turn
-	 * fill up the buffer triggering, an IRQ. This could be consumed
-	 * by the PE asynchronously, causing a race here against
-	 * the IRQ handler in closing out the handle. So, let us
-	 * make sure the IRQ can't trigger while we are collecting
-	 * the buffer. We also make sure that a WRAP event is handled
-	 * accordingly.
-	 */
-	local_irq_save(flags);
-
-	/*
 	 * If the TRBE was disabled due to lack of space in the AUX buffer or a
 	 * spurious fault, the driver leaves it disabled, truncating the buffer.
 	 * Since the etm_perf driver expects to close out the AUX buffer, the
@@ -873,8 +862,6 @@ static unsigned long arm_trbe_update_buffer(struct coresight_device *csdev,
 	size = trbe_get_trace_size(handle, buf, wrap);
 
 done:
-	local_irq_restore(flags);
-
 	if (buf->snapshot)
 		handle->head += size;
 	return size;
