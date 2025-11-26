@@ -339,7 +339,7 @@ static void trbe_pad_buf(struct perf_output_handle *handle, int len)
 		perf_aux_output_skip(handle, len);
 }
 
-static int trbe_snapshot_offset(struct perf_output_handle *handle)
+static int trbe_snapshot_next(struct perf_output_handle *handle)
 {
 	struct trbe_buf *buf = etm_perf_sink_config(handle);
 
@@ -381,7 +381,7 @@ static u64 trbe_min_trace_buf_size(struct perf_output_handle *handle)
  * %%%% - Free area, disabled, trace will not be written
  * ==== - Free area, padded with ETE_IGNORE_PACKET, trace will be skipped
  */
-static unsigned long __trbe_normal_offset(struct perf_output_handle *handle)
+static unsigned long __trbe_normal_limit(struct perf_output_handle *handle)
 {
 	struct trbe_buf *buf = etm_perf_sink_config(handle);
 	struct trbe_cpudata *cpudata = buf->cpudata;
@@ -518,10 +518,10 @@ static unsigned long __trbe_normal_offset(struct perf_output_handle *handle)
 	return 0;
 }
 
-static int trbe_normal_offset(struct perf_output_handle *handle)
+static int trbe_normal_next(struct perf_output_handle *handle)
 {
 	struct trbe_buf *buf = etm_perf_sink_config(handle);
-	u64 limit = __trbe_normal_offset(handle);
+	u64 limit = __trbe_normal_limit(handle);
 	u64 head = PERF_IDX2OFF(handle->head, buf);
 
 	/*
@@ -534,7 +534,7 @@ static int trbe_normal_offset(struct perf_output_handle *handle)
 	 */
 	while (limit && ((limit - head) < trbe_min_trace_buf_size(handle))) {
 		trbe_pad_buf(handle, limit - head);
-		limit = __trbe_normal_offset(handle);
+		limit = __trbe_normal_limit(handle);
 		head = PERF_IDX2OFF(handle->head, buf);
 	}
 
@@ -553,16 +553,18 @@ static int trbe_compute_next(struct perf_output_handle *handle)
 	perf_aux_output_flag(handle, PERF_AUX_FLAG_CORESIGHT_FORMAT_RAW);
 
 	if (buf->snapshot)
-		ret = trbe_snapshot_offset(handle);
+		ret = trbe_snapshot_next(handle);
 	else
-		ret = trbe_normal_offset(handle);
+		ret = trbe_normal_next(handle);
 
 	if (ret)
-		return ret;
+		goto out;
 
 	buf->trbe_write = buf->trbe_base + PERF_IDX2OFF(handle->head, buf);
 	buf->trbe_hw_base = buf->trbe_base;
-	return 0;
+
+out:
+	return ret;
 }
 
 static void clr_trbe_status(void)
