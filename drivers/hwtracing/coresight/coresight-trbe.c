@@ -280,25 +280,6 @@ static void trbe_reset_local(struct trbe_cpudata *cpudata)
 	write_sysreg_s(0, SYS_TRBSR_EL1);
 }
 
-static void trbe_report_wrap_event(struct perf_output_handle *handle)
-{
-	/*
-	 * Mark the buffer to indicate that there was a WRAP event by
-	 * setting the COLLISION flag. This indicates to the user that
-	 * the TRBE trace collection was stopped without stopping the
-	 * ETE and thus there might be some amount of trace that was
-	 * lost between the time the WRAP was detected and the IRQ
-	 * was consumed by the CPU.
-	 *
-	 * Setting the TRUNCATED flag would move the event to STOPPED
-	 * state unnecessarily, even when there is space left in the
-	 * ring buffer. Using the COLLISION flag doesn't have this side
-	 * effect. We only set TRUNCATED flag when there is no space
-	 * left in the ring buffer.
-	 */
-	perf_aux_output_flag(handle, PERF_AUX_FLAG_COLLISION);
-}
-
 static void trbe_truncate_event(struct perf_output_handle *handle)
 {
 	struct trbe_buf *buf = etm_perf_sink_config(handle);
@@ -708,8 +689,24 @@ static enum trbe_fault_action trbe_get_fault_act(struct perf_output_handle *hand
 		goto out_fatal;
 	}
 
-	if (is_trbe_wrap(trbsr))
+	/*
+	 * Mark the buffer to indicate that there was a WRAP event by
+	 * setting the COLLISION flag. This indicates to the user that
+	 * the TRBE trace collection was stopped without stopping the
+	 * ETE and thus there might be some amount of trace that was
+	 * lost between the time the WRAP was detected and the IRQ
+	 * was consumed by the CPU.
+	 *
+	 * Setting the TRUNCATED flag would move the event to STOPPED
+	 * state unnecessarily, even when there is space left in the
+	 * ring buffer. Using the COLLISION flag doesn't have this side
+	 * effect. We only set TRUNCATED flag when there is no space
+	 * left in the ring buffer.
+	 */
+	if (is_trbe_wrap(trbsr)) {
+		perf_aux_output_flag(handle, PERF_AUX_FLAG_COLLISION);
 		return TRBE_FAULT_ACT_WRAP;
+	}
 
 	return TRBE_FAULT_ACT_SPURIOUS;
 
@@ -895,8 +892,6 @@ static unsigned long arm_trbe_update_buffer(struct coresight_device *csdev,
 	if (act == TRBE_FAULT_ACT_FATAL) {
 		size = 0;
 		goto done;
-	} else if (act == TRBE_FAULT_ACT_WRAP) {
-		trbe_report_wrap_event(handle);
 	}
 
 	size = trbe_get_trace_size(handle, buf, act == TRBE_FAULT_ACT_WRAP);
@@ -1116,7 +1111,6 @@ static int trbe_handle_overflow(struct perf_output_handle *handle)
 	if (buf->snapshot)
 		handle->head += size;
 
-	trbe_report_wrap_event(handle);
 	perf_aux_output_end(handle, size);
 	event_data = perf_aux_output_begin(handle, event);
 	if (!event_data) {
