@@ -1133,7 +1133,8 @@ static void trbe_handle_spurious(struct trbe_cpudata *cpudata)
 	set_trbe_enabled(cpudata, trblimitr);
 }
 
-static int trbe_handle_overflow(struct trbe_cpudata *cpudata)
+static int trbe_handle_overflow(struct trbe_cpudata *cpudata,
+				enum trbe_fault_action act)
 {
 	struct perf_output_handle *handle = cpudata->handle;
 	struct perf_event *event = handle->event;
@@ -1148,7 +1149,7 @@ static int trbe_handle_overflow(struct trbe_cpudata *cpudata)
 	 */
 	clr_trbe_status();
 
-	size = trbe_get_trace_size(handle, buf, true);
+	size = trbe_get_trace_size(handle, buf, act == TRBE_FAULT_ACT_WRAP);
 	if (buf->snapshot)
 		handle->head += size;
 
@@ -1254,7 +1255,7 @@ static irqreturn_t arm_trbe_irq_handler(int irq, void *dev)
 	act = trbe_get_fault_act(handle, status);
 	switch (act) {
 	case TRBE_FAULT_ACT_WRAP:
-		truncated = !!trbe_handle_overflow(cpudata);
+		truncated = !!trbe_handle_overflow(cpudata, act);
 		break;
 	case TRBE_FAULT_ACT_SPURIOUS:
 		trbe_handle_spurious(cpudata);
