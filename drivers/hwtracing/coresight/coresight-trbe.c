@@ -721,43 +721,57 @@ out_fatal:
 static unsigned long trbe_get_trace_size(struct perf_output_handle *handle,
 					 struct trbe_buf *buf, bool wrap)
 {
-	u64 write;
-	u64 start_off, end_off;
-	u64 size;
 	u64 overwrite_skip = TRBE_WORKAROUND_OVERWRITE_FILL_MODE_SKIP_BYTES;
+	u64 base = buf->trbe_base;
+	u64 start_off = PERF_IDX2OFF(handle->head, buf);
+	u64 write = get_trbe_write_pointer();
+	u64 limit = get_trbe_limit_pointer();
+	u64 limit_off, write_off, size;
 
 	/*
-	 * If the TRBE has wrapped around the write pointer has
-	 * wrapped and should be treated as limit.
+	 * If the TRBE has wrapped around the write pointer has wrapped and
+	 * should be treated as limit.
 	 *
 	 * When the TRBE is affected by TRBE_WORKAROUND_WRITE_OUT_OF_RANGE,
-	 * it may write upto 64bytes beyond the "LIMIT". The driver already
+	 * it may write up to 64bytes beyond the "LIMIT". The driver already
 	 * keeps a valid page next to the LIMIT and we could potentially
 	 * consume the trace data that may have been collected there. But we
 	 * cannot be really sure it is available, and the TRBPTR may not
-	 * indicate the same. Also, affected cores are also affected by another
-	 * erratum which forces the PAGE_SIZE alignment on the TRBPTR, and thus
-	 * could potentially pad an entire PAGE_SIZE - 64bytes, to get those
-	 * 64bytes. Thus we ignore the potential triggering of the erratum
-	 * on WRAP and limit the data to LIMIT.
+	 * indicate the same.
+	 *
+	 * Also, affected cores are also affected by another erratum
+	 * TRBE_WORKAROUND_OVERWRITE_FILL_MODE, which forces the PAGE_SIZE
+	 * alignment on the TRBPTR, and thus could potentially pad an entire
+	 * PAGE_SIZE - 64bytes, to get those 64bytes. Thus we ignore the
+	 * potential effects of the erratum on WRAP and limit the data to
+	 * LIMIT.
 	 */
-	if (wrap)
-		write = get_trbe_limit_pointer();
-	else
-		write = get_trbe_write_pointer();
+	if (wrap &&
+	    (trbe_may_overwrite_in_fill_mode(buf->cpudata) ||
+	     trbe_may_write_out_of_range(buf->cpudata)))
+		write = limit;
 
-	/*
-	 * TRBE may use a different base address than the base
-	 * of the ring buffer. Thus use the beginning of the ring
-	 * buffer to compute the offsets.
-	 */
-	end_off = write - buf->trbe_base;
-	start_off = PERF_IDX2OFF(handle->head, buf);
-
-	if (WARN_ON_ONCE(end_off < start_off))
+	if (WARN_ON_ONCE(write < base || write > limit))
 		return 0;
 
-	size = end_off - start_off;
+	limit_off = limit - base;
+	write_off = write - base;
+
+	if (WARN_ON_ONCE(start_off >= limit_off))
+		return 0;
+
+	if (!wrap) {
+		if (WARN_ON_ONCE(write_off < start_off))
+			return 0;
+
+		size = write_off - start_off;
+	} else {
+		size = limit_off - start_off;
+
+		if (write != limit)
+			size += write_off;
+	}
+
 	/*
 	 * If the TRBE is affected by the following erratum, we must fill
 	 * the space we skipped with IGNORE packets. And we are always
