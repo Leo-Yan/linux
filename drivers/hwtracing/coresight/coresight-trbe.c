@@ -299,18 +299,10 @@ static void trbe_report_wrap_event(struct perf_output_handle *handle)
 	perf_aux_output_flag(handle, PERF_AUX_FLAG_COLLISION);
 }
 
-static void trbe_stop_and_truncate_event(struct perf_output_handle *handle)
+static void trbe_truncate_event(struct perf_output_handle *handle)
 {
 	struct trbe_buf *buf = etm_perf_sink_config(handle);
 
-	/*
-	 * We cannot proceed with the buffer collection and we
-	 * do not have any data for the current session. The
-	 * etm_perf driver expects to close out the aux_buffer
-	 * at event_stop(). So disable the TRBE here and leave
-	 * the update_buffer() to return a 0 size.
-	 */
-	trbe_drain_and_disable_local(buf->cpudata);
 	perf_aux_output_flag(handle, PERF_AUX_FLAG_TRUNCATED);
 	perf_aux_output_end(handle, 0);
 	*this_cpu_ptr(buf->cpudata->drvdata->handle) = NULL;
@@ -1067,7 +1059,7 @@ static int __arm_trbe_enable(struct trbe_buf *buf,
 	trbe_enable_hw(buf);
 	return 0;
 err:
-	trbe_stop_and_truncate_event(handle);
+	trbe_truncate_event(handle);
 	return ret;
 }
 
@@ -1160,7 +1152,6 @@ static int trbe_handle_overflow(struct perf_output_handle *handle,
 		 * is able to detect this with a disconnected handle
 		 * (handle->event = NULL).
 		 */
-		trbe_drain_and_disable_local(buf->cpudata);
 		*this_cpu_ptr(buf->cpudata->drvdata->handle) = NULL;
 		return -EINVAL;
 	}
@@ -1256,7 +1247,7 @@ static irqreturn_t arm_trbe_irq_handler(int irq, void *dev)
 		trbe_handle_spurious(handle);
 		break;
 	case TRBE_FAULT_ACT_FATAL:
-		trbe_stop_and_truncate_event(handle);
+		trbe_truncate_event(handle);
 		truncated = true;
 		break;
 	}
