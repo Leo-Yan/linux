@@ -48,6 +48,7 @@
 #define TRBE_TRACE_MIN_BUF_SIZE		64
 
 enum trbe_fault_action {
+	TRBE_FAULT_ACT_TRIG,
 	TRBE_FAULT_ACT_WRAP,
 	TRBE_FAULT_ACT_SPURIOUS,
 	TRBE_FAULT_ACT_FATAL,
@@ -67,6 +68,7 @@ struct trbe_buf {
 	unsigned long trbe_hw_base;
 	unsigned long trbe_limit;
 	unsigned long trbe_write;
+	unsigned long trbe_count;
 	int nr_pages;
 	void **pages;
 	bool snapshot;
@@ -493,6 +495,10 @@ static unsigned long __trbe_normal_offset(struct perf_output_handle *handle)
 	if (head < tail)
 		limit = round_down(tail, PAGE_SIZE);
 
+	/* If trigger mode is enabled, no need to use limit for watermark */
+	if (!static_branch_unlikely(&trbe_trigger_mode_bypass))
+		goto out;
+
 	/*
 	 * Wakeup may be arbitrarily far into the future. If it's not in the
 	 * current generation, either we'll wrap before hitting it, or it's
@@ -510,6 +516,7 @@ static unsigned long __trbe_normal_offset(struct perf_output_handle *handle)
 	if (handle->wakeup < (handle->head + handle->size) && head <= wakeup)
 		limit = min(limit, round_up(wakeup, PAGE_SIZE));
 
+out:
 	/*
 	 * There is a situation when this can happen i.e limit is before
 	 * the head and hence TRBE cannot be configured.
@@ -531,6 +538,39 @@ static unsigned long __trbe_normal_offset(struct perf_output_handle *handle)
 
 	trbe_pad_buf(handle, handle->size);
 	return 0;
+}
+
+static u64 __trbe_normal_trigger_count(struct perf_output_handle *handle)
+{
+	struct trbe_buf *buf = etm_perf_sink_config(handle);
+	struct trbe_cpudata *cpudata = buf->cpudata;
+	u64 limit, head, wakeup;
+	u64 count = 0;
+
+	if (static_branch_unlikely(&trbe_trigger_mode_bypass))
+		return 0;
+
+	limit = buf->trbe_limit - buf->trbe_base;
+	head = PERF_IDX2OFF(handle->head, buf);
+	wakeup = PERF_IDX2OFF(handle->wakeup, buf);
+
+	/* Set the count to guard the end of free buffer after wrap around */
+	if (limit == buf->nr_pages * PAGE_SIZE && (head + handle->size) > limit)
+		count = handle->size;
+
+	/*
+	 * If the watermark is less than the limit, use the trigger count for
+	 * the watermark maintenance.
+	 */
+	if (handle->wakeup < (handle->head + handle->size) && head <= wakeup) {
+		u64 wakeup_count =
+			round_up(wakeup - head, cpudata->trbe_hw_align);
+
+		if (head + wakeup_count < limit)
+			count = wakeup_count;
+	}
+
+	return count;
 }
 
 static int trbe_normal_offset(struct perf_output_handle *handle)
@@ -557,6 +597,7 @@ static int trbe_normal_offset(struct perf_output_handle *handle)
 		return -ENOSPC;
 
 	buf->trbe_limit = buf->trbe_base + limit;
+	buf->trbe_count = __trbe_normal_trigger_count(handle);
 	return 0;
 }
 
@@ -609,24 +650,40 @@ static void set_trbe_limit_pointer_enabled(struct trbe_buf *buf)
 	trblimitr &= ~TRBLIMITR_EL1_TM_MASK;
 	trblimitr &= ~TRBLIMITR_EL1_LIMIT_MASK;
 
-	/*
-	 * Fill trace buffer mode is used here while configuring the
-	 * TRBE for trace capture. In this particular mode, the trace
-	 * collection is stopped and a maintenance interrupt is raised
-	 * when the current write pointer wraps. This pause in trace
-	 * collection gives the software an opportunity to capture the
-	 * trace data in the interrupt handler, before reconfiguring
-	 * the TRBE.
-	 */
-	trblimitr |= (TRBLIMITR_EL1_FM_FILL << TRBLIMITR_EL1_FM_SHIFT) &
-		     TRBLIMITR_EL1_FM_MASK;
+	if (!buf->trbe_count ||
+	    buf->trbe_write + buf->trbe_count == buf->trbe_limit) {
+		/*
+		 * Fill trace buffer mode is used here while configuring the
+		 * TRBE for trace capture. In this particular mode, the trace
+		 * collection is stopped and a maintenance interrupt is raised
+		 * when the current write pointer wraps. This pause in trace
+		 * collection gives the software an opportunity to capture the
+		 * trace data in the interrupt handler, before reconfiguring
+		 * the TRBE.
+		 */
+		trblimitr |= FIELD_PREP(TRBLIMITR_EL1_FM_MASK, TRBLIMITR_EL1_FM_FILL) |
+			     FIELD_PREP(TRBLIMITR_EL1_TM_MASK, TRBLIMITR_EL1_TM_IGNR);
+	} else if (buf->trbe_write + buf->trbe_count < buf->trbe_limit) {
+		/*
+		 * Fill mode is used here to stop trace collection and prevent
+		 * the buffer from being overwritten. Trigger mode continues
+		 * trace collection and raises a maintenance interrupt on a
+		 * trigger event, which acts as a watermark for notifying
+		 * userspace.
+		 */
+		trblimitr |= FIELD_PREP(TRBLIMITR_EL1_FM_MASK, TRBLIMITR_EL1_FM_FILL) |
+			     FIELD_PREP(TRBLIMITR_EL1_TM_MASK, TRBLIMITR_EL1_TM_IRQ);
+	} else if (buf->trbe_write + buf->trbe_count > buf->trbe_limit) {
+		/*
+		 * Wrap buffer mode continues trace collection and raises
+		 * maintenance interrupt on buffer wrap. Trigger mode stops
+		 * trace on trigger event to guard the buffer from being
+		 * overwritten.
+		 */
+		trblimitr |= FIELD_PREP(TRBLIMITR_EL1_FM_MASK, TRBLIMITR_EL1_FM_WRAP) |
+			     FIELD_PREP(TRBLIMITR_EL1_TM_MASK, TRBLIMITR_EL1_TM_STOP);
+	}
 
-	/*
-	 * Trigger mode is not used here while configuring the TRBE for
-	 * the trace capture. Hence just keep this in the ignore mode.
-	 */
-	trblimitr |= (TRBLIMITR_EL1_TM_IGNR << TRBLIMITR_EL1_TM_SHIFT) &
-		     TRBLIMITR_EL1_TM_MASK;
 	trblimitr |= (addr & PAGE_MASK);
 	set_trbe_enabled(buf->cpudata, trblimitr);
 }
@@ -638,6 +695,7 @@ static void trbe_enable_hw(struct trbe_buf *buf)
 	WARN_ON(buf->trbe_write >= buf->trbe_limit);
 	set_trbe_base_pointer(buf->trbe_hw_base);
 	set_trbe_write_pointer(buf->trbe_write);
+	set_trbe_trigger_count(buf->trbe_count);
 
 	/*
 	 * Synchronize all the register updates
@@ -653,8 +711,6 @@ static enum trbe_fault_action trbe_get_fault_act(struct perf_output_handle *hand
 	const char *err_str;
 	int ec = get_trbe_ec(trbsr);
 	int bsc = get_trbe_bsc(trbsr);
-
-	WARN_ON(is_trbe_running(trbsr));
 
 	if (is_trbe_abort(trbsr)) {
 		err_str = "External abort";
@@ -687,8 +743,7 @@ static enum trbe_fault_action trbe_get_fault_act(struct perf_output_handle *hand
 	case TRBSR_EL1_BSC_FILLED:
 		break;
 	case TRBSR_EL1_BSC_TRIGGER_EVENT:
-		err_str = "Unsupported trigger event";
-		goto out_fatal;
+		break;
 	case TRBSR_EL1_BSC_MANUAL_STOP:
 		err_str = "Unsupported manual stop";
 		goto out_fatal;
@@ -718,6 +773,9 @@ static enum trbe_fault_action trbe_get_fault_act(struct perf_output_handle *hand
 		perf_aux_output_flag(handle, PERF_AUX_FLAG_COLLISION);
 		return TRBE_FAULT_ACT_WRAP;
 	}
+
+	if (is_trbe_trg(trbsr))
+		return TRBE_FAULT_ACT_TRIG;
 
 	return TRBE_FAULT_ACT_SPURIOUS;
 
@@ -1220,6 +1278,7 @@ static irqreturn_t arm_trbe_irq_handler(int irq, void *dev)
 		clr_trbe_status();
 
 	switch (act) {
+	case TRBE_FAULT_ACT_TRIG:
 	case TRBE_FAULT_ACT_WRAP:
 		truncated = !!trbe_handle_overflow(handle, act);
 		break;
