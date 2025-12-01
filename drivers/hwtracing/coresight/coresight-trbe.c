@@ -798,7 +798,6 @@ static unsigned long arm_trbe_update_buffer(struct coresight_device *csdev,
 	enum trbe_fault_action act;
 	unsigned long size, status;
 	unsigned long flags;
-	bool wrap = false;
 
 	WARN_ON(buf->cpudata != cpudata);
 	WARN_ON(cpudata->cpu != smp_processor_id());
@@ -850,22 +849,19 @@ static unsigned long arm_trbe_update_buffer(struct coresight_device *csdev,
 		 */
 		clr_trbe_irq();
 		isb();
-
-		act = trbe_get_fault_act(handle, status);
-		/*
-		 * If this was not due to a WRAP event, we have some
-		 * errors and as such buffer is empty.
-		 */
-		if (act != TRBE_FAULT_ACT_WRAP) {
-			size = 0;
-			goto done;
-		}
-
-		trbe_report_wrap_event(handle);
-		wrap = true;
 	}
 
-	size = trbe_get_trace_size(handle, buf, wrap);
+	act = trbe_get_fault_act(handle, status);
+
+	/* If an error occurred, the buffer may be empty */
+	if (act == TRBE_FAULT_ACT_FATAL) {
+		size = 0;
+		goto done;
+	} else if (act == TRBE_FAULT_ACT_WRAP) {
+		trbe_report_wrap_event(handle);
+	}
+
+	size = trbe_get_trace_size(handle, buf, act == TRBE_FAULT_ACT_WRAP);
 
 done:
 	local_irq_restore(flags);
