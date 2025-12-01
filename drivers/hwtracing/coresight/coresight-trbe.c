@@ -20,6 +20,7 @@
 #include <linux/iopoll.h>
 #include <linux/kvm_host.h>
 #include <linux/vmalloc.h>
+#include <kunit/test-bug.h>
 
 #include "coresight-etm4x.h"
 #include "coresight-self-hosted-trace.h"
@@ -399,10 +400,27 @@ static void __trbe_pad_buf(struct trbe_buf *buf, u64 offset, int len)
 	memset((void *)buf->trbe_base + offset, ETE_IGNORE_PACKET, len);
 }
 
+static struct trbe_buf *trbe_handle_buf(struct perf_output_handle *handle)
+{
+	if (kunit_get_current_test())
+		return (struct trbe_buf *)handle->rb;
+
+	return etm_perf_sink_config(handle);
+}
+
 static void trbe_pad_buf(struct perf_output_handle *handle, int len)
 {
-	struct trbe_buf *buf = etm_perf_sink_config(handle);
-	u64 head = PERF_IDX2OFF(handle->head, buf);
+	struct trbe_buf *buf;
+	u64 head;
+
+	if (kunit_get_current_test()) {
+		handle->head += len;
+		handle->size -= len;
+		return;
+	}
+
+	buf = etm_perf_sink_config(handle);
+	head = PERF_IDX2OFF(handle->head, buf);
 
 	__trbe_pad_buf(buf, head, len);
 	if (!buf->snapshot)
@@ -425,7 +443,7 @@ static int trbe_snapshot_offset(struct perf_output_handle *handle)
 static u64 trbe_min_trace_buf_size(struct perf_output_handle *handle)
 {
 	u64 size = TRBE_TRACE_MIN_BUF_SIZE;
-	struct trbe_buf *buf = etm_perf_sink_config(handle);
+	struct trbe_buf *buf = trbe_handle_buf(handle);
 	struct trbe_cpudata *cpudata = buf->cpudata;
 
 	/*
@@ -465,7 +483,7 @@ static bool trbe_wakeup_before_tail(struct perf_output_handle *handle,
 static u32 trbe_normal_trigger_count(struct perf_output_handle *handle,
 				     u64 head, u64 wakeup, u64 limit)
 {
-	struct trbe_buf *buf = etm_perf_sink_config(handle);
+	struct trbe_buf *buf = trbe_handle_buf(handle);
 	struct trbe_cpudata *cpudata = buf->cpudata;
 	const u64 bufsize = buf->nr_pages * PAGE_SIZE;
 	u64 count;
@@ -528,7 +546,7 @@ out:
 static unsigned long __trbe_normal_offset(struct perf_output_handle *handle,
 					  struct trbe_buf_next *next)
 {
-	struct trbe_buf *buf = etm_perf_sink_config(handle);
+	struct trbe_buf *buf = trbe_handle_buf(handle);
 	struct trbe_cpudata *cpudata = buf->cpudata;
 	const u64 bufsize = buf->nr_pages * PAGE_SIZE;
 	u64 limit = bufsize;
@@ -671,7 +689,7 @@ static unsigned long __trbe_normal_offset(struct perf_output_handle *handle,
 
 static int trbe_normal_offset(struct perf_output_handle *handle)
 {
-	struct trbe_buf *buf = etm_perf_sink_config(handle);
+	struct trbe_buf *buf = trbe_handle_buf(handle);
 	struct trbe_buf_next next = { };
 	u64 limit;
 
@@ -1934,3 +1952,7 @@ module_exit(arm_trbe_exit);
 MODULE_AUTHOR("Anshuman Khandual <anshuman.khandual@arm.com>");
 MODULE_DESCRIPTION("Arm Trace Buffer Extension (TRBE) driver");
 MODULE_LICENSE("GPL v2");
+
+#ifdef CONFIG_CORESIGHT_TRBE_KUNIT_TESTS
+#include "coresight-trbe-kunit-tests.c"
+#endif
