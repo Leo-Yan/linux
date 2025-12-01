@@ -19,6 +19,10 @@
 
 #include "coresight-etm-perf.h"
 
+#define TRBE_LIMIT_MODE(fm, tm) \
+	(FIELD_PREP(TRBLIMITR_EL1_FM_MASK, (fm)) | \
+	 FIELD_PREP(TRBLIMITR_EL1_TM_MASK, (tm)))
+
 static inline bool is_trbe_available(void)
 {
 	u64 aa64dfr0 = read_sysreg_s(SYS_ID_AA64DFR0_EL1);
@@ -102,6 +106,20 @@ static inline void set_trbe_write_pointer(unsigned long addr)
 {
 	WARN_ON(is_trbe_enabled());
 	write_sysreg_s(addr, SYS_TRBPTR_EL1);
+}
+
+static inline void set_trbe_trigger_count(unsigned long count)
+{
+	u64 trbsr;
+
+	write_sysreg_s(count, SYS_TRBTRG_EL1);
+
+	/* TRBSR_EL1.TRG has been cleared in clr_trbe_status() */
+	if (!count)
+		return;
+
+	trbsr = read_sysreg_s(SYS_TRBSR_EL1);
+	write_sysreg_s(trbsr | TRBSR_EL1_TRG, SYS_TRBSR_EL1);
 }
 
 static inline unsigned long get_trbe_limit_pointer(void)
