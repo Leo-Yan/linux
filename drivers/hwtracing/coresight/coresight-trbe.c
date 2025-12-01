@@ -139,6 +139,7 @@ struct trbe_save_state {
  * @trbe_align		- Software alignment used for the TRBPTR_EL1.
  * @cpu			- CPU this TRBE belongs to.
  * @mode		- Mode of current operation. (perf/disabled)
+ * @trig_is_supported	- Trigger count support flag.
  * @drvdata		- TRBE specific drvdata
  * @errata		- Bit map for the errata on this TRBE.
  */
@@ -148,6 +149,7 @@ struct trbe_cpudata {
 	u64 trbe_align;
 	int cpu;
 	enum cs_mode mode;
+	bool trig_is_supported;
 	struct trbe_buf *buf;
 	struct trbe_drvdata *drvdata;
 	struct trbe_save_state save_state;
@@ -217,6 +219,15 @@ static bool trbe_needs_ctxt_sync_after_enable(struct trbe_cpudata *cpudata)
 static bool trbe_is_broken(struct trbe_cpudata *cpudata)
 {
 	return trbe_has_erratum(cpudata, TRBE_IS_BROKEN);
+}
+
+static bool trbe_trigger_count_supported(struct trbe_cpudata *cpudata)
+{
+	if (trbe_may_overwrite_in_fill_mode(cpudata) ||
+	    trbe_may_write_out_of_range(cpudata))
+		return false;
+
+	return true;
 }
 
 static int trbe_alloc_node(struct perf_event *event)
@@ -1553,6 +1564,7 @@ static void arm_trbe_probe_cpu(void *info)
 	else
 		cpudata->trbe_align = cpudata->trbe_hw_align;
 
+	cpudata->trig_is_supported = trbe_trigger_count_supported(cpudata);
 	cpudata->trbe_flag = get_trbe_flag_update(trbidr);
 	cpudata->cpu = cpu;
 	cpudata->drvdata = drvdata;
