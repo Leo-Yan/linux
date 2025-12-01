@@ -20,6 +20,9 @@
 #include <linux/iopoll.h>
 #include <linux/kvm_host.h>
 #include <linux/vmalloc.h>
+#ifdef CONFIG_CORESIGHT_TRBE_KUNIT_TESTS
+#include <kunit/static_stub.h>
+#endif
 
 #include "coresight-etm4x.h"
 #include "coresight-self-hosted-trace.h"
@@ -377,10 +380,37 @@ static void __trbe_pad_buf(struct trbe_buf *buf, u64 offset, int len)
 	memset((void *)buf->trbe_base + offset, ETE_IGNORE_PACKET, len);
 }
 
+static struct trbe_buf *trbe_test_handle_buf(struct perf_output_handle *handle)
+{
+#ifdef CONFIG_CORESIGHT_TRBE_KUNIT_TESTS
+	KUNIT_STATIC_STUB_REDIRECT(trbe_test_handle_buf, handle);
+#endif
+	return NULL;
+}
+
+static struct trbe_buf *trbe_handle_buf(struct perf_output_handle *handle)
+{
+	struct trbe_buf *buf = trbe_test_handle_buf(handle);
+
+	if (buf)
+		return buf;
+
+	return etm_perf_sink_config(handle);
+}
+
 static void trbe_pad_buf(struct perf_output_handle *handle, int len)
 {
-	struct trbe_buf *buf = etm_perf_sink_config(handle);
-	u64 head = PERF_IDX2OFF(handle->head, buf);
+	struct trbe_buf *buf;
+	u64 head;
+
+	if (trbe_test_handle_buf(handle)) {
+		handle->head += len;
+		handle->size -= len;
+		return;
+	}
+
+	buf = trbe_handle_buf(handle);
+	head = PERF_IDX2OFF(handle->head, buf);
 
 	__trbe_pad_buf(buf, head, len);
 	if (!buf->snapshot)
@@ -389,7 +419,7 @@ static void trbe_pad_buf(struct perf_output_handle *handle, int len)
 
 static int trbe_snapshot_offset(struct perf_output_handle *handle)
 {
-	struct trbe_buf *buf = etm_perf_sink_config(handle);
+	struct trbe_buf *buf = trbe_handle_buf(handle);
 
 	/*
 	 * The ETE trace has alignment synchronization packets allowing
@@ -403,7 +433,7 @@ static int trbe_snapshot_offset(struct perf_output_handle *handle)
 static u64 trbe_min_trace_buf_size(struct perf_output_handle *handle)
 {
 	u64 size = TRBE_TRACE_MIN_BUF_SIZE;
-	struct trbe_buf *buf = etm_perf_sink_config(handle);
+	struct trbe_buf *buf = trbe_handle_buf(handle);
 	struct trbe_cpudata *cpudata = buf->cpudata;
 
 	/*
@@ -443,7 +473,7 @@ static bool trbe_wakeup_before_tail(struct perf_output_handle *handle,
 static u32 trbe_normal_trigger_count(struct perf_output_handle *handle,
 				     u64 head, u64 wakeup, u64 limit)
 {
-	struct trbe_buf *buf = etm_perf_sink_config(handle);
+	struct trbe_buf *buf = trbe_handle_buf(handle);
 	struct trbe_cpudata *cpudata = buf->cpudata;
 	const u64 bufsize = buf->nr_pages * PAGE_SIZE;
 	u64 count;
@@ -507,7 +537,7 @@ out:
 static unsigned long __trbe_normal_offset(struct perf_output_handle *handle,
 					  struct trbe_buf_next *next)
 {
-	struct trbe_buf *buf = etm_perf_sink_config(handle);
+	struct trbe_buf *buf = trbe_handle_buf(handle);
 	struct trbe_cpudata *cpudata = buf->cpudata;
 	const u64 bufsize = buf->nr_pages * PAGE_SIZE;
 	u64 limit = bufsize;
@@ -650,7 +680,7 @@ static unsigned long __trbe_normal_offset(struct perf_output_handle *handle,
 
 static int trbe_normal_offset(struct perf_output_handle *handle)
 {
-	struct trbe_buf *buf = etm_perf_sink_config(handle);
+	struct trbe_buf *buf = trbe_handle_buf(handle);
 	struct trbe_buf_next next = { };
 	u64 limit;
 
@@ -679,7 +709,7 @@ static int trbe_normal_offset(struct perf_output_handle *handle)
 
 static int trbe_compute_next(struct perf_output_handle *handle)
 {
-	struct trbe_buf *buf = etm_perf_sink_config(handle);
+	struct trbe_buf *buf = trbe_handle_buf(handle);
 	int ret;
 
 	perf_aux_output_flag(handle, PERF_AUX_FLAG_CORESIGHT_FORMAT_RAW);
@@ -1189,7 +1219,7 @@ static int arm_trbe_enable(struct coresight_device *csdev, enum cs_mode mode,
 	struct trbe_drvdata *drvdata = dev_get_drvdata(csdev->dev.parent);
 	struct trbe_cpudata *cpudata = dev_get_drvdata(&csdev->dev);
 	struct perf_output_handle *handle = path->handle;
-	struct trbe_buf *buf = etm_perf_sink_config(handle);
+	struct trbe_buf *buf = trbe_handle_buf(handle);
 	int ret;
 
 	WARN_ON(cpudata->cpu != smp_processor_id());
@@ -1329,7 +1359,7 @@ static int trbe_handle_overflow(struct trbe_cpudata *cpudata,
 {
 	struct perf_output_handle *handle = cpudata->handle;
 	struct perf_event *event = handle->event;
-	struct trbe_buf *buf = etm_perf_sink_config(handle);
+	struct trbe_buf *buf = trbe_handle_buf(handle);
 	unsigned long size;
 	struct etm_event_data *event_data;
 	u64 trcprgctlr = 0;
@@ -1374,7 +1404,7 @@ static int trbe_handle_overflow(struct trbe_cpudata *cpudata,
 	 * truncate the trace to stop the event. A subsequent normal restart
 	 * installs the buffer and its CPU association through sink enable.
 	 */
-	buf = etm_perf_sink_config(handle);
+	buf = trbe_handle_buf(handle);
 	if (!buf || buf->cpudata != cpudata) {
 		ret = -EINVAL;
 		goto truncate_event;
@@ -1401,7 +1431,7 @@ truncate_event:
 
 static bool is_perf_trbe(struct perf_output_handle *handle)
 {
-	struct trbe_buf *buf = etm_perf_sink_config(handle);
+	struct trbe_buf *buf = trbe_handle_buf(handle);
 	struct trbe_cpudata *cpudata;
 	struct trbe_drvdata *drvdata;
 	int cpu = smp_processor_id();
@@ -1981,3 +2011,7 @@ module_exit(arm_trbe_exit);
 MODULE_AUTHOR("Anshuman Khandual <anshuman.khandual@arm.com>");
 MODULE_DESCRIPTION("Arm Trace Buffer Extension (TRBE) driver");
 MODULE_LICENSE("GPL v2");
+
+#ifdef CONFIG_CORESIGHT_TRBE_KUNIT_TESTS
+#include "coresight-trbe-kunit-tests.c"
+#endif
