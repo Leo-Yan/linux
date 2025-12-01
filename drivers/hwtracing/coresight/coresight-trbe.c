@@ -285,25 +285,6 @@ static void trbe_reset_local(struct trbe_cpudata *cpudata)
 	write_sysreg_s(0, SYS_TRBSR_EL1);
 }
 
-static void trbe_report_wrap_event(struct perf_output_handle *handle)
-{
-	/*
-	 * Mark the buffer to indicate that there was a WRAP event by
-	 * setting the COLLISION flag. This indicates to the user that
-	 * the TRBE trace collection was stopped without stopping the
-	 * ETE and thus there might be some amount of trace that was
-	 * lost between the time the WRAP was detected and the IRQ
-	 * was consumed by the CPU.
-	 *
-	 * Setting the TRUNCATED flag would move the event to STOPPED
-	 * state unnecessarily, even when there is space left in the
-	 * ring buffer. Using the COLLISION flag doesn't have this side
-	 * effect. We only set TRUNCATED flag when there is no space
-	 * left in the ring buffer.
-	 */
-	perf_aux_output_flag(handle, PERF_AUX_FLAG_COLLISION);
-}
-
 static void trbe_truncate_event(struct perf_output_handle *handle)
 {
 	perf_aux_output_flag(handle, PERF_AUX_FLAG_TRUNCATED);
@@ -917,9 +898,11 @@ static unsigned long arm_trbe_update_buffer(struct coresight_device *csdev,
 		perf_aux_output_flag(handle, PERF_AUX_FLAG_TRUNCATED);
 		size = 0;
 		goto done;
-	} else if (act == TRBE_FAULT_ACT_WRAP) {
-		trbe_report_wrap_event(handle);
 	}
+
+	/* Trace may have been lost before the source was stopped. */
+	if (act == TRBE_FAULT_ACT_WRAP && !is_trbe_running(status))
+		perf_aux_output_flag(handle, PERF_AUX_FLAG_PARTIAL);
 
 	size = trbe_get_trace_size(handle, buf, act == TRBE_FAULT_ACT_WRAP);
 
@@ -1246,7 +1229,9 @@ static int trbe_handle_overflow(struct trbe_cpudata *cpudata,
 	if (buf->snapshot)
 		handle->head += size;
 
-	trbe_report_wrap_event(handle);
+	if (is_buffer_stopped)
+		perf_aux_output_flag(handle, PERF_AUX_FLAG_PARTIAL);
+
 	perf_aux_output_end(handle, size);
 	event_data = perf_aux_output_begin(handle, event);
 	/*
