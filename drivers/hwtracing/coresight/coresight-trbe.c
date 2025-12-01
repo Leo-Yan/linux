@@ -652,7 +652,6 @@ static void trbe_enable_hw(struct trbe_buf *buf)
 	WARN_ON(buf->trbe_hw_base < buf->trbe_base);
 	WARN_ON(buf->trbe_write < buf->trbe_hw_base);
 	WARN_ON(buf->trbe_write >= buf->trbe_limit);
-	clr_trbe_status();
 	set_trbe_base_pointer(buf->trbe_hw_base);
 	set_trbe_write_pointer(buf->trbe_write);
 
@@ -1059,6 +1058,8 @@ static int arm_trbe_disable(struct coresight_device *csdev)
 		return -EINVAL;
 
 	trbe_drain_and_disable_local(cpudata);
+	clr_trbe_status();
+
 	buf->cpudata = NULL;
 	cpudata->buf = NULL;
 	cpudata->mode = CS_MODE_DISABLED;
@@ -1069,6 +1070,12 @@ static void trbe_handle_spurious(struct perf_output_handle *handle)
 {
 	struct trbe_buf *buf = etm_perf_sink_config(handle);
 	u64 trblimitr = read_sysreg_s(SYS_TRBLIMITR_EL1);
+
+	/* Only clear IRQ bit and keep other status */
+	clr_trbe_irq();
+
+	/* Make sure the updated status is visible */
+	isb();
 
 	/*
 	 * If the IRQ was spurious, simply re-enable the TRBE
@@ -1084,6 +1091,13 @@ static int trbe_handle_overflow(struct perf_output_handle *handle)
 	struct trbe_buf *buf = etm_perf_sink_config(handle);
 	unsigned long size;
 	struct etm_event_data *event_data;
+
+	/*
+	 * Clear the status. No context synchronization is required here,
+	 * since context synchronization will be performed before TRBE is
+	 * re-enabled (see trbe_enable_hw()).
+	 */
+	clr_trbe_status();
 
 	size = trbe_get_trace_size(handle, buf, true);
 	if (buf->snapshot)
@@ -1172,8 +1186,6 @@ static irqreturn_t arm_trbe_irq_handler(int irq, void *dev)
 	 */
 	buf = etm_perf_sink_config(handle);
 	trbe_drain_and_disable_local(buf->cpudata);
-	clr_trbe_irq();
-	isb();
 
 	act = trbe_get_fault_act(handle, status);
 	switch (act) {
