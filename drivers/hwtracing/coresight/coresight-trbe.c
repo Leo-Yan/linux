@@ -282,15 +282,18 @@ static void trbe_reset_local(struct trbe_cpudata *cpudata)
 	write_sysreg_s(0, SYS_TRBSR_EL1);
 }
 
-static void trbe_report_wrap_event(struct perf_output_handle *handle)
+static void trbe_report_collision(struct perf_output_handle *handle)
 {
 	/*
-	 * Mark the buffer to indicate that there was a WRAP event by
-	 * setting the COLLISION flag. This indicates to the user that
-	 * the TRBE trace collection was stopped without stopping the
-	 * ETE and thus there might be some amount of trace that was
-	 * lost between the time the WRAP was detected and the IRQ
-	 * was consumed by the CPU.
+	 * Here the COLLISION flag indicates that TRBE stopped collecting
+	 * trace without stopping ETE, so trace may have been lost between
+	 * the TRBE maintenance event being detected and the IRQ being
+	 * consumed by the CPU.
+	 *
+	 * Since ETE is not restarted, no ASYNC packets are generated to
+	 * mark the discontinuity in the trace stream. Report COLLISION so
+	 * userspace resets the decoder before processing the next AUX
+	 * block.
 	 *
 	 * Setting the TRUNCATED flag would move the event to STOPPED
 	 * state unnecessarily, even when there is space left in the
@@ -909,8 +912,6 @@ static unsigned long arm_trbe_update_buffer(struct coresight_device *csdev,
 	if (act == TRBE_FAULT_ACT_FATAL) {
 		size = 0;
 		goto done;
-	} else if (act == TRBE_FAULT_ACT_WRAP) {
-		trbe_report_wrap_event(handle);
 	}
 
 	size = trbe_get_trace_size(handle, buf, act == TRBE_FAULT_ACT_WRAP);
@@ -1151,7 +1152,7 @@ static void arm_trbe_start_tracer(u64 trcprgctlr)
 	isb();
 }
 
-static void arm_trbe_stop_tracer(u64 *trcprgctlr)
+static int arm_trbe_stop_tracer(u64 *trcprgctlr)
 {
 	u64 val;
 
@@ -1164,11 +1165,15 @@ static void arm_trbe_stop_tracer(u64 *trcprgctlr)
 				     val & BIT(TRCSTATR_PMSTABLE_BIT),
 				     1,		/* delay_us */
 				     10,	/* timeout_us */
-				     false))	/* delay_before_read */
+				     false)) {	/* delay_before_read */
 		pr_err("TRBE: timeout for TRCSTATR PMSTABLE\n");
+		return -ETIME;
+	}
 
 	/* Context synchronization after programming the tracer */
 	isb();
+
+	return 0;
 }
 
 static int trbe_handle_overflow(struct perf_output_handle *handle,
@@ -1187,8 +1192,10 @@ static int trbe_handle_overflow(struct perf_output_handle *handle,
 	 * tracer to generate ASYNC packets. This allows the decoder to
 	 * recognize the discontinuity in the trace stream.
 	 */
-	if (is_buffer_stopped)
-		arm_trbe_stop_tracer(&trcprgctlr);
+	if (is_buffer_stopped) {
+		if (arm_trbe_stop_tracer(&trcprgctlr) < 0)
+			trbe_report_collision(handle);
+	}
 
 	/*
 	 * Clear the status. No context synchronization is required here,
@@ -1201,7 +1208,6 @@ static int trbe_handle_overflow(struct perf_output_handle *handle,
 	if (buf->snapshot)
 		handle->head += size;
 
-	trbe_report_wrap_event(handle);
 	perf_aux_output_end(handle, size);
 	event_data = perf_aux_output_begin(handle, event);
 	if (!event_data) {
