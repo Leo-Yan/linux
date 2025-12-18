@@ -80,20 +80,13 @@ static ssize_t enable_show(struct device *dev,
 			   struct device_attribute *attr,
 			   char *buf)
 {
-	int enable_req;
-	bool enabled, powered;
 	struct cti_drvdata *drvdata = dev_get_drvdata(dev->parent);
+	bool enabled;
 
-	raw_spin_lock(&drvdata->spinlock);
-	enable_req = drvdata->config.enable_req_count;
-	powered = drvdata->config.hw_powered;
-	enabled = drvdata->config.hw_enabled;
-	raw_spin_unlock(&drvdata->spinlock);
+	scoped_guard(raw_spinlock, &drvdata->spinlock)
+		enabled = !!drvdata->config.enable_req_count;
 
-	if (powered)
-		return sprintf(buf, "%d\n", enabled);
-	else
-		return sprintf(buf, "%d\n", !!enable_req);
+	return sprintf(buf, "%d\n", !!enabled);
 }
 
 static ssize_t enable_store(struct device *dev,
@@ -131,12 +124,7 @@ static ssize_t powered_show(struct device *dev,
 			    struct device_attribute *attr,
 			    char *buf)
 {
-	bool powered;
-	struct cti_drvdata *drvdata = dev_get_drvdata(dev->parent);
-
-	raw_spin_lock(&drvdata->spinlock);
-	powered = drvdata->config.hw_powered;
-	raw_spin_unlock(&drvdata->spinlock);
+	bool powered = pm_runtime_active(dev->parent);
 
 	return sprintf(buf, "%d\n", powered);
 }
@@ -172,27 +160,27 @@ static struct attribute *coresight_cti_attrs[] = {
 
 /* register based attributes */
 
-/* Read registers with power check only (no enable check). */
 static ssize_t coresight_cti_reg_show(struct device *dev,
-			   struct device_attribute *attr, char *buf)
+				      struct device_attribute *attr, char *buf)
 {
 	struct cti_drvdata *drvdata = dev_get_drvdata(dev->parent);
 	struct cs_off_attribute *cti_attr = container_of(attr, struct cs_off_attribute, attr);
-	u32 val = 0;
+	u32 val;
 
 	pm_runtime_get_sync(dev->parent);
-	raw_spin_lock(&drvdata->spinlock);
-	if (drvdata->config.hw_powered)
-		val = readl_relaxed(drvdata->base + cti_attr->off);
-	raw_spin_unlock(&drvdata->spinlock);
-	pm_runtime_put_sync(dev->parent);
+
+	scoped_guard(raw_spinlock, &drvdata->spinlock)
+		val = cti_read_reg(drvdata, cti_attr->off);
+
+	pm_runtime_put(dev->parent);
+
 	return sysfs_emit(buf, "0x%x\n", val);
 }
 
 /* Write registers with power check only (no enable check). */
-static __maybe_unused ssize_t coresight_cti_reg_store(struct device *dev,
-						      struct device_attribute *attr,
-						      const char *buf, size_t size)
+static ssize_t coresight_cti_reg_store(struct device *dev,
+				       struct device_attribute *attr,
+				       const char *buf, size_t size)
 {
 	struct cti_drvdata *drvdata = dev_get_drvdata(dev->parent);
 	struct cs_off_attribute *cti_attr = container_of(attr, struct cs_off_attribute, attr);
@@ -202,11 +190,12 @@ static __maybe_unused ssize_t coresight_cti_reg_store(struct device *dev,
 		return -EINVAL;
 
 	pm_runtime_get_sync(dev->parent);
-	raw_spin_lock(&drvdata->spinlock);
-	if (drvdata->config.hw_powered)
-		cti_write_single_reg(drvdata, cti_attr->off, val);
-	raw_spin_unlock(&drvdata->spinlock);
-	pm_runtime_put_sync(dev->parent);
+
+	scoped_guard(raw_spinlock, &drvdata->spinlock)
+		cti_write_reg(drvdata, cti_attr->off, val);
+
+	pm_runtime_put(dev->parent);
+
 	return size;
 }
 
@@ -260,21 +249,12 @@ static struct attribute *coresight_cti_mgmt_attrs[] = {
 static ssize_t cti_reg32_show(struct device *dev, char *buf,
 			      u32 *pcached_val, int reg_offset)
 {
-	u32 val = 0;
 	struct cti_drvdata *drvdata = dev_get_drvdata(dev->parent);
-	struct cti_config *config = &drvdata->config;
+	u32 val;
 
-	raw_spin_lock(&drvdata->spinlock);
-	if ((reg_offset >= 0) && cti_active(config)) {
-		CS_UNLOCK(drvdata->base);
-		val = readl_relaxed(drvdata->base + reg_offset);
-		if (pcached_val)
-			*pcached_val = val;
-		CS_LOCK(drvdata->base);
-	} else if (pcached_val) {
+	scoped_guard(raw_spinlock, &drvdata->spinlock)
 		val = *pcached_val;
-	}
-	raw_spin_unlock(&drvdata->spinlock);
+
 	return sprintf(buf, "%#x\n", val);
 }
 
@@ -286,22 +266,19 @@ static ssize_t cti_reg32_show(struct device *dev, char *buf,
 static ssize_t cti_reg32_store(struct device *dev, const char *buf,
 			       size_t size, u32 *pcached_val, int reg_offset)
 {
-	unsigned long val;
 	struct cti_drvdata *drvdata = dev_get_drvdata(dev->parent);
-	struct cti_config *config = &drvdata->config;
+	unsigned long val;
 
 	if (kstrtoul(buf, 0, &val))
 		return -EINVAL;
 
-	raw_spin_lock(&drvdata->spinlock);
-	/* local store */
-	if (pcached_val)
-		*pcached_val = (u32)val;
+	scoped_guard(raw_spinlock, &drvdata->spinlock) {
+		if (cti_is_enabled(drvdata))
+			return -EBUSY;
 
-	/* write through if offset and enabled */
-	if ((reg_offset >= 0) && cti_active(config))
-		cti_write_single_reg(drvdata, reg_offset, val);
-	raw_spin_unlock(&drvdata->spinlock);
+		*pcached_val = val;
+	}
+
 	return size;
 }
 
@@ -326,14 +303,20 @@ static ssize_t name##_store(struct device *dev,				\
 }									\
 static DEVICE_ATTR_RW(name)
 
+cti_config_reg32_rw(gate, ctigate, CTIGATE);
+cti_config_reg32_rw(asicctl, asicctl, ASICCTL);
+cti_config_reg32_rw(appset, ctiappset, CTIAPPSET);
+
 static ssize_t inout_sel_show(struct device *dev,
 			      struct device_attribute *attr,
 			      char *buf)
 {
-	u32 val;
 	struct cti_drvdata *drvdata = dev_get_drvdata(dev->parent);
+	u32 val;
 
-	val = (u32)drvdata->config.ctiinout_sel;
+	scoped_guard(raw_spinlock, &drvdata->spinlock)
+		val = drvdata->config.ctiinout_sel;
+
 	return sprintf(buf, "%d\n", val);
 }
 
@@ -341,17 +324,18 @@ static ssize_t inout_sel_store(struct device *dev,
 			       struct device_attribute *attr,
 			       const char *buf, size_t size)
 {
-	unsigned long val;
 	struct cti_drvdata *drvdata = dev_get_drvdata(dev->parent);
+	unsigned long val;
 
 	if (kstrtoul(buf, 0, &val))
 		return -EINVAL;
-	if (val > (CTIINOUTEN_MAX - 1))
+
+	if (val >= CTIINOUTEN_MAX)
 		return -EINVAL;
 
-	raw_spin_lock(&drvdata->spinlock);
-	drvdata->config.ctiinout_sel = val;
-	raw_spin_unlock(&drvdata->spinlock);
+	scoped_guard(raw_spinlock, &drvdata->spinlock)
+		drvdata->config.ctiinout_sel = val;
+
 	return size;
 }
 static DEVICE_ATTR_RW(inout_sel);
@@ -360,14 +344,18 @@ static ssize_t inen_show(struct device *dev,
 			 struct device_attribute *attr,
 			 char *buf)
 {
+	struct cti_drvdata *drvdata = dev_get_drvdata(dev->parent);
 	unsigned long val;
 	int index;
-	struct cti_drvdata *drvdata = dev_get_drvdata(dev->parent);
 
-	raw_spin_lock(&drvdata->spinlock);
-	index = drvdata->config.ctiinout_sel;
-	val = drvdata->config.ctiinen[index];
-	raw_spin_unlock(&drvdata->spinlock);
+	scoped_guard(raw_spinlock, &drvdata->spinlock) {
+		if (cti_is_enabled(drvdata))
+			return -EBUSY;
+
+		index = drvdata->config.ctiinout_sel;
+		val = drvdata->config.ctiinen[index];
+	}
+
 	return sprintf(buf, "%#lx\n", val);
 }
 
@@ -375,22 +363,21 @@ static ssize_t inen_store(struct device *dev,
 			  struct device_attribute *attr,
 			  const char *buf, size_t size)
 {
+	struct cti_drvdata *drvdata = dev_get_drvdata(dev->parent);
 	unsigned long val;
 	int index;
-	struct cti_drvdata *drvdata = dev_get_drvdata(dev->parent);
-	struct cti_config *config = &drvdata->config;
 
 	if (kstrtoul(buf, 0, &val))
 		return -EINVAL;
 
-	raw_spin_lock(&drvdata->spinlock);
-	index = config->ctiinout_sel;
-	config->ctiinen[index] = val;
+	scoped_guard(raw_spinlock, &drvdata->spinlock) {
+		if (cti_is_enabled(drvdata))
+			return -EBUSY;
 
-	/* write through if enabled */
-	if (cti_active(config))
-		cti_write_single_reg(drvdata, CTIINEN(index), val);
-	raw_spin_unlock(&drvdata->spinlock);
+		index = drvdata->config.ctiinout_sel;
+		drvdata->config.ctiinen[index] = val;
+	}
+
 	return size;
 }
 static DEVICE_ATTR_RW(inen);
@@ -399,14 +386,18 @@ static ssize_t outen_show(struct device *dev,
 			  struct device_attribute *attr,
 			  char *buf)
 {
+	struct cti_drvdata *drvdata = dev_get_drvdata(dev->parent);
 	unsigned long val;
 	int index;
-	struct cti_drvdata *drvdata = dev_get_drvdata(dev->parent);
 
-	raw_spin_lock(&drvdata->spinlock);
-	index = drvdata->config.ctiinout_sel;
-	val = drvdata->config.ctiouten[index];
-	raw_spin_unlock(&drvdata->spinlock);
+	scoped_guard(raw_spinlock, &drvdata->spinlock) {
+		if (cti_is_enabled(drvdata))
+			return -EBUSY;
+
+		index = drvdata->config.ctiinout_sel;
+		val = drvdata->config.ctiouten[index];
+	}
+
 	return sprintf(buf, "%#lx\n", val);
 }
 
@@ -414,22 +405,21 @@ static ssize_t outen_store(struct device *dev,
 			   struct device_attribute *attr,
 			   const char *buf, size_t size)
 {
+	struct cti_drvdata *drvdata = dev_get_drvdata(dev->parent);
 	unsigned long val;
 	int index;
-	struct cti_drvdata *drvdata = dev_get_drvdata(dev->parent);
-	struct cti_config *config = &drvdata->config;
 
 	if (kstrtoul(buf, 0, &val))
 		return -EINVAL;
 
-	raw_spin_lock(&drvdata->spinlock);
-	index = config->ctiinout_sel;
-	config->ctiouten[index] = val;
+	scoped_guard(raw_spinlock, &drvdata->spinlock) {
+		if (cti_is_enabled(drvdata))
+			return -EBUSY;
 
-	/* write through if enabled */
-	if (cti_active(config))
-		cti_write_single_reg(drvdata, CTIOUTEN(index), val);
-	raw_spin_unlock(&drvdata->spinlock);
+		index = drvdata->config.ctiinout_sel;
+		drvdata->config.ctiouten[index] = val;
+	}
+
 	return size;
 }
 static DEVICE_ATTR_RW(outen);
@@ -438,40 +428,44 @@ static ssize_t intack_store(struct device *dev,
 			    struct device_attribute *attr,
 			    const char *buf, size_t size)
 {
+	struct cti_drvdata *drvdata = dev_get_drvdata(dev->parent);
 	unsigned long val;
 
 	if (kstrtoul(buf, 0, &val))
 		return -EINVAL;
 
-	cti_write_intack(dev, val);
+	scoped_guard(raw_spinlock, &drvdata->spinlock) {
+		if (!cti_is_enabled(drvdata))
+			return -EIO;
+
+		cti_write_reg(drvdata, CTIINTACK, val);
+	}
+
 	return size;
 }
 static DEVICE_ATTR_WO(intack);
-
-cti_config_reg32_rw(gate, ctigate, CTIGATE);
-cti_config_reg32_rw(asicctl, asicctl, ASICCTL);
-cti_config_reg32_rw(appset, ctiappset, CTIAPPSET);
 
 static ssize_t appclear_store(struct device *dev,
 			      struct device_attribute *attr,
 			      const char *buf, size_t size)
 {
-	unsigned long val;
 	struct cti_drvdata *drvdata = dev_get_drvdata(dev->parent);
 	struct cti_config *config = &drvdata->config;
+	unsigned long val;
 
 	if (kstrtoul(buf, 0, &val))
 		return -EINVAL;
 
-	raw_spin_lock(&drvdata->spinlock);
+	scoped_guard(raw_spinlock, &drvdata->spinlock) {
+		if (!cti_is_enabled(drvdata))
+			return -EIO;
 
-	/* a 1'b1 in appclr clears down the same bit in appset*/
-	config->ctiappset &= ~val;
+		/* a 1'b1 in appclr clears down the same bit in appset*/
+		config->ctiappset &= ~val;
 
-	/* write through if enabled */
-	if (cti_active(config))
-		cti_write_single_reg(drvdata, CTIAPPCLEAR, val);
-	raw_spin_unlock(&drvdata->spinlock);
+		cti_write_reg(drvdata, CTIAPPCLEAR, val);
+	}
+
 	return size;
 }
 static DEVICE_ATTR_WO(appclear);
@@ -480,19 +474,19 @@ static ssize_t apppulse_store(struct device *dev,
 			      struct device_attribute *attr,
 			      const char *buf, size_t size)
 {
-	unsigned long val;
 	struct cti_drvdata *drvdata = dev_get_drvdata(dev->parent);
-	struct cti_config *config = &drvdata->config;
+	unsigned long val;
 
 	if (kstrtoul(buf, 0, &val))
 		return -EINVAL;
 
-	raw_spin_lock(&drvdata->spinlock);
+	scoped_guard(raw_spinlock, &drvdata->spinlock) {
+		if (!cti_is_enabled(drvdata))
+			return -EIO;
 
-	/* write through if enabled */
-	if (cti_active(config))
-		cti_write_single_reg(drvdata, CTIAPPPULSE, val);
-	raw_spin_unlock(&drvdata->spinlock);
+		cti_write_reg(drvdata, CTIAPPPULSE, val);
+	}
+
 	return size;
 }
 static DEVICE_ATTR_WO(apppulse);
@@ -503,13 +497,13 @@ static DEVICE_ATTR_WO(apppulse);
  * data.
  */
 static struct attribute *coresight_cti_regs_attrs[] = {
-	&dev_attr_inout_sel.attr,
+	&dev_attr_inout_sel.attr,	/* Static configurations (before enabling) */
 	&dev_attr_inen.attr,
 	&dev_attr_outen.attr,
 	&dev_attr_gate.attr,
 	&dev_attr_asicctl.attr,
-	&dev_attr_intack.attr,
 	&dev_attr_appset.attr,
+	&dev_attr_intack.attr,		/* Dynamic configurations */
 	&dev_attr_appclear.attr,
 	&dev_attr_apppulse.attr,
 	coresight_cti_reg(triginstatus, CTITRIGINSTATUS),
@@ -531,22 +525,65 @@ static struct attribute *coresight_cti_regs_attrs[] = {
 };
 
 /* CTI channel x-trigger programming */
+static int cti_channel_trig_op(struct device *dev, enum cti_chan_op op,
+			       enum cti_trig_dir direction, u32 chan,
+			       u32 trigger)
+{
+	struct cti_drvdata *drvdata = dev_get_drvdata(dev->parent);
+	struct cti_config *config = &drvdata->config;
+	u32 *cached;
+	int reg_offset;
+
+	if (chan >= config->nr_ctm_channels || trigger >= config->nr_trig_max)
+		return -EINVAL;
+
+	/* Ensure registered triggers and not out filtered */
+	if (direction == CTI_TRIG_IN)	{
+		if (!test_bit(trigger, &config->trig_in_use))
+			return -EINVAL;
+	} else {
+		if (!test_bit(trigger, &config->trig_out_use))
+			return -EINVAL;
+
+		if (config->trig_filter_enable &&
+		    test_bit(trigger, &config->trig_out_filter))
+			return -EINVAL;
+	}
+
+	/* Update the local register values */
+	reg_offset = (direction == CTI_TRIG_IN) ? CTIINEN(trigger) : CTIOUTEN(trigger);
+
+	guard(raw_spinlock)(&drvdata->spinlock);
+
+	cached = (direction == CTI_TRIG_IN) ? (config->ctiinen + trigger) :
+					      (config->ctiouten + trigger);
+
+	if (op == CTI_CHAN_ATTACH)
+		*cached |= BIT(chan);
+	else
+		*cached &= ~BIT(chan);
+
+	if (cti_is_enabled(drvdata))
+		cti_write_reg(drvdata, reg_offset, *cached);
+
+	return 0;
+}
+
 static int
 cti_trig_op_parse(struct device *dev, enum cti_chan_op op,
 		  enum cti_trig_dir dir, const char *buf, size_t size)
 {
-	u32 chan_idx;
-	u32 trig_idx;
-	int items, err = -EINVAL;
+	u32 chan_idx, trig_idx;
+	int ret;
 
 	/* extract chan idx and trigger idx */
-	items = sscanf(buf, "%d %d", &chan_idx, &trig_idx);
-	if (items == 2) {
-		err = cti_channel_trig_op(dev, op, dir, chan_idx, trig_idx);
-		if (!err)
-			err = size;
-	}
-	return err;
+	ret = sscanf(buf, "%d %d", &chan_idx, &trig_idx);
+	/* Must input two items */
+	if (ret != 2)
+		return -EINVAL;
+
+	ret = cti_channel_trig_op(dev, op, dir, chan_idx, trig_idx);
+	return !ret ? size : ret;
 }
 
 static ssize_t trigin_attach_store(struct device *dev,
@@ -585,6 +622,43 @@ static ssize_t trigout_detach_store(struct device *dev,
 }
 static DEVICE_ATTR_WO(trigout_detach);
 
+static int cti_channel_gate_op(struct device *dev, enum cti_chan_gate_op op,
+			u32 channel_idx)
+{
+	struct cti_drvdata *drvdata = dev_get_drvdata(dev->parent);
+	struct cti_config *config = &drvdata->config;
+	u32 chan_bitmask;
+	u32 reg_value;
+	int err = 0;
+
+	if (channel_idx >= config->nr_ctm_channels)
+		return -EINVAL;
+
+	chan_bitmask = BIT(channel_idx);
+
+	raw_spin_lock(&drvdata->spinlock);
+	reg_value = config->ctigate;
+	switch (op) {
+	case CTI_GATE_CHAN_ENABLE:
+		reg_value |= chan_bitmask;
+		break;
+
+	case CTI_GATE_CHAN_DISABLE:
+		reg_value &= ~chan_bitmask;
+		break;
+
+	default:
+		err = -EINVAL;
+		break;
+	}
+	if (err == 0) {
+		config->ctigate = reg_value;
+		if (cti_is_enabled(drvdata))
+			cti_write_reg(drvdata, CTIGATE, reg_value);
+	}
+	raw_spin_unlock(&drvdata->spinlock);
+	return err;
+}
 
 static ssize_t chan_gate_enable_store(struct device *dev,
 				      struct device_attribute *attr,
@@ -597,6 +671,52 @@ static ssize_t chan_gate_enable_store(struct device *dev,
 
 	err = cti_channel_gate_op(dev, CTI_GATE_CHAN_ENABLE, channel);
 	return err ? err : size;
+}
+
+static int cti_channel_setop(struct device *dev, enum cti_chan_set_op op,
+			     u32 channel_idx)
+{
+	struct cti_drvdata *drvdata = dev_get_drvdata(dev->parent);
+	struct cti_config *config = &drvdata->config;
+	u32 chan_bitmask;
+	u32 reg_value;
+	u32 reg_offset;
+
+	if (channel_idx >= config->nr_ctm_channels)
+		return -EINVAL;
+
+	chan_bitmask = BIT(channel_idx);
+
+	guard(raw_spinlock)(&drvdata->spinlock);
+
+	reg_value = config->ctiappset;
+	switch (op) {
+	case CTI_CHAN_SET:
+		config->ctiappset |= chan_bitmask;
+		reg_value = config->ctiappset;
+		reg_offset = CTIAPPSET;
+		break;
+
+	case CTI_CHAN_CLR:
+		config->ctiappset &= ~chan_bitmask;
+		reg_value = chan_bitmask;
+		reg_offset = CTIAPPCLEAR;
+		break;
+
+	case CTI_CHAN_PULSE:
+		config->ctiappset &= ~chan_bitmask;
+		reg_value = chan_bitmask;
+		reg_offset = CTIAPPPULSE;
+		break;
+
+	default:
+		return -EINVAL;
+	}
+
+	if (cti_is_enabled(drvdata))
+		cti_write_reg(drvdata, reg_offset, reg_value);
+
+	return 0;
 }
 
 static ssize_t chan_gate_enable_show(struct device *dev,
@@ -678,12 +798,12 @@ static ssize_t trig_filter_enable_show(struct device *dev,
 				       struct device_attribute *attr,
 				       char *buf)
 {
-	u32 val;
 	struct cti_drvdata *drvdata = dev_get_drvdata(dev->parent);
+	u32 val;
 
-	raw_spin_lock(&drvdata->spinlock);
-	val = drvdata->config.trig_filter_enable;
-	raw_spin_unlock(&drvdata->spinlock);
+	scoped_guard(raw_spinlock, &drvdata->spinlock)
+		val = drvdata->config.trig_filter_enable;
+
 	return sprintf(buf, "%d\n", val);
 }
 
@@ -691,15 +811,15 @@ static ssize_t trig_filter_enable_store(struct device *dev,
 					struct device_attribute *attr,
 					const char *buf, size_t size)
 {
-	unsigned long val;
 	struct cti_drvdata *drvdata = dev_get_drvdata(dev->parent);
+	unsigned long val;
 
 	if (kstrtoul(buf, 0, &val))
 		return -EINVAL;
 
-	raw_spin_lock(&drvdata->spinlock);
-	drvdata->config.trig_filter_enable = !!val;
-	raw_spin_unlock(&drvdata->spinlock);
+	scoped_guard(raw_spinlock, &drvdata->spinlock)
+		drvdata->config.trig_filter_enable = !!val;
+
 	return size;
 }
 static DEVICE_ATTR_RW(trig_filter_enable);
@@ -728,7 +848,7 @@ static ssize_t chan_xtrigs_reset_store(struct device *dev,
 	struct cti_drvdata *drvdata = dev_get_drvdata(dev->parent);
 	struct cti_config *config = &drvdata->config;
 
-	raw_spin_lock(&drvdata->spinlock);
+	guard(raw_spinlock)(&drvdata->spinlock);
 
 	/* clear the CTI trigger / channel programming registers */
 	for (i = 0; i < config->nr_trig_max; i++) {
@@ -744,10 +864,9 @@ static ssize_t chan_xtrigs_reset_store(struct device *dev,
 	config->xtrig_rchan_sel = 0;
 
 	/* if enabled then write through */
-	if (cti_active(config))
+	if (cti_is_enabled(drvdata))
 		cti_write_all_hw_regs(drvdata);
 
-	raw_spin_unlock(&drvdata->spinlock);
 	return size;
 }
 static DEVICE_ATTR_WO(chan_xtrigs_reset);
@@ -768,9 +887,9 @@ static ssize_t chan_xtrigs_sel_store(struct device *dev,
 	if (val > (drvdata->config.nr_ctm_channels - 1))
 		return -EINVAL;
 
-	raw_spin_lock(&drvdata->spinlock);
-	drvdata->config.xtrig_rchan_sel = val;
-	raw_spin_unlock(&drvdata->spinlock);
+	scoped_guard(raw_spinlock, &drvdata->spinlock)
+		drvdata->config.xtrig_rchan_sel = val;
+
 	return size;
 }
 
@@ -778,12 +897,11 @@ static ssize_t chan_xtrigs_sel_show(struct device *dev,
 				    struct device_attribute *attr,
 				    char *buf)
 {
-	unsigned long val;
 	struct cti_drvdata *drvdata = dev_get_drvdata(dev->parent);
+	unsigned long val;
 
-	raw_spin_lock(&drvdata->spinlock);
-	val = drvdata->config.xtrig_rchan_sel;
-	raw_spin_unlock(&drvdata->spinlock);
+	scoped_guard(raw_spinlock, &drvdata->spinlock)
+		val = drvdata->config.xtrig_rchan_sel;
 
 	return sprintf(buf, "%ld\n", val);
 }
@@ -797,14 +915,19 @@ static ssize_t chan_xtrigs_in_show(struct device *dev,
 	struct cti_config *cfg = &drvdata->config;
 	int used = 0, reg_idx;
 	int nr_trig_max = drvdata->config.nr_trig_max;
-	u32 chan_mask = BIT(cfg->xtrig_rchan_sel);
+	u32 chan_mask;
 
-	for (reg_idx = 0; reg_idx < nr_trig_max; reg_idx++) {
-		if (chan_mask & cfg->ctiinen[reg_idx])
-			used += sprintf(buf + used, "%d ", reg_idx);
+	scoped_guard(raw_spinlock, &drvdata->spinlock) {
+		chan_mask = BIT(cfg->xtrig_rchan_sel);
+
+		for (reg_idx = 0; reg_idx < nr_trig_max; reg_idx++) {
+			if (chan_mask & cfg->ctiinen[reg_idx])
+				used += sprintf(buf + used, "%d ", reg_idx);
+		}
+
+		used += sprintf(buf + used, "\n");
 	}
 
-	used += sprintf(buf + used, "\n");
 	return used;
 }
 static DEVICE_ATTR_RO(chan_xtrigs_in);
@@ -817,14 +940,19 @@ static ssize_t chan_xtrigs_out_show(struct device *dev,
 	struct cti_config *cfg = &drvdata->config;
 	int used = 0, reg_idx;
 	int nr_trig_max = drvdata->config.nr_trig_max;
-	u32 chan_mask = BIT(cfg->xtrig_rchan_sel);
+	u32 chan_mask;
 
-	for (reg_idx = 0; reg_idx < nr_trig_max; reg_idx++) {
-		if (chan_mask & cfg->ctiouten[reg_idx])
-			used += sprintf(buf + used, "%d ", reg_idx);
+	scoped_guard(raw_spinlock, &drvdata->spinlock) {
+		chan_mask = BIT(cfg->xtrig_rchan_sel);
+
+		for (reg_idx = 0; reg_idx < nr_trig_max; reg_idx++) {
+			if (chan_mask & cfg->ctiouten[reg_idx])
+				used += sprintf(buf + used, "%d ", reg_idx);
+		}
+
+		used += sprintf(buf + used, "\n");
 	}
 
-	used += sprintf(buf + used, "\n");
 	return used;
 }
 static DEVICE_ATTR_RO(chan_xtrigs_out);
@@ -838,12 +966,12 @@ static ssize_t print_chan_list(struct device *dev,
 	unsigned long inuse_bits = 0, chan_mask;
 
 	/* scan regs to get bitmap of channels in use. */
-	raw_spin_lock(&drvdata->spinlock);
-	for (i = 0; i < config->nr_trig_max; i++) {
-		inuse_bits |= config->ctiinen[i];
-		inuse_bits |= config->ctiouten[i];
+	scoped_guard(raw_spinlock, &drvdata->spinlock) {
+		for (i = 0; i < config->nr_trig_max; i++) {
+			inuse_bits |= config->ctiinen[i];
+			inuse_bits |= config->ctiouten[i];
+		}
 	}
-	raw_spin_unlock(&drvdata->spinlock);
 
 	/* inverse bits if printing free channels */
 	if (!inuse)
