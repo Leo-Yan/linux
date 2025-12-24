@@ -142,7 +142,7 @@ static int cti_enable_hw(struct cti_drvdata *drvdata, enum cs_mode mode,
 		return -EBUSY;
 
 	/* no need to do anything if enabled */
-	if (config->hw_enabled)
+	if (cti_is_active(config))
 		goto cti_state_unchanged;
 
 	if (drvdata->config.enable_req_count) {
@@ -162,8 +162,6 @@ static int cti_enable_hw(struct cti_drvdata *drvdata, enum cs_mode mode,
 	rc = cti_run_callback(cti_enable_hw_cb, &arg);
 	if (rc)
 		return rc;
-
-	config->hw_enabled = true;
 
 cti_state_unchanged:
 	if (!drvdata->config.enable_req_count) {
@@ -209,7 +207,7 @@ static int cti_disable_hw(struct cti_drvdata *drvdata)
 		return 0;
 
 	/* no need to do anything if disabled */
-	if (!config->hw_enabled)
+	if (!cti_is_active(config))
 		return 0;
 
 	arg.drvdata = drvdata;
@@ -219,7 +217,6 @@ static int cti_disable_hw(struct cti_drvdata *drvdata)
 
 	drvdata->path = NULL;
 	coresight_set_mode(csdev, CS_MODE_DISABLED);
-	config->hw_enabled = false;
 	return 0;
 }
 
@@ -765,31 +762,25 @@ static int cti_cpu_pm_notify(struct notifier_block *nb, unsigned long cmd,
 
 	guard(raw_spinlock)(&drvdata->spinlock);
 
+	if (!cti_cpu_pm_is_needed(drvdata))
+		return NOTIFY_DONE;
+
 	switch (cmd) {
 	case CPU_PM_ENTER:
 		/* CTI regs all static - we have a copy & nothing to save */
-		if (cti_cpu_pm_is_needed(drvdata) && drvdata->config.hw_enabled)
-			coresight_disclaim_device(csdev);
+		coresight_disclaim_device(csdev);
 		break;
 
 	case CPU_PM_ENTER_FAILED:
-		if (cti_cpu_pm_is_needed(drvdata) && drvdata->config.hw_enabled) {
-			if (coresight_claim_device(csdev))
-				drvdata->config.hw_enabled = false;
-		}
+		coresight_claim_device(csdev);
 		break;
 
 	case CPU_PM_EXIT:
-		/* check enable reference count to enable HW */
-		if (cti_cpu_pm_is_needed(drvdata)) {
-			/* check we can claim the device as we re-power */
-			if (coresight_claim_device(csdev)) {
-				drvdata->config.hw_enabled = false;
-				goto cti_notify_exit;
-			}
+		/* check we can claim the device as we re-power */
+		if (coresight_claim_device(csdev))
+			goto cti_notify_exit;
 
-			cti_write_all_hw_regs(drvdata);
-		}
+		cti_write_all_hw_regs(drvdata);
 		break;
 
 	default:
@@ -821,7 +812,6 @@ static void cti_cpuhp_enable_hw(struct cti_drvdata *drvdata)
 		return;
 
 	cti_write_all_hw_regs(drvdata);
-	config->hw_enabled = true;
 	return;
 }
 
@@ -846,7 +836,7 @@ static int cti_dying_cpu(unsigned int cpu)
 
 	guard(raw_spinlock)(&drvdata->spinlock);
 
-	if (drvdata->config.hw_enabled)
+	if (cti_is_active(drvdata->config))
 		coresight_disclaim_device(drvdata->csdev);
 
 	return 0;

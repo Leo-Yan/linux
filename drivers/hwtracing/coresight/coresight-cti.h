@@ -120,7 +120,6 @@ struct cti_device {
  *		 (max of trig_in or trig_out) - from ID register.
  * @nr_ctm_channels: number of available CTM channels - from ID register.
  * @enable_req_count: CTI is enabled alongside >=1 associated devices.
- * @hw_enabled: true if hw is currently enabled.
  * @trig_in_use: bitfield of in triggers registered as in use.
  * @trig_out_use: bitfield of out triggers registered as in use.
  * @trig_out_filter: bitfield of out triggers that are blocked if filter
@@ -142,7 +141,6 @@ struct cti_config {
 
 	/* cti enable control */
 	int enable_req_count;
-	bool hw_enabled;
 
 	/* registered triggers and filtering */
 	u32 trig_in_use;
@@ -236,9 +234,9 @@ coresight_cti_get_platform_data(struct device *dev);
 const char *cti_plat_get_node_name(struct fwnode_handle *fwnode);
 
 /* cti powered and enabled */
-static inline bool cti_active(struct cti_config *cfg)
+static inline bool cti_is_active(struct cti_config *cfg)
 {
-	return cfg->hw_powered && cfg->hw_enabled;
+	return !!cfg->enable_req_count;
 }
 
 #endif  /* _CORESIGHT_CORESIGHT_CTI_H */
