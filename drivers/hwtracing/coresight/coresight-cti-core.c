@@ -54,6 +54,31 @@ static struct cti_drvdata *cti_cpu_drvdata[NR_CPUS];
  */
 DEFINE_CORESIGHT_DEVLIST(cti_sys_devs, "cti_sys");
 
+struct cti_run_arg {
+	struct cti_drvdata *drvdata;
+	int offset;
+	int value;
+	int rc;
+};
+
+typedef void (*cti_cb)(void *arg);
+
+static int cti_run_callback(cti_cb func, struct cti_run_arg *arg)
+{
+	int cpu = arg->drvdata->ctidev.cpu;
+	int ret = 0;
+
+	if (cpu < 0)
+		func(&arg);
+	else
+		ret = smp_call_function_single(cpu, func, &arg, 1);
+
+	if (!ret)
+		ret = arg->rc;
+
+	return ret;
+}
+
 /* write set of regs to hardware - call with spinlock claimed */
 void cti_write_all_hw_regs(struct cti_drvdata *drvdata)
 {
@@ -81,6 +106,22 @@ void cti_write_all_hw_regs(struct cti_drvdata *drvdata)
 	writel_relaxed(1, drvdata->base + CTICONTROL);
 
 	CS_LOCK(drvdata->base);
+}
+
+static void cti_enable_hw_cb(void *info)
+{
+	struct cti_run_arg *arg = info;
+	struct cti_drvdata *drvdata = arg->drvdata;
+	int ret;
+
+	/* claim the device */
+	ret = coresight_claim_device(drvdata->csdev);
+	if (ret)
+		goto out;
+
+	cti_write_all_hw_regs(drvdata);
+out:
+	arg->rc = ret;
 }
 
 /* write regs to hardware and enable */
@@ -117,12 +158,11 @@ static int cti_enable_hw(struct cti_drvdata *drvdata, enum cs_mode mode,
 		goto cti_state_unchanged;
 	}
 
-	/* claim the device */
-	rc = coresight_claim_device(csdev);
+	arg.drvdata = drvdata;
+	rc = cti_run_callback(cti_enable_hw_cb, &arg);
 	if (rc)
 		return rc;
 
-	cti_write_all_hw_regs(drvdata);
 	config->hw_enabled = true;
 
 cti_state_unchanged:
@@ -134,12 +174,29 @@ cti_state_unchanged:
 	return 0;
 }
 
+static void __cti_disable_hw(void *info)
+{
+	struct cti_run_arg *arg = info;
+	struct cti_drvdata *drvdata = arg->drvdata;
+
+	CS_UNLOCK(drvdata->base);
+
+	/* disable CTI */
+	writel_relaxed(0, drvdata->base + CTICONTROL);
+
+	coresight_disclaim_device_unlocked(drvdata->csdev);
+
+	CS_LOCK(drvdata->base);
+	arg->rc = 0;
+}
+
 /* disable hardware */
 static int cti_disable_hw(struct cti_drvdata *drvdata)
 {
 	struct cti_config *config = &drvdata->config;
 	struct coresight_device *csdev = drvdata->csdev;
-	int ret;
+	struct cti_run_arg arg = { 0 };
+	int rc;
 
 	guard(raw_spinlock)(&drvdata->spinlock);
 
@@ -151,29 +208,63 @@ static int cti_disable_hw(struct cti_drvdata *drvdata)
 	if (--drvdata->config.enable_req_count > 0)
 		return 0;
 
-	drvdata->path = NULL;
-	coresight_set_mode(csdev, CS_MODE_DISABLED);
-
 	/* no need to do anything if disabled or cpu unpowered */
 	if (!config->hw_enabled || !config->hw_powered)
 		return 0;
 
-	CS_UNLOCK(drvdata->base);
+	arg.drvdata = drvdata;
+	rc = cti_run_callback(__cti_disable_hw, &arg);
+	if (rc)
+		return rc;
 
-	/* disable CTI */
-	writel_relaxed(0, drvdata->base + CTICONTROL);
+	drvdata->path = NULL;
+	coresight_set_mode(csdev, CS_MODE_DISABLED);
 	config->hw_enabled = false;
-
-	coresight_disclaim_device_unlocked(csdev);
-	CS_LOCK(drvdata->base);
 	return 0;
 }
 
-void cti_write_single_reg(struct cti_drvdata *drvdata, int offset, u32 value)
+static void cti_write_reg_cb(void *info)
 {
+	struct cti_run_arg *arg = info;
+	struct cti_drvdata *drvdata = arg->drvdata;
+
 	CS_UNLOCK(drvdata->base);
-	writel_relaxed(value, drvdata->base + offset);
+	writel_relaxed(arg->value, drvdata->base + arg->offset);
 	CS_LOCK(drvdata->base);
+}
+
+void cti_write_reg(struct cti_drvdata *drvdata, int offset, u32 value)
+{
+	struct cti_run_arg arg = { 0 };
+
+	arg.drvdata = drvdata;
+	arg.offset = offset;
+	arg.value = value;
+
+	cti_run_callback(cti_write_reg_cb, &arg);
+}
+
+static void cti_read_reg_cb(void *info)
+{
+	struct cti_run_arg *arg = info;
+	struct cti_drvdata *drvdata = arg->drvdata;
+
+	CS_UNLOCK(drvdata->base);
+	arg->value = readl_relaxed(drvdata->base + arg->offset);
+	CS_LOCK(drvdata->base);
+}
+
+u32 cti_read_reg(struct cti_drvdata *drvdata, int offset)
+{
+	struct cti_drvdata *drvdata = dev_get_drvdata(dev->parent);
+	struct cti_config *config = &drvdata->config;
+	struct cti_run_arg arg = { 0 };
+
+	arg.drvdata = drvdata;
+	arg.offset = offset;
+
+	cti_run_callback(cti_read_reg_cb, &arg);
+	return arg.value;
 }
 
 void cti_write_intack(struct device *dev, u32 ackval)
@@ -185,7 +276,7 @@ void cti_write_intack(struct device *dev, u32 ackval)
 
 	/* write if enabled */
 	if (cti_active(config))
-		cti_write_single_reg(drvdata, CTIINTACK, ackval);
+		cti_write_reg(drvdata, CTIINTACK, ackval);
 }
 
 /*
@@ -203,7 +294,7 @@ static void cti_set_default_config(struct device *dev,
 	struct cti_config *config = &drvdata->config;
 	u32 devid;
 
-	devid = readl_relaxed(drvdata->base + CORESIGHT_DEVID);
+	devid = cti_read_reg(drvdata, CORESIGHT_DEVID);
 	config->nr_trig_max = CTI_DEVID_MAXTRIGS(devid);
 
 	/*
@@ -370,7 +461,7 @@ int cti_channel_trig_op(struct device *dev, enum cti_chan_op op,
 
 	/* write through if enabled */
 	if (cti_active(config))
-		cti_write_single_reg(drvdata, reg_offset, reg_value);
+		cti_write_reg(drvdata, reg_offset, reg_value);
 
 	return 0;
 }
@@ -408,7 +499,7 @@ int cti_channel_gate_op(struct device *dev, enum cti_chan_gate_op op,
 	if (err == 0) {
 		config->ctigate = reg_value;
 		if (cti_active(config))
-			cti_write_single_reg(drvdata, CTIGATE, reg_value);
+			cti_write_reg(drvdata, CTIGATE, reg_value);
 	}
 
 	return err;
@@ -457,7 +548,7 @@ int cti_channel_setop(struct device *dev, enum cti_chan_set_op op,
 	}
 
 	if ((err == 0) && cti_active(config))
-		cti_write_single_reg(drvdata, reg_offset, reg_value);
+		cti_write_reg(drvdata, reg_offset, reg_value);
 
 	return err;
 }

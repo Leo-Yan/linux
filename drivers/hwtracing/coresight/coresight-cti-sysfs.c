@@ -183,7 +183,7 @@ static ssize_t coresight_cti_reg_show(struct device *dev,
 
 	scoped_guard(raw_spinlock, &drvdata->spinlock) {
 		if (drvdata->config.hw_powered)
-			val = readl_relaxed(drvdata->base + cti_attr->off);
+			val = cti_read_reg(drvdata, cti_attr->off);
 	}
 
 	pm_runtime_put_sync(dev->parent);
@@ -206,7 +206,7 @@ static __maybe_unused ssize_t coresight_cti_reg_store(struct device *dev,
 
 	scoped_guard(raw_spinlock, &drvdata->spinlock) {
 		if (drvdata->config.hw_powered)
-			cti_write_single_reg(drvdata, cti_attr->off, val);
+			cti_write_reg(drvdata, cti_attr->off, val);
 	}
 
 	pm_runtime_put_sync(dev->parent);
@@ -270,7 +270,7 @@ static ssize_t cti_reg32_show(struct device *dev, char *buf,
 	scoped_guard(raw_spinlock, &drvdata->spinlock) {
 		if ((reg_offset >= 0) && cti_active(config)) {
 			CS_UNLOCK(drvdata->base);
-			val = readl_relaxed(drvdata->base + reg_offset);
+			val = cti_read_reg(drvdata, reg_offset);
 			if (pcached_val)
 				*pcached_val = val;
 			CS_LOCK(drvdata->base);
@@ -304,7 +304,7 @@ static ssize_t cti_reg32_store(struct device *dev, const char *buf,
 
 		/* write through if offset and enabled */
 		if ((reg_offset >= 0) && cti_active(config))
-			cti_write_single_reg(drvdata, reg_offset, val);
+			cti_write_reg(drvdata, reg_offset, val);
 	}
 
 	return size;
@@ -395,7 +395,7 @@ static ssize_t inen_store(struct device *dev,
 
 		/* write through if enabled */
 		if (cti_active(config))
-			cti_write_single_reg(drvdata, CTIINEN(index), val);
+			cti_write_reg(drvdata, CTIINEN(index), val);
 	}
 
 	return size;
@@ -436,7 +436,7 @@ static ssize_t outen_store(struct device *dev,
 
 		/* write through if enabled */
 		if (cti_active(config))
-			cti_write_single_reg(drvdata, CTIOUTEN(index), val);
+			cti_write_reg(drvdata, CTIOUTEN(index), val);
 	}
 
 	return size;
@@ -478,7 +478,7 @@ static ssize_t appclear_store(struct device *dev,
 
 		/* write through if enabled */
 		if (cti_active(config))
-			cti_write_single_reg(drvdata, CTIAPPCLEAR, val);
+			cti_write_reg(drvdata, CTIAPPCLEAR, val);
 	}
 
 	return size;
@@ -499,7 +499,7 @@ static ssize_t apppulse_store(struct device *dev,
 	scoped_guard(raw_spinlock, &drvdata->spinlock) {
 		/* write through if enabled */
 		if (cti_active(config))
-			cti_write_single_reg(drvdata, CTIAPPPULSE, val);
+			cti_write_reg(drvdata, CTIAPPPULSE, val);
 	}
 
 	return size;
