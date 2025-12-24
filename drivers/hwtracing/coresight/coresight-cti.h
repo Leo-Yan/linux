@@ -166,6 +166,7 @@ struct cti_config {
  * struct cti_drvdata - specifics for the CTI device
  * @base:	Memory mapped base address for this component..
  * @csdev:	Standard CoreSight device information.
+ * @path:	Enabled CoreSight path.
  * @ctidev:	Extra information needed by the CTI/CTM framework.
  * @spinlock:	Control data access to one at a time.
  * @config:	Configuration data for this CTI device.
@@ -175,6 +176,7 @@ struct cti_config {
 struct cti_drvdata {
 	void __iomem *base;
 	struct coresight_device	*csdev;
+	struct coresight_path *path;
 	struct cti_device ctidev;
 	raw_spinlock_t spinlock;
 	struct cti_config config;

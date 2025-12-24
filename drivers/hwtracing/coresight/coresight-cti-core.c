@@ -84,7 +84,8 @@ void cti_write_all_hw_regs(struct cti_drvdata *drvdata)
 }
 
 /* write regs to hardware and enable */
-static int cti_enable_hw(struct cti_drvdata *drvdata, enum cs_mode mode)
+static int cti_enable_hw(struct cti_drvdata *drvdata, enum cs_mode mode,
+			 struct coresight_path *path)
 {
 	struct coresight_device	*csdev = drvdata->csdev;
 	struct cti_config *config = &drvdata->config;
@@ -103,8 +104,18 @@ static int cti_enable_hw(struct cti_drvdata *drvdata, enum cs_mode mode)
 	if (config->hw_enabled || !config->hw_powered)
 		goto cti_state_unchanged;
 
-	if (drvdata->config.enable_req_count)
+	if (drvdata->config.enable_req_count) {
+		/*
+		 * A CTI device cannot be enabled duplicately on different
+		 * coresight paths, or the same CTI cannot be enabled at
+		 * the meantime via the sysfs mode and CTI's enable knob
+		 * (see enable_store() in coresight-cti-sysfs.c).
+		 */
+		if (drvdata->path != path)
+			return -EINVAL;
+
 		goto cti_state_unchanged;
+	}
 
 	/* claim the device */
 	rc = coresight_claim_device(csdev);
@@ -112,11 +123,13 @@ static int cti_enable_hw(struct cti_drvdata *drvdata, enum cs_mode mode)
 		return rc;
 
 	cti_write_all_hw_regs(drvdata);
-
-	coresight_set_mode(csdev, mode);
 	config->hw_enabled = true;
 
 cti_state_unchanged:
+	if (!drvdata->config.enable_req_count) {
+		drvdata->path = path;
+		coresight_set_mode(csdev, mode);
+	}
 	drvdata->config.enable_req_count++;
 	return 0;
 }
@@ -166,6 +179,7 @@ static int cti_disable_hw(struct cti_drvdata *drvdata)
 	if (--drvdata->config.enable_req_count > 0)
 		goto cti_not_disabled;
 
+	drvdata->path = NULL;
 	coresight_set_mode(csdev, CS_MODE_DISABLED);
 
 	/* no need to do anything if disabled or cpu unpowered */
@@ -786,7 +800,7 @@ int cti_enable(struct coresight_device *csdev, enum cs_mode mode,
 {
 	struct cti_drvdata *drvdata = csdev_to_cti_drvdata(csdev);
 
-	return cti_enable_hw(drvdata, mode);
+	return cti_enable_hw(drvdata, mode, path);
 }
 
 int cti_disable(struct coresight_device *csdev, struct coresight_path *path)
