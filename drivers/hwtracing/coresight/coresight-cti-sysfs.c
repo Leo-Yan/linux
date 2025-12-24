@@ -253,15 +253,9 @@ static ssize_t cti_reg32_show(struct device *dev, char *buf,
 	struct cti_config *config = &drvdata->config;
 
 	scoped_guard(raw_spinlock, &drvdata->spinlock) {
-		if ((reg_offset >= 0) && cti_active(config)) {
-			CS_UNLOCK(drvdata->base);
-			val = cti_read_reg(drvdata, reg_offset);
-			if (pcached_val)
-				*pcached_val = val;
-			CS_LOCK(drvdata->base);
-		} else if (pcached_val) {
-			val = *pcached_val;
-		}
+		val = cti_read_reg(drvdata, reg_offset);
+		if (pcached_val)
+			*pcached_val = val;
 	}
 
 	return sprintf(buf, "%#x\n", val);
@@ -287,8 +281,7 @@ static ssize_t cti_reg32_store(struct device *dev, const char *buf,
 		if (pcached_val)
 			*pcached_val = (u32)val;
 
-		/* write through if offset and enabled */
-		if ((reg_offset >= 0) && cti_active(config))
+		if ((reg_offset >= 0))
 			cti_write_reg(drvdata, reg_offset, val);
 	}
 
