@@ -134,32 +134,6 @@ cti_state_unchanged:
 	return 0;
 }
 
-/* re-enable CTI on CPU when using CPU hotplug */
-static void cti_cpuhp_enable_hw(struct cti_drvdata *drvdata)
-{
-	struct cti_config *config = &drvdata->config;
-
-	raw_spin_lock(&drvdata->spinlock);
-	config->hw_powered = true;
-
-	/* no need to do anything if no enable request */
-	if (!drvdata->config.enable_req_count)
-		goto cti_hp_not_enabled;
-
-	/* try to claim the device */
-	if (coresight_claim_device(drvdata->csdev))
-		goto cti_hp_not_enabled;
-
-	cti_write_all_hw_regs(drvdata);
-	config->hw_enabled = true;
-	raw_spin_unlock(&drvdata->spinlock);
-	return;
-
-	/* did not re-enable due to no claim / no request */
-cti_hp_not_enabled:
-	raw_spin_unlock(&drvdata->spinlock);
-}
-
 /* disable hardware */
 static int cti_disable_hw(struct cti_drvdata *drvdata)
 {
@@ -675,6 +649,18 @@ static void cti_remove_conn_xrefs(struct cti_drvdata *drvdata)
 	}
 }
 
+static bool cti_cpu_pm_is_needed(struct cti_drvdata *drvdata)
+{
+	/*
+	 * Only if the device is in request and not on a path.
+	 * Leave the core layer to manage path.
+	 */
+	if (drvdata->config.enable_req_count && !drvdata->path)
+		return true
+
+	return false;
+}
+
 /** cti PM callbacks **/
 static int cti_cpu_pm_notify(struct notifier_block *nb, unsigned long cmd,
 			     void *v)
@@ -699,13 +685,13 @@ static int cti_cpu_pm_notify(struct notifier_block *nb, unsigned long cmd,
 	case CPU_PM_ENTER:
 		/* CTI regs all static - we have a copy & nothing to save */
 		drvdata->config.hw_powered = false;
-		if (drvdata->config.hw_enabled)
+		if (cti_cpu_pm_is_needed(drvdata) && drvdata->config.hw_enabled)
 			coresight_disclaim_device(csdev);
 		break;
 
 	case CPU_PM_ENTER_FAILED:
 		drvdata->config.hw_powered = true;
-		if (drvdata->config.hw_enabled) {
+		if (cti_cpu_pm_is_needed(drvdata) && drvdata->config.hw_enabled) {
 			if (coresight_claim_device(csdev))
 				drvdata->config.hw_enabled = false;
 		}
@@ -714,15 +700,15 @@ static int cti_cpu_pm_notify(struct notifier_block *nb, unsigned long cmd,
 	case CPU_PM_EXIT:
 		/* write hardware registers to re-enable. */
 		drvdata->config.hw_powered = true;
-		drvdata->config.hw_enabled = false;
 
 		/* check enable reference count to enable HW */
-		if (drvdata->config.enable_req_count) {
+		if (cti_cpu_pm_is_needed(drvdata)) {
 			/* check we can claim the device as we re-power */
-			if (coresight_claim_device(csdev))
+			if (coresight_claim_device(csdev)) {
+				drvdata->config.hw_enabled = false;
 				goto cti_notify_exit;
+			}
 
-			drvdata->config.hw_enabled = true;
 			cti_write_all_hw_regs(drvdata);
 		}
 		break;
@@ -740,6 +726,32 @@ cti_notify_exit:
 static struct notifier_block cti_cpu_pm_nb = {
 	.notifier_call = cti_cpu_pm_notify,
 };
+
+/* re-enable CTI on CPU when using CPU hotplug */
+static void cti_cpuhp_enable_hw(struct cti_drvdata *drvdata)
+{
+	struct cti_config *config = &drvdata->config;
+
+	raw_spin_lock(&drvdata->spinlock);
+	config->hw_powered = true;
+
+	/* no need to do anything if no enable request */
+	if (!cti_cpu_pm_is_needed(drvdata))
+		goto cti_hp_not_enabled;
+
+	/* try to claim the device */
+	if (coresight_claim_device(drvdata->csdev))
+		goto cti_hp_not_enabled;
+
+	cti_write_all_hw_regs(drvdata);
+	config->hw_enabled = true;
+	raw_spin_unlock(&drvdata->spinlock);
+	return;
+
+	/* did not re-enable due to no claim / no request */
+cti_hp_not_enabled:
+	raw_spin_unlock(&drvdata->spinlock);
+}
 
 /* CPU HP handlers */
 static int cti_starting_cpu(unsigned int cpu)
