@@ -760,8 +760,6 @@ static int cti_pm_setup(struct cti_drvdata *drvdata)
 
 done:
 	nr_cti_cpu++;
-	cti_cpu_drvdata[drvdata->ctidev.cpu] = drvdata;
-
 	return 0;
 }
 
@@ -771,7 +769,6 @@ static void cti_pm_release(struct cti_drvdata *drvdata)
 	if (drvdata->ctidev.cpu == -1)
 		return;
 
-	cti_cpu_drvdata[drvdata->ctidev.cpu] = NULL;
 	if (--nr_cti_cpu == 0) {
 		cpu_pm_unregister_notifier(&cti_cpu_pm_nb);
 		cpuhp_remove_state_nocalls(CPUHP_AP_ARM_CORESIGHT_CTI_STARTING);
@@ -835,6 +832,8 @@ static void cti_remove(struct amba_device *adev)
 	cti_remove_conn_xrefs(drvdata);
 	mutex_unlock(&ect_mutex);
 
+	if (drvdata->ctidev.cpu >= 0)
+		cti_cpu_drvdata[drvdata->ctidev.cpu] = NULL;
 	coresight_unregister(drvdata->csdev);
 }
 
@@ -920,6 +919,10 @@ static int cti_probe(struct amba_device *adev, const struct amba_id *id)
 		ret = PTR_ERR(drvdata->csdev);
 		goto pm_release;
 	}
+
+	/* Set up per-CPU drvdata for power management */
+	if (drvdata->ctidev.cpu >= 0)
+		cti_cpu_drvdata[drvdata->ctidev.cpu] = drvdata;
 
 	/* add to list of CTI devices */
 	mutex_lock(&ect_mutex);
