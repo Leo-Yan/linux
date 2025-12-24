@@ -141,8 +141,8 @@ static int cti_enable_hw(struct cti_drvdata *drvdata, enum cs_mode mode,
 	if (curr_mode != CS_MODE_DISABLED && curr_mode != mode)
 		return -EBUSY;
 
-	/* no need to do anything if enabled or unpowered*/
-	if (config->hw_enabled || !config->hw_powered)
+	/* no need to do anything if enabled */
+	if (config->hw_enabled)
 		goto cti_state_unchanged;
 
 	if (drvdata->config.enable_req_count) {
@@ -208,8 +208,8 @@ static int cti_disable_hw(struct cti_drvdata *drvdata)
 	if (--drvdata->config.enable_req_count > 0)
 		return 0;
 
-	/* no need to do anything if disabled or cpu unpowered */
-	if (!config->hw_enabled || !config->hw_powered)
+	/* no need to do anything if disabled */
+	if (!config->hw_enabled)
 		return 0;
 
 	arg.drvdata = drvdata;
@@ -768,13 +768,11 @@ static int cti_cpu_pm_notify(struct notifier_block *nb, unsigned long cmd,
 	switch (cmd) {
 	case CPU_PM_ENTER:
 		/* CTI regs all static - we have a copy & nothing to save */
-		drvdata->config.hw_powered = false;
 		if (cti_cpu_pm_is_needed(drvdata) && drvdata->config.hw_enabled)
 			coresight_disclaim_device(csdev);
 		break;
 
 	case CPU_PM_ENTER_FAILED:
-		drvdata->config.hw_powered = true;
 		if (cti_cpu_pm_is_needed(drvdata) && drvdata->config.hw_enabled) {
 			if (coresight_claim_device(csdev))
 				drvdata->config.hw_enabled = false;
@@ -782,9 +780,6 @@ static int cti_cpu_pm_notify(struct notifier_block *nb, unsigned long cmd,
 		break;
 
 	case CPU_PM_EXIT:
-		/* write hardware registers to re-enable. */
-		drvdata->config.hw_powered = true;
-
 		/* check enable reference count to enable HW */
 		if (cti_cpu_pm_is_needed(drvdata)) {
 			/* check we can claim the device as we re-power */
@@ -816,8 +811,6 @@ static void cti_cpuhp_enable_hw(struct cti_drvdata *drvdata)
 	struct cti_config *config = &drvdata->config;
 
 	guard(raw_spinlock)(&drvdata->spinlock);
-
-	config->hw_powered = true;
 
 	/* no need to do anything if no enable request */
 	if (!cti_cpu_pm_is_needed(drvdata))
@@ -853,7 +846,6 @@ static int cti_dying_cpu(unsigned int cpu)
 
 	guard(raw_spinlock)(&drvdata->spinlock);
 
-	drvdata->config.hw_powered = false;
 	if (drvdata->config.hw_enabled)
 		coresight_disclaim_device(drvdata->csdev);
 
@@ -989,9 +981,6 @@ static int cti_probe(struct amba_device *adev, const struct amba_id *id)
 		dev_err(dev, "coresight_cti_get_platform_data err\n");
 		return  PTR_ERR(pdata);
 	}
-
-	/* default to powered - could change on PM notifications */
-	drvdata->config.hw_powered = true;
 
 	/* set up device name - will depend if cpu bound or otherwise */
 	if (drvdata->ctidev.cpu >= 0)

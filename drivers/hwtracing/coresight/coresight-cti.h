@@ -121,7 +121,6 @@ struct cti_device {
  * @nr_ctm_channels: number of available CTM channels - from ID register.
  * @enable_req_count: CTI is enabled alongside >=1 associated devices.
  * @hw_enabled: true if hw is currently enabled.
- * @hw_powered: true if associated cpu powered on, or no cpu.
  * @trig_in_use: bitfield of in triggers registered as in use.
  * @trig_out_use: bitfield of out triggers registered as in use.
  * @trig_out_filter: bitfield of out triggers that are blocked if filter
@@ -144,7 +143,6 @@ struct cti_config {
 	/* cti enable control */
 	int enable_req_count;
 	bool hw_enabled;
-	bool hw_powered;
 
 	/* registered triggers and filtering */
 	u32 trig_in_use;
