@@ -42,9 +42,6 @@ static DEFINE_MUTEX(ect_mutex);
 #define csdev_to_cti_drvdata(csdev)	\
 	dev_get_drvdata(csdev->dev.parent)
 
-/* power management handling */
-static int nr_cti_cpu;
-
 /* quick lookup list for CPU bound CTIs when power handling */
 static struct cti_drvdata *cti_cpu_drvdata[NR_CPUS];
 
@@ -731,48 +728,30 @@ static int cti_dying_cpu(unsigned int cpu)
 	return 0;
 }
 
-static int cti_pm_setup(struct cti_drvdata *drvdata)
+static int cti_pm_setup(void)
 {
 	int ret;
 
-	if (drvdata->ctidev.cpu == -1)
-		return 0;
-
-	if (nr_cti_cpu)
-		goto done;
-
-	cpus_read_lock();
-	ret = cpuhp_setup_state_nocalls_cpuslocked(
-			CPUHP_AP_ARM_CORESIGHT_CTI_STARTING,
-			"arm/coresight_cti:starting",
-			cti_starting_cpu, cti_dying_cpu);
-	if (ret) {
-		cpus_read_unlock();
+	ret = cpuhp_setup_state_nocalls(CPUHP_AP_ARM_CORESIGHT_CTI_STARTING,
+					"arm/coresight_cti:starting",
+					cti_starting_cpu, cti_dying_cpu);
+	if (ret)
 		return ret;
-	}
 
 	ret = cpu_pm_register_notifier(&cti_cpu_pm_nb);
-	cpus_read_unlock();
 	if (ret) {
 		cpuhp_remove_state_nocalls(CPUHP_AP_ARM_CORESIGHT_CTI_STARTING);
 		return ret;
 	}
 
-done:
-	nr_cti_cpu++;
 	return 0;
 }
 
 /* release PM registrations */
-static void cti_pm_release(struct cti_drvdata *drvdata)
+static void cti_pm_release(void)
 {
-	if (drvdata->ctidev.cpu == -1)
-		return;
-
-	if (--nr_cti_cpu == 0) {
-		cpu_pm_unregister_notifier(&cti_cpu_pm_nb);
-		cpuhp_remove_state_nocalls(CPUHP_AP_ARM_CORESIGHT_CTI_STARTING);
-	}
+	cpu_pm_unregister_notifier(&cti_cpu_pm_nb);
+	cpuhp_remove_state_nocalls(CPUHP_AP_ARM_CORESIGHT_CTI_STARTING);
 }
 
 /** cti ect operations **/
@@ -810,7 +789,6 @@ static void cti_device_release(struct device *dev)
 	struct cti_drvdata *ect_item, *ect_tmp;
 
 	mutex_lock(&ect_mutex);
-	cti_pm_release(drvdata);
 
 	/* remove from the list */
 	list_for_each_entry_safe(ect_item, ect_tmp, &ect_net, node) {
@@ -891,17 +869,12 @@ static int cti_probe(struct amba_device *adev, const struct amba_id *id)
 	if (!cti_desc.name)
 		return -ENOMEM;
 
-	/* setup CPU power management handling for CPU bound CTI devices. */
-	ret = cti_pm_setup(drvdata);
-	if (ret)
-		return ret;
-
 	/* create dynamic attributes for connections */
 	ret = cti_create_cons_sysfs(dev, drvdata);
 	if (ret) {
 		dev_err(dev, "%s: create dynamic sysfs entries failed\n",
 			cti_desc.name);
-		goto pm_release;
+		return ret;
 	}
 
 	/* set up coresight component description */
@@ -915,10 +888,8 @@ static int cti_probe(struct amba_device *adev, const struct amba_id *id)
 
 	coresight_clear_self_claim_tag(&cti_desc.access);
 	drvdata->csdev = coresight_register(&cti_desc);
-	if (IS_ERR(drvdata->csdev)) {
-		ret = PTR_ERR(drvdata->csdev);
-		goto pm_release;
-	}
+	if (IS_ERR(drvdata->csdev))
+		return PTR_ERR(drvdata->csdev);
 
 	/* Set up per-CPU drvdata for power management */
 	if (drvdata->ctidev.cpu >= 0)
@@ -939,10 +910,6 @@ static int cti_probe(struct amba_device *adev, const struct amba_id *id)
 	pm_runtime_put(&adev->dev);
 	dev_info(&drvdata->csdev->dev, "CTI initialized\n");
 	return 0;
-
-pm_release:
-	cti_pm_release(drvdata);
-	return ret;
 }
 
 static struct amba_cs_uci_id uci_id_cti[] = {
@@ -980,17 +947,26 @@ static int __init cti_init(void)
 {
 	int ret;
 
-	ret = amba_driver_register(&cti_driver);
+	ret = cti_pm_setup();
 	if (ret)
+		return ret;
+
+	ret = amba_driver_register(&cti_driver);
+	if (ret) {
 		pr_info("Error registering cti driver\n");
+		cti_pm_release();
+		return ret;
+	}
+
 	coresight_set_cti_ops(&cti_assoc_ops);
-	return ret;
+	return 0;
 }
 
 static void __exit cti_exit(void)
 {
 	coresight_remove_cti_ops();
 	amba_driver_unregister(&cti_driver);
+	cti_pm_release();
 }
 
 module_init(cti_init);
