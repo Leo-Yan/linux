@@ -96,6 +96,7 @@ static ssize_t enable_store(struct device *dev,
 	int ret = 0;
 	unsigned long val;
 	struct cti_drvdata *drvdata = dev_get_drvdata(dev->parent);
+	struct cti_config *config = &drvdata->config;
 
 	ret = kstrtoul(buf, 0, &val);
 	if (ret)
@@ -105,13 +106,25 @@ static ssize_t enable_store(struct device *dev,
 		ret = pm_runtime_resume_and_get(dev->parent);
 		if (ret)
 			return ret;
+
+		/* Track sysfs knob based enable requests */
+		atomic_inc(&config->sys_req_count);
+
 		ret = cti_enable(drvdata->csdev, CS_MODE_SYSFS, NULL);
-		if (ret)
+		if (ret) {
+			atomic_dec(&config->sys_req_count);
 			pm_runtime_put(dev->parent);
+		}
 	} else {
+		/* Do nothing if sys_req_count is already zero */
+		if (!atomic_read(&config->sys_req_count))
+			return 0;
+
 		ret = cti_disable(drvdata->csdev, NULL);
-		if (!ret)
+		if (!ret) {
+			atomic_dec(&config->sys_req_count);
 			pm_runtime_put(dev->parent);
+		}
 	}
 
 	if (ret)
