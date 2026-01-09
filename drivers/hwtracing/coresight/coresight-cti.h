@@ -120,6 +120,7 @@ struct cti_device {
  *		 (max of trig_in or trig_out) - from ID register.
  * @nr_ctm_channels: number of available CTM channels - from ID register.
  * @enable_req_count: CTI is enabled alongside >=1 associated devices.
+ * @sys_req_count: CTI is enabled directly via sysfs knob.
  * @hw_enabled: true if hw is currently enabled.
  * @trig_in_use: bitfield of in triggers registered as in use.
  * @trig_out_use: bitfield of out triggers registered as in use.
@@ -142,6 +143,7 @@ struct cti_config {
 
 	/* cti enable control */
 	int enable_req_count;
+	atomic_t sys_req_count;
 
 	/* registered triggers and filtering */
 	u32 trig_in_use;
