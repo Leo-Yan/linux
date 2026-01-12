@@ -117,25 +117,21 @@ static void cti_cpuhp_enable_hw(struct cti_drvdata *drvdata)
 {
 	struct cti_config *config = &drvdata->config;
 
-	raw_spin_lock(&drvdata->spinlock);
+	guard(raw_spinlock)(&drvdata->spinlock);
+
 	config->hw_powered = true;
 
 	/* no need to do anything if no enable request */
 	if (!drvdata->config.enable_req_count)
-		goto cti_hp_not_enabled;
+		return;
 
 	/* try to claim the device */
 	if (coresight_claim_device(drvdata->csdev))
-		goto cti_hp_not_enabled;
+		return;
 
 	cti_write_all_hw_regs(drvdata);
 	config->hw_enabled = true;
-	raw_spin_unlock(&drvdata->spinlock);
 	return;
-
-	/* did not re-enable due to no claim / no request */
-cti_hp_not_enabled:
-	raw_spin_unlock(&drvdata->spinlock);
 }
 
 /* disable hardware */
@@ -143,23 +139,20 @@ static int cti_disable_hw(struct cti_drvdata *drvdata)
 {
 	struct cti_config *config = &drvdata->config;
 	struct coresight_device *csdev = drvdata->csdev;
-	int ret = 0;
 
-	raw_spin_lock(&drvdata->spinlock);
+	guard(raw_spinlock)(&drvdata->spinlock);
 
 	/* don't allow negative refcounts, return an error */
-	if (!drvdata->config.enable_req_count) {
-		ret = -EINVAL;
-		goto cti_not_disabled;
-	}
+	if (!drvdata->config.enable_req_count)
+		return -EINVAL;
 
 	/* check refcount - disable on 0 */
 	if (--drvdata->config.enable_req_count > 0)
-		goto cti_not_disabled;
+		return 0;
 
 	/* no need to do anything if disabled or cpu unpowered */
 	if (!config->hw_enabled || !config->hw_powered)
-		goto cti_not_disabled;
+		return 0;
 
 	CS_UNLOCK(drvdata->base);
 
@@ -169,13 +162,7 @@ static int cti_disable_hw(struct cti_drvdata *drvdata)
 
 	coresight_disclaim_device_unlocked(csdev);
 	CS_LOCK(drvdata->base);
-	raw_spin_unlock(&drvdata->spinlock);
-	return ret;
-
-	/* not disabled this call */
-cti_not_disabled:
-	raw_spin_unlock(&drvdata->spinlock);
-	return ret;
+	return 0;
 }
 
 void cti_write_single_reg(struct cti_drvdata *drvdata, int offset, u32 value)
@@ -190,11 +177,11 @@ void cti_write_intack(struct device *dev, u32 ackval)
 	struct cti_drvdata *drvdata = dev_get_drvdata(dev->parent);
 	struct cti_config *config = &drvdata->config;
 
-	raw_spin_lock(&drvdata->spinlock);
+	guard(raw_spinlock)(&drvdata->spinlock);
+
 	/* write if enabled */
 	if (cti_active(config))
 		cti_write_single_reg(drvdata, CTIINTACK, ackval);
-	raw_spin_unlock(&drvdata->spinlock);
 }
 
 /*
@@ -361,7 +348,7 @@ int cti_channel_trig_op(struct device *dev, enum cti_chan_op op,
 	reg_offset = (direction == CTI_TRIG_IN ? CTIINEN(trigger_idx) :
 		      CTIOUTEN(trigger_idx));
 
-	raw_spin_lock(&drvdata->spinlock);
+	guard(raw_spinlock)(&drvdata->spinlock);
 
 	/* read - modify write - the trigger / channel enable value */
 	reg_value = direction == CTI_TRIG_IN ? config->ctiinen[trigger_idx] :
@@ -380,7 +367,7 @@ int cti_channel_trig_op(struct device *dev, enum cti_chan_op op,
 	/* write through if enabled */
 	if (cti_active(config))
 		cti_write_single_reg(drvdata, reg_offset, reg_value);
-	raw_spin_unlock(&drvdata->spinlock);
+
 	return 0;
 }
 
@@ -398,7 +385,8 @@ int cti_channel_gate_op(struct device *dev, enum cti_chan_gate_op op,
 
 	chan_bitmask = BIT(channel_idx);
 
-	raw_spin_lock(&drvdata->spinlock);
+	guard(raw_spinlock)(&drvdata->spinlock);
+
 	reg_value = config->ctigate;
 	switch (op) {
 	case CTI_GATE_CHAN_ENABLE:
@@ -418,7 +406,7 @@ int cti_channel_gate_op(struct device *dev, enum cti_chan_gate_op op,
 		if (cti_active(config))
 			cti_write_single_reg(drvdata, CTIGATE, reg_value);
 	}
-	raw_spin_unlock(&drvdata->spinlock);
+
 	return err;
 }
 
@@ -437,7 +425,8 @@ int cti_channel_setop(struct device *dev, enum cti_chan_set_op op,
 
 	chan_bitmask = BIT(channel_idx);
 
-	raw_spin_lock(&drvdata->spinlock);
+	guard(raw_spinlock)(&drvdata->spinlock);
+
 	reg_value = config->ctiappset;
 	switch (op) {
 	case CTI_CHAN_SET:
@@ -465,7 +454,6 @@ int cti_channel_setop(struct device *dev, enum cti_chan_set_op op,
 
 	if ((err == 0) && cti_active(config))
 		cti_write_single_reg(drvdata, reg_offset, reg_value);
-	raw_spin_unlock(&drvdata->spinlock);
 
 	return err;
 }
@@ -668,7 +656,7 @@ static int cti_cpu_pm_notify(struct notifier_block *nb, unsigned long cmd,
 	if (WARN_ON_ONCE(drvdata->ctidev.cpu != cpu))
 		return NOTIFY_BAD;
 
-	raw_spin_lock(&drvdata->spinlock);
+	guard(raw_spinlock)(&drvdata->spinlock);
 
 	switch (cmd) {
 	case CPU_PM_ENTER:
@@ -708,7 +696,6 @@ static int cti_cpu_pm_notify(struct notifier_block *nb, unsigned long cmd,
 	}
 
 cti_notify_exit:
-	raw_spin_unlock(&drvdata->spinlock);
 	return notify_res;
 }
 
@@ -735,11 +722,12 @@ static int cti_dying_cpu(unsigned int cpu)
 	if (!drvdata)
 		return 0;
 
-	raw_spin_lock(&drvdata->spinlock);
+	guard(raw_spinlock)(&drvdata->spinlock);
+
 	drvdata->config.hw_powered = false;
 	if (drvdata->config.hw_enabled)
 		coresight_disclaim_device(drvdata->csdev);
-	raw_spin_unlock(&drvdata->spinlock);
+
 	return 0;
 }
 
