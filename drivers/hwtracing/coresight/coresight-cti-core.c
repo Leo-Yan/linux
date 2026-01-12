@@ -98,8 +98,8 @@ static int cti_enable_hw(struct cti_drvdata *drvdata)
 
 	guard(raw_spinlock)(&drvdata->spinlock);
 
-	/* no need to do anything if enabled or unpowered*/
-	if (config->hw_enabled || !config->hw_powered)
+	/* no need to do anything if enabled */
+	if (config->hw_enabled)
 		goto cti_state_unchanged;
 
 	/* claim the device */
@@ -122,8 +122,6 @@ static void cti_cpuhp_enable_hw(struct cti_drvdata *drvdata)
 	struct cti_config *config = &drvdata->config;
 
 	guard(raw_spinlock)(&drvdata->spinlock);
-
-	config->hw_powered = true;
 
 	/* no need to do anything if no enable request */
 	if (!drvdata->config.enable_req_count)
@@ -152,8 +150,8 @@ static int cti_disable_hw(struct cti_drvdata *drvdata)
 	if (--drvdata->config.enable_req_count > 0)
 		return 0;
 
-	/* no need to do anything if disabled or cpu unpowered */
-	if (!config->hw_enabled || !config->hw_powered)
+	/* no need to do anything if disabled */
+	if (!config->hw_enabled)
 		return 0;
 
 	CS_UNLOCK(drvdata->base);
@@ -652,18 +650,8 @@ static int cti_cpu_pm_notify(struct notifier_block *nb, unsigned long cmd,
 	guard(raw_spinlock)(&drvdata->spinlock);
 
 	switch (cmd) {
-	case CPU_PM_ENTER:
-		/* CTI regs all static - we have a copy & nothing to save */
-		drvdata->config.hw_powered = false;
-		break;
-
-	case CPU_PM_ENTER_FAILED:
-		drvdata->config.hw_powered = true;
-		break;
-
 	case CPU_PM_EXIT:
 		/* write hardware registers to re-enable. */
-		drvdata->config.hw_powered = true;
 		drvdata->config.hw_enabled = false;
 
 		/* check enable reference count to enable HW */
@@ -699,26 +687,13 @@ static int cti_starting_cpu(unsigned int cpu)
 	return 0;
 }
 
-static int cti_dying_cpu(unsigned int cpu)
-{
-	struct cti_drvdata *drvdata = cti_cpu_drvdata[cpu];
-
-	if (!drvdata)
-		return 0;
-
-	guard(raw_spinlock)(&drvdata->spinlock);
-
-	drvdata->config.hw_powered = false;
-	return 0;
-}
-
 static int cti_pm_setup(void)
 {
 	int ret;
 
 	ret = cpuhp_setup_state_nocalls(CPUHP_AP_ARM_CORESIGHT_CTI_STARTING,
 					"arm/coresight_cti:starting",
-					cti_starting_cpu, cti_dying_cpu);
+					cti_starting_cpu, NULL);
 	if (ret)
 		return ret;
 
@@ -840,9 +815,6 @@ static int cti_probe(struct amba_device *adev, const struct amba_id *id)
 		dev_err(dev, "coresight_cti_get_platform_data err\n");
 		return  PTR_ERR(pdata);
 	}
-
-	/* default to powered - could change on PM notifications */
-	drvdata->config.hw_powered = true;
 
 	/* set up device name - will depend if cpu bound or otherwise */
 	if (drvdata->ctidev.cpu >= 0)
