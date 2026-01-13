@@ -54,11 +54,67 @@ static struct cti_drvdata *cti_cpu_drvdata[NR_CPUS];
  */
 DEFINE_CORESIGHT_DEVLIST(cti_sys_devs, "cti_sys");
 
+struct cti_smp_call_arg {
+	struct cti_drvdata *drvdata;
+	int offset;
+	int value;
+};
+
+static bool cti_reg_need_smp_call(int cpu, int offset)
+{
+	if (cpu < 0 || cpu == raw_smp_processor_id())
+		return false;
+
+	/*
+	 * According to Arm ARM DDI 0487 L.b, section H9.5.1 "ASICCTL, CTI
+	 * External Multiplexer Control register" says ASICCTL can be in the
+	 * core power domain.
+	 */
+	return offset == ASICCTL;
+}
+
+static void __cti_write_reg(struct cti_drvdata *drvdata, int offset, u32 value)
+{
+	CS_UNLOCK(drvdata->base);
+	writel_relaxed(value, drvdata->base + offset);
+	CS_LOCK(drvdata->base);
+}
+
+static void cti_write_reg_cb(void *info)
+{
+	struct cti_smp_call_arg *arg = info;
+	struct cti_drvdata *drvdata = arg->drvdata;
+
+	__cti_write_reg(drvdata, arg->offset, arg->value);
+}
+
+static int cti_write_reg(struct cti_drvdata *drvdata, int offset, u32 value)
+{
+	int cpu = drvdata->ctidev.cpu;
+	struct cti_smp_call_arg arg = { 0 };
+
+	if (!cti_reg_need_smp_call(cpu, offset)) {
+		__cti_write_reg(drvdata, offset, value);
+		return 0;
+	}
+
+	arg.drvdata = drvdata;
+	arg.offset = offset;
+	arg.value = value;
+	return smp_call_function_single(cpu, cti_write_reg_cb, &arg, 1);
+}
+
 /* write set of regs to hardware - call with spinlock claimed */
 void cti_write_all_hw_regs(struct cti_drvdata *drvdata)
 {
 	struct cti_config *config = &drvdata->config;
 	int i;
+
+	/*
+	 * If the CPU is offline, the write will be deferred until the CPU is
+	 * hotplugged in.
+	 */
+	cti_write_reg(drvdata, ASICCTL, config->asicctl);
 
 	CS_UNLOCK(drvdata->base);
 
@@ -74,7 +130,6 @@ void cti_write_all_hw_regs(struct cti_drvdata *drvdata)
 
 	/* other regs */
 	writel_relaxed(config->ctigate, drvdata->base + CTIGATE);
-	writel_relaxed(config->asicctl, drvdata->base + ASICCTL);
 	writel_relaxed(config->ctiappset, drvdata->base + CTIAPPSET);
 
 	/* re-enable CTI */
