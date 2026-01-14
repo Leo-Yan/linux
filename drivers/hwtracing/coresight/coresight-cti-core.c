@@ -104,6 +104,44 @@ int cti_write_reg(struct cti_drvdata *drvdata, int offset, u32 value)
 	return smp_call_function_single(cpu, cti_write_reg_cb, &arg, 1);
 }
 
+static u32 __cti_read_reg(struct cti_drvdata *drvdata, int offset)
+{
+	int val;
+
+	CS_UNLOCK(drvdata->base);
+	val = readl_relaxed(drvdata->base + offset);
+	CS_LOCK(drvdata->base);
+
+	return val;
+}
+
+static void cti_read_reg_cb(void *info)
+{
+	struct cti_smp_call_arg *arg = info;
+	struct cti_drvdata *drvdata = arg->drvdata;
+
+	arg->value = __cti_read_reg(drvdata, arg->offset);
+}
+
+u32 cti_read_reg(struct cti_drvdata *drvdata, int offset)
+{
+	struct cti_smp_call_arg arg = { 0 };
+	int cpu = drvdata->ctidev.cpu;
+
+	if (!cti_reg_need_smp_call(cpu, offset))
+		return __cti_read_reg(drvdata, offset);
+
+	arg.drvdata = drvdata;
+	arg.offset = offset;
+	smp_call_function_single(cpu, cti_read_reg_cb, &arg, 1);
+
+	/*
+	 * If the smp call failed, directly return arg.value as it keeps the
+	 * initialized zero value.
+	 */
+	return arg.value;
+}
+
 /* write set of regs to hardware - call with spinlock claimed */
 void cti_write_all_hw_regs(struct cti_drvdata *drvdata)
 {

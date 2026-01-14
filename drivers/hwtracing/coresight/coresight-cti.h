@@ -233,6 +233,7 @@ struct coresight_platform_data *
 coresight_cti_get_platform_data(struct device *dev);
 const char *cti_plat_get_node_name(struct fwnode_handle *fwnode);
 int cti_write_reg(struct cti_drvdata *drvdata, int offset, u32 value);
+u32 cti_read_reg(struct cti_drvdata *drvdata, int offset);
 
 /* cti powered and enabled */
 static inline bool cti_active(struct cti_config *cfg)
