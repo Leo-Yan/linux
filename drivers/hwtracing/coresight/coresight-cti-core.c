@@ -88,7 +88,7 @@ static void cti_write_reg_cb(void *info)
 	__cti_write_reg(drvdata, arg->offset, arg->value);
 }
 
-static int cti_write_reg(struct cti_drvdata *drvdata, int offset, u32 value)
+int cti_write_reg(struct cti_drvdata *drvdata, int offset, u32 value)
 {
 	int cpu = drvdata->ctidev.cpu;
 	struct cti_smp_call_arg arg = { 0 };
@@ -217,13 +217,6 @@ static int cti_disable_hw(struct cti_drvdata *drvdata)
 	return 0;
 }
 
-void cti_write_single_reg(struct cti_drvdata *drvdata, int offset, u32 value)
-{
-	CS_UNLOCK(drvdata->base);
-	writel_relaxed(value, drvdata->base + offset);
-	CS_LOCK(drvdata->base);
-}
-
 void cti_write_intack(struct device *dev, u32 ackval)
 {
 	struct cti_drvdata *drvdata = dev_get_drvdata(dev->parent);
@@ -233,7 +226,7 @@ void cti_write_intack(struct device *dev, u32 ackval)
 
 	/* write if enabled */
 	if (cti_active(config))
-		cti_write_single_reg(drvdata, CTIINTACK, ackval);
+		cti_write_reg(drvdata, CTIINTACK, ackval);
 }
 
 /*
@@ -418,7 +411,7 @@ int cti_channel_trig_op(struct device *dev, enum cti_chan_op op,
 
 	/* write through if enabled */
 	if (cti_active(config))
-		cti_write_single_reg(drvdata, reg_offset, reg_value);
+		cti_write_reg(drvdata, reg_offset, reg_value);
 
 	return 0;
 }
@@ -456,7 +449,7 @@ int cti_channel_gate_op(struct device *dev, enum cti_chan_gate_op op,
 	if (err == 0) {
 		config->ctigate = reg_value;
 		if (cti_active(config))
-			cti_write_single_reg(drvdata, CTIGATE, reg_value);
+			cti_write_reg(drvdata, CTIGATE, reg_value);
 	}
 
 	return err;
@@ -505,7 +498,7 @@ int cti_channel_setop(struct device *dev, enum cti_chan_set_op op,
 	}
 
 	if ((err == 0) && cti_active(config))
-		cti_write_single_reg(drvdata, reg_offset, reg_value);
+		cti_write_reg(drvdata, reg_offset, reg_value);
 
 	return err;
 }
