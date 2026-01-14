@@ -236,7 +236,7 @@ int cti_write_reg(struct cti_drvdata *drvdata, int offset, u32 value);
 u32 cti_read_reg(struct cti_drvdata *drvdata, int offset);
 
 /* cti powered and enabled */
-static inline bool cti_active(struct cti_config *cfg)
+static inline bool cti_is_active(struct cti_config *cfg)
 {
 	return cfg->hw_powered && cfg->hw_enabled;
 }
