@@ -205,10 +205,17 @@ static void cti_cpuhp_enable_hw(struct cti_drvdata *drvdata)
 {
 	struct cti_config *config = &drvdata->config;
 
-	guard(raw_spinlock)(&drvdata->spinlock);
-
-	/* no need to do anything if no enable request */
-	if (!cti_is_active(config))
+	/*
+	 * config->sys_req_count tracks the number of enables via the CTI
+	 * sysfs knob.  When enabling a path that is not accounted for by
+	 * sys_req_count, the CoreSight core layer returns an error if
+	 * the attached CPU is offline.  In this case, no need to program
+	 * the CTI registers.
+	 *
+	 * When CTI is enabled via the sysfs knob, the driver must manage
+	 * power explicitly, as the CoreSight core is unaware of this usage.
+	 */
+	if (!atomic_read(&config->sys_req_count))
 		return;
 
 	/* Update register in CPU power domain */
@@ -724,14 +731,19 @@ static int cti_cpu_pm_notify(struct notifier_block *nb, unsigned long cmd,
 	if (WARN_ON_ONCE(drvdata->ctidev.cpu != cpu))
 		return NOTIFY_BAD;
 
-	guard(raw_spinlock)(&drvdata->spinlock);
+	/*
+	 * If CTI is enabled via a sysfs knob, the driver must manage power
+	 * itself, as the CoreSight core is unaware of it; otherwise, power
+	 * management is handled by the CoreSight core layer when iterating
+	 * the CoreSight path to which it is attached.
+	 */
+	if (!atomic_read(&drvdata->config.sys_req_count))
+		return NOTIFY_DONE;
 
 	switch (cmd) {
 	case CPU_PM_EXIT:
-		/* check enable reference count to enable HW */
-		if (cti_is_active(&drvdata->config))
-			/* Update register in CPU power domain */
-			cti_write_reg(drvdata, ASICCTL, drvdata->config.asicctl);
+		/* Update register in CPU power domain */
+		cti_write_reg(drvdata, ASICCTL, drvdata->config.asicctl);
 		break;
 
 	default:
