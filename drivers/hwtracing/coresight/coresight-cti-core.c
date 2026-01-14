@@ -54,6 +54,13 @@ static struct cti_drvdata *cti_cpu_drvdata[NR_CPUS];
  */
 DEFINE_CORESIGHT_DEVLIST(cti_sys_devs, "cti_sys");
 
+void cti_write_single_reg(struct cti_drvdata *drvdata, int offset, u32 value)
+{
+	CS_UNLOCK(drvdata->base);
+	writel_relaxed(value, drvdata->base + offset);
+	CS_LOCK(drvdata->base);
+}
+
 /* write set of regs to hardware - call with spinlock claimed */
 void cti_write_all_hw_regs(struct cti_drvdata *drvdata)
 {
@@ -122,11 +129,9 @@ static void cti_cpuhp_enable_hw(struct cti_drvdata *drvdata)
 	if (!drvdata->config.enable_req_count)
 		return;
 
-	/* try to claim the device */
-	if (coresight_claim_device(drvdata->csdev))
-		return;
+	/* Update register in CPU power domain */
+	cti_write_single_reg(drvdata, ASICCTL, config->asicctl);
 
-	cti_write_all_hw_regs(drvdata);
 	config->hw_enabled = true;
 	return;
 }
@@ -160,13 +165,6 @@ static int cti_disable_hw(struct cti_drvdata *drvdata)
 	coresight_disclaim_device_unlocked(csdev);
 	CS_LOCK(drvdata->base);
 	return 0;
-}
-
-void cti_write_single_reg(struct cti_drvdata *drvdata, int offset, u32 value)
-{
-	CS_UNLOCK(drvdata->base);
-	writel_relaxed(value, drvdata->base + offset);
-	CS_LOCK(drvdata->base);
 }
 
 void cti_write_intack(struct device *dev, u32 ackval)
@@ -640,7 +638,6 @@ static int cti_cpu_pm_notify(struct notifier_block *nb, unsigned long cmd,
 			     void *v)
 {
 	struct cti_drvdata *drvdata;
-	struct coresight_device *csdev;
 	unsigned int cpu = smp_processor_id();
 	int notify_res = NOTIFY_OK;
 
@@ -648,7 +645,6 @@ static int cti_cpu_pm_notify(struct notifier_block *nb, unsigned long cmd,
 		return NOTIFY_OK;
 
 	drvdata = cti_cpu_drvdata[cpu];
-	csdev = drvdata->csdev;
 
 	if (WARN_ON_ONCE(drvdata->ctidev.cpu != cpu))
 		return NOTIFY_BAD;
@@ -659,16 +655,10 @@ static int cti_cpu_pm_notify(struct notifier_block *nb, unsigned long cmd,
 	case CPU_PM_ENTER:
 		/* CTI regs all static - we have a copy & nothing to save */
 		drvdata->config.hw_powered = false;
-		if (drvdata->config.hw_enabled)
-			coresight_disclaim_device(csdev);
 		break;
 
 	case CPU_PM_ENTER_FAILED:
 		drvdata->config.hw_powered = true;
-		if (drvdata->config.hw_enabled) {
-			if (coresight_claim_device(csdev))
-				drvdata->config.hw_enabled = false;
-		}
 		break;
 
 	case CPU_PM_EXIT:
@@ -678,12 +668,10 @@ static int cti_cpu_pm_notify(struct notifier_block *nb, unsigned long cmd,
 
 		/* check enable reference count to enable HW */
 		if (drvdata->config.enable_req_count) {
-			/* check we can claim the device as we re-power */
-			if (coresight_claim_device(csdev))
-				goto cti_notify_exit;
-
 			drvdata->config.hw_enabled = true;
-			cti_write_all_hw_regs(drvdata);
+
+			/* Update register in CPU power domain */
+			cti_write_single_reg(drvdata, ASICCTL, drvdata->config.asicctl);
 		}
 		break;
 
@@ -692,7 +680,6 @@ static int cti_cpu_pm_notify(struct notifier_block *nb, unsigned long cmd,
 		break;
 	}
 
-cti_notify_exit:
 	return notify_res;
 }
 
@@ -722,9 +709,6 @@ static int cti_dying_cpu(unsigned int cpu)
 	guard(raw_spinlock)(&drvdata->spinlock);
 
 	drvdata->config.hw_powered = false;
-	if (drvdata->config.hw_enabled)
-		coresight_disclaim_device(drvdata->csdev);
-
 	return 0;
 }
 
