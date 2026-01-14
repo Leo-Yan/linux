@@ -142,7 +142,6 @@ struct cti_config {
 
 	/* cti enable control */
 	int enable_req_count;
-	bool hw_enabled;
 
 	/* registered triggers and filtering */
 	u32 trig_in_use;
@@ -235,7 +234,7 @@ const char *cti_plat_get_node_name(struct fwnode_handle *fwnode);
 /* Check if a cti device is enabled */
 static inline bool cti_is_active(struct cti_config *cfg)
 {
-	return cfg->hw_enabled;
+	return !!cfg->enable_req_count;
 }
 
 #endif  /* _CORESIGHT_CORESIGHT_CTI_H */

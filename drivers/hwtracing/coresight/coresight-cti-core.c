@@ -99,7 +99,7 @@ static int cti_enable_hw(struct cti_drvdata *drvdata)
 	guard(raw_spinlock)(&drvdata->spinlock);
 
 	/* no need to do anything if enabled */
-	if (config->hw_enabled)
+	if (cti_is_active(config))
 		goto cti_state_unchanged;
 
 	/* claim the device */
@@ -108,8 +108,6 @@ static int cti_enable_hw(struct cti_drvdata *drvdata)
 		return rc;
 
 	cti_write_all_hw_regs(drvdata);
-
-	config->hw_enabled = true;
 
 cti_state_unchanged:
 	drvdata->config.enable_req_count++;
@@ -124,13 +122,11 @@ static void cti_cpuhp_enable_hw(struct cti_drvdata *drvdata)
 	guard(raw_spinlock)(&drvdata->spinlock);
 
 	/* no need to do anything if no enable request */
-	if (!drvdata->config.enable_req_count)
+	if (!cti_is_active(config))
 		return;
 
 	/* Update register in CPU power domain */
 	cti_write_single_reg(drvdata, ASICCTL, config->asicctl);
-
-	config->hw_enabled = true;
 	return;
 }
 
@@ -143,22 +139,17 @@ static int cti_disable_hw(struct cti_drvdata *drvdata)
 	guard(raw_spinlock)(&drvdata->spinlock);
 
 	/* don't allow negative refcounts, return an error */
-	if (!drvdata->config.enable_req_count)
+	if (!cti_is_active(config))
 		return -EINVAL;
 
 	/* check refcount - disable on 0 */
 	if (--drvdata->config.enable_req_count > 0)
 		return 0;
 
-	/* no need to do anything if disabled */
-	if (!config->hw_enabled)
-		return 0;
-
 	CS_UNLOCK(drvdata->base);
 
 	/* disable CTI */
 	writel_relaxed(0, drvdata->base + CTICONTROL);
-	config->hw_enabled = false;
 
 	coresight_disclaim_device_unlocked(csdev);
 	CS_LOCK(drvdata->base);
@@ -651,16 +642,10 @@ static int cti_cpu_pm_notify(struct notifier_block *nb, unsigned long cmd,
 
 	switch (cmd) {
 	case CPU_PM_EXIT:
-		/* write hardware registers to re-enable. */
-		drvdata->config.hw_enabled = false;
-
 		/* check enable reference count to enable HW */
-		if (drvdata->config.enable_req_count) {
-			drvdata->config.hw_enabled = true;
-
+		if (cti_is_active(&drvdata->config))
 			/* Update register in CPU power domain */
 			cti_write_single_reg(drvdata, ASICCTL, drvdata->config.asicctl);
-		}
 		break;
 
 	default:
