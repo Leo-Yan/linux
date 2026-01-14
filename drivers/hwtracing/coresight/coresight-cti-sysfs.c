@@ -184,7 +184,7 @@ static ssize_t coresight_cti_reg_show(struct device *dev,
 	pm_runtime_get_sync(dev->parent);
 
 	scoped_guard(raw_spinlock, &drvdata->spinlock)
-		val = readl_relaxed(drvdata->base + cti_attr->off);
+		val = cti_read_single_reg(drvdata, cti_attr->off);
 
 	pm_runtime_put_sync(dev->parent);
 	return sysfs_emit(buf, "0x%x\n", val);
@@ -267,11 +267,9 @@ static ssize_t cti_reg32_show(struct device *dev, char *buf,
 
 	scoped_guard(raw_spinlock, &drvdata->spinlock) {
 		if ((reg_offset >= 0) && cti_is_active(config)) {
-			CS_UNLOCK(drvdata->base);
-			val = readl_relaxed(drvdata->base + reg_offset);
+			val = cti_read_single_reg(drvdata, reg_offset);
 			if (pcached_val)
 				*pcached_val = val;
-			CS_LOCK(drvdata->base);
 		} else if (pcached_val) {
 			val = *pcached_val;
 		}
