@@ -7,6 +7,7 @@
 #ifndef _CORESIGHT_CORESIGHT_CONFIG_H
 #define _CORESIGHT_CORESIGHT_CONFIG_H
 
+#include <linux/configfs.h>
 #include <linux/coresight.h>
 #include <linux/types.h>
 
@@ -83,6 +84,7 @@ struct cscfg_regval_desc {
 		};
 		u32 param_idx;
 	};
+	const char *name;
 };
 
 /**
@@ -111,6 +113,8 @@ struct cscfg_feature_desc {
 	struct cscfg_regval_desc *regs_desc;
 	void *load_owner;
 	struct config_group *fs_group;
+	struct configfs_attribute **attrs;
+	int nr_attrs;
 };
 
 /**
@@ -248,6 +252,11 @@ struct cscfg_config_csdev {
 struct cscfg_csdev_feat_ops {
 	int (*load_feat)(struct coresight_device *csdev,
 			 struct cscfg_feature_csdev *feat_csdev);
+};
+
+struct cscfg_dynamic_cfg {
+	struct cscfg_feature_desc *desc;
+	struct config_group group;
 };
 
 /* coresight config helper functions*/
