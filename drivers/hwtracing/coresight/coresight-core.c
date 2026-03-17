@@ -492,20 +492,62 @@ int coresight_resume_source(struct coresight_device *csdev)
 }
 EXPORT_SYMBOL_GPL(coresight_resume_source);
 
+static struct coresight_node *
+coresight_path_first_node(struct coresight_path *path)
+{
+	return list_first_entry(&path->path_list, struct coresight_node, link);
+}
+
+static struct coresight_node *
+coresight_path_last_node(struct coresight_path *path)
+{
+	return list_last_entry(&path->path_list, struct coresight_node, link);
+}
+
+static bool coresight_path_nodes_in_order(struct coresight_path *path,
+					  struct coresight_node *from,
+					  struct coresight_node *to)
+{
+	struct coresight_node *nd;
+
+	/* Callers must fetch nodes from the path */
+	if (WARN_ON_ONCE(!from || !to))
+		return false;
+
+	list_for_each_entry(nd, &path->path_list, link) {
+		if (nd == from)
+			return true;
+		if (nd == to)
+			return false;
+	}
+
+	return false;
+}
+
 /*
- * coresight_disable_path_from : Disable components in the given path beyond
- * @nd in the list. If @nd is NULL, all the components, except the SOURCE are
- * disabled.
+ * coresight_disable_path_from_to : Disable components in the given @path
+ * between @from and @to.
+ *
+ * The range excludes @from but includes @to.  @from is exclusive to handle the
+ * case where it is the source (the first node in the path), as the source has
+ * its own disable function.
  */
-static void coresight_disable_path_from(struct coresight_path *path,
-					struct coresight_node *nd)
+static void coresight_disable_path_from_to(struct coresight_path *path,
+					   struct coresight_node *from,
+					   struct coresight_node *to)
 {
 	u32 type;
 	struct coresight_device *csdev, *parent, *child;
+	struct coresight_node *nd;
 
-	if (!nd)
-		nd = list_first_entry(&path->path_list, struct coresight_node, link);
+	if (!coresight_path_nodes_in_order(path, from, to))
+		return;
 
+	/* @from is exclusive; nothing to do if @from == @to */
+	if (from == to)
+		return;
+
+	nd = from;
 	list_for_each_entry_continue(nd, &path->path_list, link) {
 		csdev = nd->csdev;
 		type = csdev->type;
@@ -545,12 +587,18 @@ static void coresight_disable_path_from(struct coresight_path *path,
 
 		/* Disable all helpers adjacent along the path last */
 		coresight_disable_helpers(csdev, path);
+
+		/* Iterate up to and including @to */
+		if (nd == to)
+			break;
 	}
 }
 
 void coresight_disable_path(struct coresight_path *path)
 {
-	coresight_disable_path_from(path, NULL);
+	coresight_disable_path_from_to(path,
+				       coresight_path_first_node(path),
+				       coresight_path_last_node(path));
 }
 EXPORT_SYMBOL_GPL(coresight_disable_path);
 
@@ -574,7 +622,18 @@ static int coresight_enable_helpers(struct coresight_device *csdev,
 	return 0;
 }
 
-int coresight_enable_path(struct coresight_path *path, enum cs_mode mode)
+/*
+ * coresight_enable_path_from_to : Enable components in the given @path
+ * between @from and @to with the specified mode.
+ *
+ * The range includes both @from and @to. If @from is the source (the first
+ * node in the path), its helper is enabled here but the source is enabled
+ * in a separate function.
+ */
+static int coresight_enable_path_from_to(struct coresight_path *path,
+					 enum cs_mode mode,
+					 struct coresight_node *from,
+					 struct coresight_node *to)
 {
 	int ret = 0;
 	u32 type;
@@ -582,8 +641,12 @@ int coresight_enable_path(struct coresight_path *path, enum cs_mode mode)
 	struct coresight_device *csdev, *parent, *child;
 	struct coresight_device *source;
 
+	if (!coresight_path_nodes_in_order(path, from, to))
+		return -EINVAL;
+
+	nd = to;
 	source = coresight_get_source(path);
-	list_for_each_entry_reverse(nd, &path->path_list, link) {
+	list_for_each_entry_from_reverse(nd, &path->path_list, link) {
 		csdev = nd->csdev;
 		type = csdev->type;
 
@@ -591,6 +654,7 @@ int coresight_enable_path(struct coresight_path *path, enum cs_mode mode)
 		ret = coresight_enable_helpers(csdev, mode, path);
 		if (ret)
 			goto err_disable_path;
+
 		/*
 		 * ETF devices are tricky... They can be a link or a sink,
 		 * depending on how they are configured.  If an ETF has been
@@ -630,6 +694,10 @@ int coresight_enable_path(struct coresight_path *path, enum cs_mode mode)
 			ret = -EINVAL;
 			goto err_disable_helpers;
 		}
+
+		/* Iterate down to and including @from */
+		if (nd == from)
+			break;
 	}
 
 out:
@@ -637,8 +705,15 @@ out:
 err_disable_helpers:
 	coresight_disable_helpers(csdev, path);
 err_disable_path:
-	coresight_disable_path_from(path, nd);
+	coresight_disable_path_from_to(path, nd, coresight_path_last_node(path));
 	goto out;
+}
+
+int coresight_enable_path(struct coresight_path *path, enum cs_mode mode)
+{
+	return coresight_enable_path_from_to(path, mode,
+					     coresight_path_first_node(path),
+					     coresight_path_last_node(path));
 }
 
 struct coresight_device *coresight_get_sink(struct coresight_path *path)
