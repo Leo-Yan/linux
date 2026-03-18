@@ -91,6 +91,8 @@ static void coresight_set_percpu_source_local(void *csdev)
 
 static void _coresight_set_percpu_source(int cpu, struct coresight_device *csdev)
 {
+	lockdep_assert_cpus_held();
+
 	/*
 	 * Directly set per CPU pointer if running on the local CPU.  This
 	 * avoids to acquire CPU lock duplicately if it is called from CPU
@@ -103,9 +105,6 @@ static void _coresight_set_percpu_source(int cpu, struct coresight_device *csdev
 	}
 
 	put_cpu();
-
-	/* Avoid race condition with CPU hotplug */
-	guard(cpus_read_lock)();
 
 	if (!smp_call_function_single(cpu, coresight_set_percpu_source_local,
 				      csdev, 1))
@@ -1567,9 +1566,9 @@ struct coresight_device *coresight_register(struct coresight_desc *desc)
 	if (ret)
 		goto out_unlock;
 
-	mutex_unlock(&coresight_mutex);
-
 	coresight_set_percpu_source(csdev);
+
+	mutex_unlock(&coresight_mutex);
 
 	if (cti_assoc_ops && cti_assoc_ops->add)
 		cti_assoc_ops->add(csdev);
@@ -1597,8 +1596,8 @@ void coresight_unregister(struct coresight_device *csdev)
 	if (cti_assoc_ops && cti_assoc_ops->remove)
 		cti_assoc_ops->remove(csdev);
 
-	coresight_clear_percpu_source(csdev);
 	mutex_lock(&coresight_mutex);
+	coresight_clear_percpu_source(csdev);
 	etm_perf_del_symlink_sink(csdev);
 	coresight_remove_conns(csdev);
 	coresight_clear_default_sink(csdev);

@@ -2235,13 +2235,12 @@ static int etm4_probe(struct device *dev)
 	 * Serialize against CPUHP callbacks to avoid race condition
 	 * between the smp call and saving the delayed probe.
 	 */
-	cpus_read_lock();
+	guard(cpus_read_lock)();
 	if (smp_call_function_single(drvdata->cpu,
 				etm4_init_arch_data,  &init_arg, 1)) {
 		/* The CPU was offline, try again once it comes online. */
 		delayed = devm_kmalloc(dev, sizeof(*delayed), GFP_KERNEL);
 		if (!delayed) {
-			cpus_read_unlock();
 			return -ENOMEM;
 		}
 
@@ -2249,10 +2248,8 @@ static int etm4_probe(struct device *dev)
 
 		per_cpu(delayed_probe, drvdata->cpu) = delayed;
 
-		cpus_read_unlock();
 		return 0;
 	}
-	cpus_read_unlock();
 
 	return etm4_add_coresight_dev(&init_arg);
 }
@@ -2366,7 +2363,7 @@ static void etm4_remove_dev(struct etmv4_drvdata *drvdata)
 	 * Taking hotplug lock here to avoid racing between etm4_remove_dev()
 	 * and CPU hotplug call backs.
 	 */
-	cpus_read_lock();
+	guard(cpus_read_lock)();
 
 	had_delayed_probe = per_cpu(delayed_probe, drvdata->cpu);
 
@@ -2378,8 +2375,6 @@ static void etm4_remove_dev(struct etmv4_drvdata *drvdata)
 	 */
 	if (smp_call_function_single(drvdata->cpu, clear_etmdrvdata, &drvdata->cpu, 1))
 		clear_etmdrvdata(&drvdata->cpu);
-
-	cpus_read_unlock();
 
 	if (!had_delayed_probe) {
 		etm_perf_symlink(drvdata->csdev, false);
