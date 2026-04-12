@@ -1,13 +1,17 @@
 # This mimics the top-level Makefile. We do it explicitly here so that this
 # Makefile can operate with or without the kbuild infrastructure.
-ifneq ($(LLVM),)
-ifneq ($(filter %/,$(LLVM)),)
-LLVM_PREFIX := $(LLVM)
-else ifneq ($(filter -%,$(LLVM)),)
-LLVM_SUFFIX := $(LLVM)
+ifeq (0,$(MAKELEVEL))
+    ifeq ($(OUTPUT),)
+	OUTPUT := $(shell pwd)
+	DEFAULT_INSTALL_HDR_PATH := 1
+    endif
 endif
+selfdir = $(realpath $(dir $(filter %/lib.mk,$(MAKEFILE_LIST))))
+top_srcdir = $(selfdir)/../../..
 
-CLANG := $(LLVM_PREFIX)clang$(LLVM_SUFFIX)
+include $(top_srcdir)/tools/scripts/Makefile.include
+
+ifneq ($(LLVM),)
 
 CLANG_TARGET_FLAGS_arm          := arm-linux-gnueabi
 CLANG_TARGET_FLAGS_arm64        := aarch64-linux-gnu
@@ -22,21 +26,19 @@ CLANG_TARGET_FLAGS_x86          := x86_64-linux-gnu
 CLANG_TARGET_FLAGS_x86_64       := x86_64-linux-gnu
 
 # Default to host architecture if ARCH is not explicitly given.
-ifeq ($(ARCH),)
-CLANG_TARGET_FLAGS := $(shell $(CLANG) -print-target-triple)
+ifneq ($(CLANG_CROSS_FLAGS),)
+CLANG_TARGET_FLAGS := $(CLANG_CROSS_FLAGS)
 else
-CLANG_TARGET_FLAGS := $(CLANG_TARGET_FLAGS_$(ARCH))
+ifneq ($(ARCH),)
+CLANG_TARGET_FLAGS := --target=$(CLANG_TARGET_FLAGS_$(ARCH))
+endif
 endif
 
-ifeq ($(CROSS_COMPILE),)
 ifeq ($(CLANG_TARGET_FLAGS),)
 $(error Specify CROSS_COMPILE or add '--target=' option to lib.mk)
-else
-CLANG_FLAGS     += --target=$(CLANG_TARGET_FLAGS)
 endif # CLANG_TARGET_FLAGS
-else
-CLANG_FLAGS     += --target=$(notdir $(CROSS_COMPILE:%-=%))
-endif # CROSS_COMPILE
+
+CLANG_FLAGS     += $(CLANG_TARGET_FLAGS)
 
 # gcc defaults to silence (off) for the following warnings, but clang defaults
 # to the opposite. The warnings are not useful for the kernel itself, which is
@@ -47,18 +49,9 @@ CFLAGS += -Wno-address-of-packed-member
 CFLAGS += -Wno-gnu-variable-sized-type-not-at-end
 
 CC := $(CLANG) $(CLANG_FLAGS) -fintegrated-as
-else
-CC := $(CROSS_COMPILE)gcc
 endif # LLVM
 
-ifeq (0,$(MAKELEVEL))
-    ifeq ($(OUTPUT),)
-	OUTPUT := $(shell pwd)
-	DEFAULT_INSTALL_HDR_PATH := 1
-    endif
-endif
-selfdir = $(realpath $(dir $(filter %/lib.mk,$(MAKEFILE_LIST))))
-top_srcdir = $(selfdir)/../../..
+$(info LOG1: CC=$(CC))
 
 # msg: emit succinct information message describing current building step
 # $1 - generic step name (e.g., CC, LINK, etc);
@@ -201,6 +194,8 @@ CFLAGS += -D_GNU_SOURCE=
 
 # Additional include paths needed by kselftest.h and local headers
 CFLAGS += -I${top_srcdir}/tools/testing/selftests
+
+CFLAGS += $(EXTRA_CFLAGS)
 
 # Enables to extend CFLAGS and LDFLAGS from command line, e.g.
 # make USERCFLAGS=-Werror USERLDFLAGS=-static

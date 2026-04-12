@@ -1,6 +1,10 @@
 # SPDX-License-Identifier: GPL-2.0
 
+$(info 11111111111 CC=$(CC))
+
 include ../../scripts/Makefile.arch
+
+$(info 22222222222 CC=$(CC))
 
 INSTALL	?= install
 prefix  ?= /usr

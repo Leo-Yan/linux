@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0
 
-CC=gcc
+$(info tools/net/ynl/lib/Makefile CC=$(CC))
+
+CC ?= gcc
 CFLAGS += -std=gnu11 -O2 -W -Wall -Wextra -Wno-unused-parameter -Wshadow
 ifeq ("$(DEBUG)","1")
   CFLAGS += -g -fsanitize=address -fsanitize=leak -static-libasan

@@ -31,7 +31,15 @@ TEST_GEN_FILES += $(YNL_GEN_FILES)
 
 include ../../lib.mk
 
+$(info net/Makefile CC=$(CC))
+
 # YNL build
 YNL_GENS := psp
 
 include ../../net/ynl.mk
+
+.PHONY: ynl_clean
+clean: ynl_clean
+
+ynl_clean:
+	$(Q)$(MAKE) -C $(top_srcdir)/tools/net/ynl clean

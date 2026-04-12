@@ -13,6 +13,10 @@ YNL_OUTPUTS :=	$(patsubst %,$(OUTPUT)/%,$(YNL_GEN_FILES)) \
 YNL_SPECS := \
 	$(patsubst %,$(top_srcdir)/Documentation/netlink/specs/%.yaml,$(YNL_GENS))
 
+$(info net ynl.mk CC=$(CC))
+
+export CC
+
 $(YNL_OUTPUTS): $(OUTPUT)/libynl.a
 $(YNL_OUTPUTS): CFLAGS += \
 	-I$(top_srcdir)/usr/include/ $(KHDR_INCLUDES) \
