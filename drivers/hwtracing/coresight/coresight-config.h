@@ -256,6 +256,7 @@ struct cscfg_csdev_feat_ops {
 
 struct cscfg_dynamic_cfg {
 	struct cscfg_feature_desc *desc;
+	struct cscfg_regval_desc *regs;
 	struct config_group group;
 };
 

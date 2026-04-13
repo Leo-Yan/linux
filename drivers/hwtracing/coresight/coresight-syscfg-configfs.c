@@ -572,6 +572,10 @@ static ssize_t cscfg_root_bind_store(struct config_item *item, const char *page,
 		return -ENOMEM;
 
 	cfg->desc = desc;
+
+	cfg->regs = kzalloc(sizeof(*desc->regs_desc) * desc->nr_regs, GFP_KERNEL);
+	memcpy(cfg->regs, desc->regs_desc, sizeof(*desc->regs_desc) * desc->nr_regs);
+
 	dyn_cfg_type.ct_attrs = desc->attrs;
 
 	config_group_init_type_name(&cfg->group, desc->name, &dyn_cfg_type);
