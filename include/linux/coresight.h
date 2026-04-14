@@ -331,6 +331,7 @@ struct coresight_path {
 	struct list_head		path_list;
 	u8				trace_id;
 	struct perf_output_handle	*handle;
+	struct cscfg_info		*cfg;
 };
 
 enum cs_mode {

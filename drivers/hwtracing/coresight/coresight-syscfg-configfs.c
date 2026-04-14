@@ -448,18 +448,10 @@ void cscfg_configfs_del_feature(struct cscfg_feature_desc *feat_desc)
 	}
 }
 
-struct cscfg_info {
-	int hash;
-	struct config_group group;
-	struct config_group features_group;
-	struct config_group configs_group;
-};
-
 static inline struct cscfg_info *to_cscfg_info(struct config_item *item)
 {
 	return container_of(to_config_group(item), struct cscfg_info, group);
 }
-
 
 static struct config_item_type dyn_cfg_type = {
 	.ct_owner = THIS_MODULE,
@@ -697,9 +689,12 @@ void cscfg_configfs_release(struct cscfg_manager *cscfg_mgr)
 	configfs_unregister_subsystem(&cscfg_mgr->cfgfs_subsys);
 }
 
-static void cscfg_dump_group(struct config_group *grp)
+static struct cscfg_info *cscfg_search_group(struct config_group *grp,
+					     unsigned long hash)
 {
 	struct config_item *item;
+
+	pr_info("%s: hash=%lx\n", __func__, hash);
 
 	list_for_each_entry(item, &grp->cg_children, ci_entry) {
 		pr_info("%s: group %s\n", __func__, config_item_name(item));
@@ -712,21 +707,45 @@ static void cscfg_dump_group(struct config_group *grp)
 		 * If you know which items in your subsystem are groups,
 		 * you can check that and cast.
 		 */
-		if (!strcmp("configurations", config_item_name(item)) ||
-		    (item->ci_type && item->ci_type->ct_group_ops)) {
-			struct config_group *child_grp = to_config_group(item);
+		if (item->ci_type && item->ci_type->ct_item_ops) {
+			struct cscfg_info *cfg_info = container_of(to_config_group(item),
+						   struct cscfg_info, group);
 
-			cscfg_dump_group(child_grp);
+			pr_info("%s: cfg_info->hash=%x\n", __func__, cfg_info->hash);
+
+			if (cfg_info->hash == hash) {
+				pr_info("%s: found cfg_info for %s\n", __func__, config_item_name(item));
+				return cfg_info;
+			}
 		}
 	}
+
+	return NULL;
 }
 
-void cscfg_dump_subsys(struct cscfg_manager *cscfg_mgr)
+struct cscfg_info *cscfg_search_config(struct cscfg_manager *cscfg_mgr,
+				       unsigned long hash)
 {
 	struct configfs_subsystem *subsys = &cscfg_mgr->cfgfs_subsys;
+	struct cscfg_info *cfg_info;
 
 	mutex_lock(&subsys->su_mutex);
 	printk("%s\n", config_item_name(&subsys->su_group.cg_item));
-	cscfg_dump_group(&subsys->su_group);
+	cfg_info = cscfg_search_group(&subsys->su_group, hash);
 	mutex_unlock(&subsys->su_mutex);
+
+	return cfg_info;
 }
+
+struct cscfg_info *cscfg_get_reg_list(struct cscfg_info *cfg_info, int type)
+{
+	struct config_group *grp = &cfg_info->group;
+	struct config_item *item;
+
+	list_for_each_entry(item, &grp->cg_children, ci_entry)
+		pr_info("%s: group %s\n", __func__, config_item_name(item));
+
+	return NULL;
+}
+EXPORT_SYMBOL_GPL(cscfg_get_reg_list);
+

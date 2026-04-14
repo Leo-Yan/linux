@@ -324,6 +324,7 @@ static void *etm_setup_aux(struct perf_event *event, void **pages,
 	struct coresight_device *sink = NULL;
 	struct coresight_device *user_sink = NULL, *last_sink = NULL;
 	struct etm_event_data *event_data = NULL;
+	struct cscfg_info *cfg_info = NULL;
 
 	event_data = alloc_event_data(cpu);
 	if (!event_data)
@@ -338,9 +339,10 @@ static void *etm_setup_aux(struct perf_event *event, void **pages,
 	/* check if user wants a coresight configuration selected */
 	cfg_hash = ATTR_CFG_GET_FLD(&event->attr, configid);
 	if (cfg_hash) {
-		if (cscfg_activate_config(cfg_hash))
+		cfg_info = cscfg_get_config(cfg_hash);
+		if (!cfg_info)
 			goto err;
-		event_data->cfg_hash = cfg_hash;
+		//event_data->cfg_hash = cfg_hash;
 	}
 
 	mask = &event_data->mask;
@@ -427,6 +429,7 @@ static void *etm_setup_aux(struct perf_event *event, void **pages,
 			continue;
 		}
 
+		path->cfg = cfg_info;
 		coresight_trace_id_perf_start(&sink->perf_sink_id_map);
 		*etm_event_cpu_path_ptr(event_data, cpu) = path;
 	}

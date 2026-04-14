@@ -124,4 +124,6 @@ int cscfg_csdev_enable_active_config(struct coresight_device *csdev,
 void cscfg_csdev_disable_active_config(struct coresight_device *csdev);
 void cscfg_config_sysfs_get_active_cfg(unsigned long *cfg_hash, int *preset);
 
+struct cscfg_info *cscfg_get_config(unsigned long cfg_hash);
+
 #endif /* CORESIGHT_SYSCFG_H */

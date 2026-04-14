@@ -46,6 +46,7 @@
 #include "coresight-etm4x-cfg.h"
 #include "coresight-self-hosted-trace.h"
 #include "coresight-syscfg.h"
+#include "coresight-syscfg-configfs.h"
 #include "coresight-trace-id.h"
 
 static int boot_enable;
@@ -754,8 +755,7 @@ static int etm4_parse_event_config(struct coresight_device *csdev,
 		.ATTR_CFG_FLD_timestamp_CFG = U64_MAX,
 	};
 	struct perf_event_attr *attr = &event->attr;
-	unsigned long cfg_hash;
-	int preset, cc_threshold;
+	int cc_threshold;
 	u8 ts_level;
 
 	/* Clear configuration from previous run */
@@ -845,11 +845,11 @@ static int etm4_parse_event_config(struct coresight_device *csdev,
 	 * Set any selected configuration and preset. A zero configid means no
 	 * configuration active, preset = 0 means no preset selected.
 	 */
-	cfg_hash = ATTR_CFG_GET_FLD(attr, configid);
-	if (cfg_hash) {
-		preset = ATTR_CFG_GET_FLD(attr, preset);
-		ret = cscfg_csdev_enable_active_config(csdev, cfg_hash, preset);
-	}
+	//cfg_hash = ATTR_CFG_GET_FLD(attr, configid);
+	//if (cfg_hash) {
+	//	preset = ATTR_CFG_GET_FLD(attr, preset);
+	//	ret = cscfg_csdev_enable_active_config(csdev, cfg_hash, preset);
+	//}
 
 	/* branch broadcast - enable if selected and supported */
 	if (ATTR_CFG_GET_FLD(attr, branch_broadcast)) {
@@ -887,6 +887,8 @@ static int etm4_enable_perf(struct coresight_device *csdev,
 	if (ret)
 		goto out;
 
+	cscfg_get_reg_list(path->cfg, 0);
+
 	drvdata->trcid = path->trace_id;
 
 	/* Populate pause state */
@@ -906,16 +908,17 @@ static int etm4_enable_sysfs(struct coresight_device *csdev, struct coresight_pa
 {
 	struct etmv4_drvdata *drvdata = dev_get_drvdata(csdev->dev.parent);
 	struct etm4_enable_arg arg = { };
-	unsigned long cfg_hash;
-	int ret, preset;
+	int ret;
 
 	/* enable any config activated by configfs */
-	cscfg_config_sysfs_get_active_cfg(&cfg_hash, &preset);
-	if (cfg_hash) {
-		ret = cscfg_csdev_enable_active_config(csdev, cfg_hash, preset);
-		if (ret)
-			return ret;
-	}
+	//cscfg_config_sysfs_get_active_cfg(&cfg_hash, &preset);
+	//if (cfg_hash) {
+	//	ret = cscfg_csdev_enable_active_config(csdev, cfg_hash, preset);
+	//	if (ret)
+	//		return ret;
+	//}
+
+	cscfg_get_reg_list(path->cfg, 0);
 
 	raw_spin_lock(&drvdata->spinlock);
 

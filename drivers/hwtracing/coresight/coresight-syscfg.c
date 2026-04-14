@@ -1001,6 +1001,19 @@ void cscfg_config_sysfs_get_active_cfg(unsigned long *cfg_hash, int *preset)
 }
 EXPORT_SYMBOL_GPL(cscfg_config_sysfs_get_active_cfg);
 
+struct cscfg_info *cscfg_get_config(unsigned long cfg_hash)
+{
+	struct cscfg_info *cfg_info;
+
+	mutex_lock(&cscfg_mutex);
+	cfg_info = cscfg_search_config(cscfg_mgr, cfg_hash);
+	mutex_unlock(&cscfg_mutex);
+
+	return cfg_info;
+}
+EXPORT_SYMBOL_GPL(cscfg_get_config);
+
+
 /**
  * cscfg_activate_config -  Mark a configuration descriptor as active.
  *
@@ -1018,8 +1031,6 @@ EXPORT_SYMBOL_GPL(cscfg_config_sysfs_get_active_cfg);
 int cscfg_activate_config(unsigned long cfg_hash)
 {
 	int err = 0;
-
-	cscfg_dump_subsys(cscfg_mgr);
 
 	mutex_lock(&cscfg_mutex);
 	err = _cscfg_activate_config(cfg_hash);
