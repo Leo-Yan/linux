@@ -449,6 +449,7 @@ void cscfg_configfs_del_feature(struct cscfg_feature_desc *feat_desc)
 }
 
 struct cscfg_info {
+	int hash;
 	struct config_group group;
 	struct config_group features_group;
 	struct config_group configs_group;
@@ -525,6 +526,14 @@ static struct configfs_item_operations cscfg_root_item_ops = {
 	.release	= cscfg_config_attr_release,
 };
 
+static ssize_t cscfg_root_hash_show(struct config_item *item, char *page)
+{
+	struct cscfg_info *cfg_info = container_of(to_config_group(item),
+						   struct cscfg_info, group);
+
+	return sysfs_emit(page, "%x\n", cfg_info->hash);
+}
+
 static ssize_t cscfg_root_bind_show(struct config_item *item, char *page)
 {
 	struct config_item *ci;
@@ -573,6 +582,7 @@ static ssize_t cscfg_root_bind_store(struct config_item *item, const char *page,
 
 	cfg->desc = desc;
 
+	cfg->nr_regs = desc->nr_regs;
 	cfg->regs = kzalloc(sizeof(*desc->regs_desc) * desc->nr_regs, GFP_KERNEL);
 	memcpy(cfg->regs, desc->regs_desc, sizeof(*desc->regs_desc) * desc->nr_regs);
 
@@ -596,10 +606,12 @@ static ssize_t cscfg_root_unbind_store(struct config_item *item, const char *pag
 
 CONFIGFS_ATTR(cscfg_root_, bind);
 CONFIGFS_ATTR(cscfg_root_, unbind);
+CONFIGFS_ATTR_RO(cscfg_root_, hash);
 
 static struct configfs_attribute *cscfg_root_attrs[] = {
 	&cscfg_root_attr_bind,
 	&cscfg_root_attr_unbind,
+	&cscfg_root_attr_hash,
 	NULL,
 };
 
@@ -618,7 +630,8 @@ static struct config_group *cscfg_make(struct config_group *group,
 	if (!cfg_info)
 		return ERR_PTR(-ENOMEM);
 
-	printk("%s: cscfg_info=%px\n", __func__, cfg_info);
+	cfg_info->hash = hashlen_hash(hashlen_string(NULL, name));
+	printk("%s: cscfg_info=%px hash=%x\n", __func__, cfg_info, cfg_info->hash);
 
 	config_group_init_type_name(&cfg_info->group, name, &cscfg_root_type);
 
@@ -682,4 +695,38 @@ int cscfg_configfs_init(struct cscfg_manager *cscfg_mgr)
 void cscfg_configfs_release(struct cscfg_manager *cscfg_mgr)
 {
 	configfs_unregister_subsystem(&cscfg_mgr->cfgfs_subsys);
+}
+
+static void cscfg_dump_group(struct config_group *grp)
+{
+	struct config_item *item;
+
+	list_for_each_entry(item, &grp->cg_children, ci_entry) {
+		pr_info("%s: group %s\n", __func__, config_item_name(item));
+
+		/*
+		 * If this item is actually a group, recurse into it.
+		 *
+		 * In configfs, groups are also config_items. A common way
+		 * to identify "group-ness" is by the type used for that item.
+		 * If you know which items in your subsystem are groups,
+		 * you can check that and cast.
+		 */
+		if (!strcmp("configurations", config_item_name(item)) ||
+		    (item->ci_type && item->ci_type->ct_group_ops)) {
+			struct config_group *child_grp = to_config_group(item);
+
+			cscfg_dump_group(child_grp);
+		}
+	}
+}
+
+void cscfg_dump_subsys(struct cscfg_manager *cscfg_mgr)
+{
+	struct configfs_subsystem *subsys = &cscfg_mgr->cfgfs_subsys;
+
+	mutex_lock(&subsys->su_mutex);
+	printk("%s\n", config_item_name(&subsys->su_group.cg_item));
+	cscfg_dump_group(&subsys->su_group);
+	mutex_unlock(&subsys->su_mutex);
 }

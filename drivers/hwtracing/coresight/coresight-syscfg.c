@@ -1019,6 +1019,8 @@ int cscfg_activate_config(unsigned long cfg_hash)
 {
 	int err = 0;
 
+	cscfg_dump_subsys(cscfg_mgr);
+
 	mutex_lock(&cscfg_mutex);
 	err = _cscfg_activate_config(cfg_hash);
 	mutex_unlock(&cscfg_mutex);

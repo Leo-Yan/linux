@@ -124,7 +124,6 @@ static ssize_t __struct##_##__id##_store(struct config_item *item, 	\
                 const char *page, size_t len) 				\
 { 									\
 	struct cscfg_dynamic_cfg *cfg = to_dynamic_cfg(item);		\
-	struct cscfg_feature_desc *feat_desc = cfg->desc;		\
 	struct cscfg_regval_desc *reg_desc = NULL;			\
 	uint32_t val;							\
 	int ret, i;							\
@@ -133,9 +132,9 @@ static ssize_t __struct##_##__id##_store(struct config_item *item, 	\
     	if (ret)							\
         	return ret;						\
 									\
-	for (i = 0; i < feat_desc->nr_regs; i++) {			\
-		if (feat_desc->regs_desc[i].offset == __val) {		\
-			reg_desc = &feat_desc->regs_desc[i];		\
+	for (i = 0; i < cfg->nr_regs; i++) {				\
+		if (cfg->regs[i].offset == __val) {			\
+			reg_desc = &cfg->regs[i];			\
 			break;						\
 		}							\
 	}								\
@@ -153,13 +152,12 @@ static ssize_t __struct##_##__id##_show(struct config_item *item,	\
 					char *page) 			\
 {									\
 	struct cscfg_dynamic_cfg *cfg = to_dynamic_cfg(item);		\
-	struct cscfg_feature_desc *feat_desc = cfg->desc;		\
 	struct cscfg_regval_desc *reg_desc = NULL;			\
 	int i;								\
 									\
-	for (i = 0; i < feat_desc->nr_regs; i++) {			\
-		if (feat_desc->regs_desc[i].offset == __val) {		\
-			reg_desc = &feat_desc->regs_desc[i];		\
+	for (i = 0; i < cfg->nr_regs; i++) {			\
+		if (cfg->regs[i].offset == __val) {			\
+			reg_desc = &cfg->regs[i];			\
 			break;						\
 		}							\
 	}								\
@@ -179,38 +177,30 @@ static ssize_t __struct##_##__id##_show(struct config_item *item,	\
         CS_STRINGS_R(struct_name, _id, _val) \
         CONFIGFS_ATTR_RO(struct_name##_, _id)
 
-CS_STRINGS_RO(strobing, TRCRSCTLR2, TRCRSCTLRn(2));
-CS_STRINGS_RO(strobing, TRCRSCTLR3, TRCRSCTLRn(3));
-CS_STRINGS_RW(strobing, TRCCNTVR0, TRCCNTVRn(0));
-CS_STRINGS_RO(strobing, TRCCNTRLDVR0, TRCCNTRLDVRn(0));
-CS_STRINGS_RO(strobing, TRCCNTCTLR0, TRCCNTCTLRn(0));
-CS_STRINGS_RW(strobing, TRCCNTVR1, TRCCNTVRn(1));
-CS_STRINGS_RO(strobing, TRCCNTRLDVR1, TRCCNTRLDVRn(1));
-CS_STRINGS_RO(strobing, TRCCNTCTLR1, TRCCNTCTLRn(1));
-CS_STRINGS_RO(strobing, TRCSEQEVR0, TRCSEQEVRn(0));
-CS_STRINGS_RO(strobing, TRCSEQEVR1, TRCSEQEVRn(1));
-
-CS_STRINGS_R(strobing, TRCVICTLR, TRCVICTLR)
-
-static struct configfs_attribute strobing_attr_TRCVICTLR = {
-	.ca_name	= "TRCVICTLR",
-	.ca_mode	= S_IRUGO,
-	.ca_owner	= THIS_MODULE,
-	.show		= strobing_TRCVICTLR_show,
-};
+CS_STRINGS_RO(strobing, trcrsctlr2, TRCRSCTLRn(2));
+CS_STRINGS_RO(strobing, trcrsctlr3, TRCRSCTLRn(3));
+CS_STRINGS_RW(strobing, trccntvr0, TRCCNTVRn(0));
+CS_STRINGS_RO(strobing, trccntrldvr0, TRCCNTRLDVRn(0));
+CS_STRINGS_RO(strobing, trccntctlr0, TRCCNTCTLRn(0));
+CS_STRINGS_RW(strobing, trccntvr1, TRCCNTVRn(1));
+CS_STRINGS_RO(strobing, trccntrldvr1, TRCCNTRLDVRn(1));
+CS_STRINGS_RO(strobing, trccntctlr1, TRCCNTCTLRn(1));
+CS_STRINGS_RO(strobing, trcseqevr0, TRCSEQEVRn(0));
+CS_STRINGS_RO(strobing, trcseqevr1, TRCSEQEVRn(1));
+CS_STRINGS_RO(strobing, trcvictlr, TRCVICTLR);
 
 static struct configfs_attribute *strobing_attrs[] = {
-	&strobing_attr_TRCRSCTLR2,
-	&strobing_attr_TRCRSCTLR3,
-	&strobing_attr_TRCCNTVR0,
-	&strobing_attr_TRCCNTRLDVR0,
-	&strobing_attr_TRCCNTCTLR0,
-	&strobing_attr_TRCCNTVR1,
-	&strobing_attr_TRCCNTRLDVR1,
-	&strobing_attr_TRCCNTCTLR1,
-	&strobing_attr_TRCSEQEVR0,
-	&strobing_attr_TRCSEQEVR1,
-	&strobing_attr_TRCVICTLR,
+	&strobing_attr_trcrsctlr2,
+	&strobing_attr_trcrsctlr3,
+	&strobing_attr_trccntvr0,
+	&strobing_attr_trccntrldvr0,
+	&strobing_attr_trccntctlr0,
+	&strobing_attr_trccntvr1,
+	&strobing_attr_trccntrldvr1,
+	&strobing_attr_trccntctlr1,
+	&strobing_attr_trcseqevr0,
+	&strobing_attr_trcseqevr1,
+	&strobing_attr_trcvictlr,
 	NULL,
 };
 
