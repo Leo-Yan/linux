@@ -52,6 +52,6 @@ void cscfg_configfs_del_config(struct cscfg_config_desc *config_desc);
 void cscfg_configfs_del_feature(struct cscfg_feature_desc *feat_desc);
 struct cscfg_info *cscfg_search_config(struct cscfg_manager *cscfg_mgr,
 				       unsigned long hash);
-struct cscfg_info *cscfg_get_reg_list(struct cscfg_info *cfg_info, int type);
+struct cscfg_reg *cscfg_get_reg_list(struct cscfg_info *cfg_info, int type);
 
 #endif /* CORESIGHT_SYSCFG_CONFIGFS_H */

@@ -132,9 +132,9 @@ static ssize_t __struct##_##__id##_store(struct config_item *item, 	\
     	if (ret)							\
         	return ret;						\
 									\
-	for (i = 0; i < cfg->nr_regs; i++) {				\
-		if (cfg->regs[i].offset == __val) {			\
-			reg_desc = &cfg->regs[i];			\
+	for (i = 0; i < cfg->reg.nr_regs; i++) {			\
+		if (cfg->reg.regs[i].offset == __val) {			\
+			reg_desc = &cfg->reg.regs[i];			\
 			break;						\
 		}							\
 	}								\
@@ -155,9 +155,9 @@ static ssize_t __struct##_##__id##_show(struct config_item *item,	\
 	struct cscfg_regval_desc *reg_desc = NULL;			\
 	int i;								\
 									\
-	for (i = 0; i < cfg->nr_regs; i++) {			\
-		if (cfg->regs[i].offset == __val) {			\
-			reg_desc = &cfg->regs[i];			\
+	for (i = 0; i < cfg->reg.nr_regs; i++) {			\
+		if (cfg->reg.regs[i].offset == __val) {			\
+			reg_desc = &cfg->reg.regs[i];			\
 			break;						\
 		}							\
 	}								\

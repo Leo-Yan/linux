@@ -574,9 +574,10 @@ static ssize_t cscfg_root_bind_store(struct config_item *item, const char *page,
 
 	cfg->desc = desc;
 
-	cfg->nr_regs = desc->nr_regs;
-	cfg->regs = kzalloc(sizeof(*desc->regs_desc) * desc->nr_regs, GFP_KERNEL);
-	memcpy(cfg->regs, desc->regs_desc, sizeof(*desc->regs_desc) * desc->nr_regs);
+	cfg->reg.nr_regs = desc->nr_regs;
+	cfg->reg.regs = kzalloc(sizeof(*desc->regs_desc) * desc->nr_regs, GFP_KERNEL);
+	memcpy(cfg->reg.regs, desc->regs_desc, sizeof(*desc->regs_desc) * desc->nr_regs);
+	cfg->type = 0x12345678;
 
 	dyn_cfg_type.ct_attrs = desc->attrs;
 
@@ -737,13 +738,23 @@ struct cscfg_info *cscfg_search_config(struct cscfg_manager *cscfg_mgr,
 	return cfg_info;
 }
 
-struct cscfg_info *cscfg_get_reg_list(struct cscfg_info *cfg_info, int type)
+struct cscfg_reg *cscfg_get_reg_list(struct cscfg_info *cfg_info, int type)
 {
 	struct config_group *grp = &cfg_info->group;
 	struct config_item *item;
+	struct cscfg_dynamic_cfg *cfg;
 
-	list_for_each_entry(item, &grp->cg_children, ci_entry)
+	list_for_each_entry(item, &grp->cg_children, ci_entry) {
 		pr_info("%s: group %s\n", __func__, config_item_name(item));
+
+		cfg = container_of(to_config_group(item),
+				   struct cscfg_dynamic_cfg, group);
+
+		if (cfg->type == type) {
+			pr_info("%s: found cfg for type %x\n", __func__, type);
+			return &cfg->reg;
+		}
+	}
 
 	return NULL;
 }

@@ -254,12 +254,16 @@ struct cscfg_csdev_feat_ops {
 			 struct cscfg_feature_csdev *feat_csdev);
 };
 
-struct cscfg_dynamic_cfg {
-	struct cscfg_feature_desc *desc;
+struct cscfg_reg {
 	struct cscfg_regval_desc *regs;
 	int nr_regs;
+};
+
+struct cscfg_dynamic_cfg {
+	struct cscfg_feature_desc *desc;
+	struct cscfg_reg reg;
 	struct config_group group;
-	u32 hash;
+	u32 type;
 };
 
 /* coresight config helper functions*/
