@@ -11,36 +11,31 @@
 #include <linux/coresight.h>
 #include <linux/types.h>
 
-/* CoreSight Configuration Management - component and system wide configuration */
+#define CS_CFG_REG_TYPE_MASK		0x0001	/* reg value bit masked */
+#define CS_CFG_REG_TYPE_64BIT		0x0002	/* reg value 64 bit */
+#define CS_CFG_REG_TYPE_RO		0x0004	/* reg is read only */
+#define CS_CFG_REG_TYPE_RW		0x0008	/* reg is read-write */
 
-/*
- * Register type flags for register value descriptor:
- * describe how the value is interpreted, and handled.
- */
-#define CS_CFG_REG_TYPE_STD		0x80	/* reg is standard reg */
-#define CS_CFG_REG_TYPE_RESOURCE	0x40	/* reg is a resource */
-#define CS_CFG_REG_TYPE_VAL_PARAM	0x08	/* reg value uses param */
-#define CS_CFG_REG_TYPE_VAL_MASK	0x04	/* reg value bit masked */
-#define CS_CFG_REG_TYPE_VAL_64BIT	0x02	/* reg value 64 bit */
-#define CS_CFG_REG_TYPE_VAL_SAVE	0x01	/* reg value save on disable */
+#define CS_CFG_REG(_name, _offset, _type, _v32, _mask)		\
+	{							\
+		.name	= (_name),				\
+		.offset	= (_offset),				\
+		.type	= (_type),				\
+		.val32	= (_v32),				\
+		.mask	= (_mask),				\
+	}
 
-/*
- * flags defining what device class a feature will match to when processing a
- * system configuration - used by config data and devices.
- */
-#define CS_CFG_MATCH_CLASS_SRC_ALL	0x0001	/* match any source */
-#define CS_CFG_MATCH_CLASS_SRC_ETM4	0x0002	/* match any ETMv4 device */
+#define CS_CFG_REG_RO(_name, _offset, _v32)			\
+	CS_CFG_REG(_name, _offset, CS_CFG_REG_TYPE_RO, _v32, 0)
 
-/* flags defining device instance matching - used in config match desc data. */
-#define CS_CFG_MATCH_INST_ANY		0x80000000 /* any instance of a class */
+#define CS_CFG_REG_RW(_name, _offset, _v32)			\
+	CS_CFG_REG(_name, _offset, CS_CFG_REG_TYPE_RW, _v32, 0)
 
-/*
- * Limit number of presets in a configuration
- * This is related to the number of bits (4) we use to select the preset on
- * the perf command line. Preset 0 is always none selected.
- * See PMU_FORMAT_ATTR(preset, "config:0-3") in coresight-etm-perf.c
- */
-#define CS_CFG_CONFIG_PRESET_MAX 15
+#define CS_CFG_REG_RO_MASK(_name, _offset, _v32, _mask) 	\
+	CS_CFG_REG(_name, _offset,				\
+		   (CS_CFG_REG_TYPE_RO | CS_CFG_REG_TYPE_MASK), _v32, _mask)
+
+#define CS_CFG_CLASS_SRC_ETM4		0x0001	/* match any ETMv4 device */
 
 /**
  * Parameter descriptor for a device feature.
@@ -70,19 +65,15 @@ struct cscfg_parameter_desc {
  * @mask32:	32 bit mask when using 32 bit value to access device register - if mask type.
  * @param_idx:	parameter index value into parameter array if param type.
  */
-struct cscfg_regval_desc {
-	struct {
-		u32 type:8;
-		u32 offset:12;
-		u32 hw_info:12;
-	};
+struct cscfg_reg_desc {
+	u32 type;
+	u32 offset;
 	union {
-		u64 val64;
+		u64 val;
 		struct {
 			u32 val32;
-			u32 mask32;
+			u32 mask;
 		};
-		u32 param_idx;
 	};
 	const char *name;
 };
@@ -106,11 +97,10 @@ struct cscfg_feature_desc {
 	const char *name;
 	const char *description;
 	struct list_head item;
-	u32 match_flags;
-	int nr_params;
 	struct cscfg_parameter_desc *params_desc;
+	u32 flags;
 	int nr_regs;
-	struct cscfg_regval_desc *regs_desc;
+	struct cscfg_reg_desc *regs_desc;
 	void *load_owner;
 	struct config_group *fs_group;
 	struct configfs_attribute **attrs;
@@ -129,8 +119,7 @@ struct cscfg_feature_desc {
  * @name:		name of the configuration - used for selection.
  * @description:	description of the purpose of the configuration.
  * @item:		list entry.
- * @nr_feat_refs:	Number of features used in this configuration.
- * @feat_ref_names:	references to features used in this configuration.
+ * @feat_name:		references to features used in this configuration.
  * @nr_presets:		Number of sets of presets supplied by this configuration.
  * @nr_total_params:	Sum of all parameters declared by used features
  * @presets:		Array of preset values.
@@ -144,8 +133,7 @@ struct cscfg_config_desc {
 	const char *name;
 	const char *description;
 	struct list_head item;
-	int nr_feat_refs;
-	const char **feat_ref_names;
+	const char *feat_name;
 	int nr_presets;
 	int nr_total_params;
 	const u64 *presets; /* nr_presets * nr_total_params */
@@ -264,6 +252,11 @@ struct cscfg_dynamic_cfg {
 	struct cscfg_reg reg;
 	struct config_group group;
 	u32 type;
+
+	/* For legacy reason */
+	struct cscfg_config_desc *config_desc;
+	bool active;
+	int preset;
 };
 
 /* coresight config helper functions*/

@@ -63,25 +63,20 @@ static ssize_t cscfg_cfg_values_show(struct config_item *item, char *page)
 	if (!config_desc->nr_presets)
 		return 0;
 
-	preset_idx = fs_preset->preset_num - 1;
+	preset_idx = fs_preset->preset_num;
 
 	/* start index on the correct array line */
 	val_idx = config_desc->nr_total_params * preset_idx;
 
-	/*
-	 * A set of presets is the sum of all params in used features,
-	 * in order of declaration of features and params in the features
-	 */
-	for (i = 0; i < config_desc->nr_feat_refs; i++) {
-		feat_desc = cscfg_get_named_feat_desc(config_desc->feat_ref_names[i]);
-		for (j = 0; j < feat_desc->nr_params; j++) {
-			used += scnprintf(page + used, PAGE_SIZE - used,
-					  "%s.%s = 0x%llx ",
-					  feat_desc->name,
-					  feat_desc->params_desc[j].name,
-					  config_desc->presets[val_idx++]);
-		}
+	feat_desc = cscfg_get_named_feat_desc(config_desc->feat_ref_names[i]);
+	for (j = 0; j < feat_desc->nr_params; j++) {
+		used += scnprintf(page + used, PAGE_SIZE - used,
+				  "%s.%s = 0x%llx ",
+				  feat_desc->name,
+				  feat_desc->params_desc[j].name,
+				  config_desc->presets[val_idx++]);
 	}
+
 	used += scnprintf(page + used, PAGE_SIZE - used, "\n");
 
 	return used;
@@ -175,17 +170,17 @@ static const struct config_item_type cscfg_config_preset_type = {
 	.ct_attrs = cscfg_config_preset_attrs,
 };
 
-static int cscfg_add_preset_groups(struct cscfg_fs_config *cfg_view)
+static int cscfg_add_preset_groups(struct cscfg_dynamic_cfg *cfg,
+				   struct cscfg_config_desc *config_desc)
 {
 	int preset_num;
 	struct cscfg_fs_preset *cfg_fs_preset;
-	struct cscfg_config_desc *config_desc = cfg_view->config_desc;
 	char name[CONFIGFS_ITEM_NAME_LEN];
 
 	if (!config_desc->nr_presets)
 		return 0;
 
-	for (preset_num = 1; preset_num <= config_desc->nr_presets; preset_num++) {
+	for (preset_num = 1; preset_num < config_desc->nr_presets; preset_num++) {
 		cfg_fs_preset = devm_kzalloc(cscfg_device(),
 					     sizeof(struct cscfg_fs_preset), GFP_KERNEL);
 
@@ -194,36 +189,41 @@ static int cscfg_add_preset_groups(struct cscfg_fs_config *cfg_view)
 
 		snprintf(name, CONFIGFS_ITEM_NAME_LEN, "preset%d", preset_num);
 		cfg_fs_preset->preset_num = preset_num;
-		cfg_fs_preset->config_desc = cfg_view->config_desc;
+		cfg_fs_preset->config_desc = config_desc;
 		config_group_init_type_name(&cfg_fs_preset->group, name,
 					    &cscfg_config_preset_type);
-		configfs_add_default_group(&cfg_fs_preset->group, &cfg_view->group);
+		configfs_add_default_group(&cfg_fs_preset->group, &cfg->group);
 	}
 	return 0;
 }
 
 static struct config_group *cscfg_create_config_group(struct cscfg_config_desc *config_desc)
 {
-	struct cscfg_fs_config *cfg_view;
+	struct cscfg_dynamic_cfg *cfg;
 	struct device *dev = cscfg_device();
 	int err;
 
 	if (!dev)
 		return ERR_PTR(-EINVAL);
 
-	cfg_view = devm_kzalloc(dev, sizeof(struct cscfg_fs_config), GFP_KERNEL);
-	if (!cfg_view)
+	cfg = kzalloc(sizeof(*cfg), GFP_KERNEL);
+	if (!cfg)
 		return ERR_PTR(-ENOMEM);
 
-	cfg_view->config_desc = config_desc;
-	config_group_init_type_name(&cfg_view->group, config_desc->name, &cscfg_config_view_type);
+	cfg->desc = desc;
+
+	cfg->reg.nr_regs = desc->nr_regs;
+	cfg->reg.regs = kzalloc(sizeof(*desc->regs_desc) * desc->nr_regs, GFP_KERNEL);
+	memcpy(cfg->reg.regs, desc->regs_desc, sizeof(*desc->regs_desc) * desc->nr_regs);
+
+	config_group_init_type_name(&cfg->group, config_desc->name, &cscfg_config_view_type);
 
 	/* add in a preset<n> dir for each preset */
-	err = cscfg_add_preset_groups(cfg_view);
+	err = cscfg_add_preset_groups(cfg, config_desc);
 	if (err)
 		return ERR_PTR(err);
 
-	return &cfg_view->group;
+	return &cfg->group;
 }
 
 /* attributes for features view */

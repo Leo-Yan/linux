@@ -33,8 +33,6 @@ enum cscfg_load_ops {
  * perf events, configfs etc.
  *
  * @dev:		The device.
- * @csdev_desc_list:	List of coresight devices registered with the configuration manager.
- * @feat_desc_list:	List of feature descriptors to load into registered devices.
  * @config_desc_list:	List of system configuration descriptors to load into registered devices.
  * @load_order_list:    Ordered list of owners for dynamically loaded configurations.
  * @sys_active_cnt:	Total number of active config descriptor references.
@@ -45,8 +43,6 @@ enum cscfg_load_ops {
  */
 struct cscfg_manager {
 	struct device dev;
-	struct list_head csdev_desc_list;
-	struct list_head feat_desc_list;
 	struct list_head config_desc_list;
 	struct list_head load_order_list;
 	atomic_t sys_active_cnt;

@@ -10,10 +10,6 @@
 #if IS_ENABLED(CONFIG_CORESIGHT_SOURCE_ETM4X)
 #include "coresight-etm4x-cfg.h"
 
-/* preload configurations and features */
-
-/* preload in features for ETMv4 */
-
 /* panic_stop feature */
 static struct cscfg_parameter_desc gen_etrig_params[] = {
 	{
@@ -55,17 +51,11 @@ struct cscfg_feature_desc gen_etrig_etm4x = {
 	.name = "gen_etrig",
 	.description = "Generate external trigger on address match\n"
 		       "parameter \'address\': address of kernel address\n",
-	.match_flags = CS_CFG_MATCH_CLASS_SRC_ETM4,
-	.nr_params = ARRAY_SIZE(gen_etrig_params),
+	.flags = CS_CFG_CLASS_SRC_ETM4,
 	.params_desc = gen_etrig_params,
 	.nr_regs = ARRAY_SIZE(gen_etrig_regs),
 	.regs_desc = gen_etrig_regs,
 };
-
-/* create a panic stop configuration */
-
-/* the total number of parameters in used features */
-#define PSTOP_NR_PARAMS	ARRAY_SIZE(gen_etrig_params)
 
 static const char *pstop_ref_names[] = {
 	"gen_etrig",
@@ -74,9 +64,8 @@ static const char *pstop_ref_names[] = {
 struct cscfg_config_desc pstop_etm4x = {
 	.name = "panicstop",
 	.description = "Stop ETM on kernel panic\n",
-	.nr_feat_refs = ARRAY_SIZE(pstop_ref_names),
-	.feat_ref_names = pstop_ref_names,
-	.nr_total_params = PSTOP_NR_PARAMS,
+	.feat_name = "strobing",
+	.nr_total_params = 1,
 };
 
 /* end of ETM4x configurations */

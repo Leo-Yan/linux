@@ -245,60 +245,16 @@ static int cscfg_check_feat_for_cfg(struct cscfg_config_desc *config_desc)
 }
 
 /*
- * load feature - add to feature list.
- */
-static int cscfg_load_feat(struct cscfg_feature_desc *feat_desc)
-{
-	int err;
-	struct cscfg_feature_desc *feat_desc_exist;
-
-	/* new feature must have unique name */
-	list_for_each_entry(feat_desc_exist, &cscfg_mgr->feat_desc_list, item) {
-		if (!strcmp(feat_desc_exist->name, feat_desc->name))
-			return -EEXIST;
-	}
-
-	/* add feature to any matching registered devices */
-	err = cscfg_add_feat_to_csdevs(feat_desc);
-	if (err)
-		return err;
-
-	list_add(&feat_desc->item, &cscfg_mgr->feat_desc_list);
-	return 0;
-}
-
-/*
  * load config into the system - validate used features exist then add to
  * config list.
  */
 static int cscfg_load_config(struct cscfg_config_desc *config_desc)
 {
-	int err;
-	struct cscfg_config_desc *config_desc_exist;
-
-	/* new configuration must have a unique name */
-	list_for_each_entry(config_desc_exist, &cscfg_mgr->config_desc_list, item) {
-		if (!strcmp(config_desc_exist->name, config_desc->name))
-			return -EEXIST;
-	}
-
-	/* validate features are present */
-	err = cscfg_check_feat_for_cfg(config_desc);
-	if (err)
-		return err;
-
-	/* add config to any matching registered device */
-	err = cscfg_add_cfg_to_csdevs(config_desc);
-	if (err)
-		return err;
-
 	/* add config to perf fs to allow selection */
 	err = etm_perf_add_symlink_cscfg(cscfg_device(), config_desc);
 	if (err)
 		return err;
 
-	list_add(&config_desc->item, &cscfg_mgr->config_desc_list);
-	atomic_set(&config_desc->active_cnt, 0);
 	return 0;
 }
 
@@ -488,19 +444,6 @@ static int cscfg_load_owned_cfgs_feats(struct cscfg_config_desc **config_descs,
 
 	lockdep_assert_held(&cscfg_mutex);
 
-	/* load features first */
-	if (feat_descs) {
-		for (i = 0; feat_descs[i]; i++) {
-			err = cscfg_load_feat(feat_descs[i]);
-			if (err) {
-				pr_err("coresight-syscfg: Failed to load feature %s\n",
-				       feat_descs[i]->name);
-				return err;
-			}
-			feat_descs[i]->load_owner = owner_info;
-		}
-	}
-
 	/* next any configurations to check feature dependencies */
 	if (config_descs) {
 		for (i = 0; config_descs[i]; i++) {
@@ -517,42 +460,85 @@ static int cscfg_load_owned_cfgs_feats(struct cscfg_config_desc **config_descs,
 	return 0;
 }
 
-/* set configurations as available to activate at the end of the load process */
-static void cscfg_set_configs_available(struct cscfg_config_desc **config_descs)
+static int cscfg_register_feats(struct cscfg_feature_desc **feat_descs)
 {
-	int i;
+	struct cscfg_feature_desc *desc;
+	int i, j, err;
 
-	lockdep_assert_held(&cscfg_mutex);
+	if (!feat_descs)
+		return -EINVAL;
 
-	if (config_descs) {
-		for (i = 0; config_descs[i]; i++)
-			config_descs[i]->available = true;
+	for (i = 0; desc = feat_descs[i]; i++) {
+		err = cscfg_configfs_add_feature(desc);
+		if (err)
+			goto failed;
 	}
+
+	return 0;
+
+failed:
+	for (j = 0; j < i; j++)
+		cscfg_configfs_del_feature(feat_descs[j]);
+
+	return err;
 }
 
-/*
- * Create and register each of the configurations and features with configfs.
- * Called without mutex being held.
- */
+static int cscfg_unregister_feats(struct cscfg_feature_desc **feat_descs)
+{
+	struct cscfg_feature_desc *desc;
+	int i;
+
+	for (i = 0; desc = feat_descs[i]; i++)
+		cscfg_configfs_del_feature(desc);
+}
+
+static int cscfg_register_configs(struct cscfg_config_desc **config_descs)
+{
+	struct cscfg_config_desc *desc;
+	int i, j, err;
+
+	if (!config_descs)
+		return -EINVAL;
+
+	for (i = 0; desc = config_descs[i]; i++) {
+		err = cscfg_configfs_add_config(desc);
+		if (err)
+			goto failed;
+	}
+
+	return 0;
+
+failed:
+	for (j = 0; j < i; j++)
+		cscfg_configfs_del_config(config_descs[j]);
+
+	return err;
+}
+
+static int cscfg_unregister_configs(struct cscfg_feature_desc **config_descs)
+{
+	struct cscfg_config_desc *desc;
+	int i;
+
+	for (i = 0; desc = config_descs[i]; i++)
+		cscfg_configfs_del_config(desc);
+}
+
 static int cscfg_fs_register_cfgs_feats(struct cscfg_config_desc **config_descs,
 					struct cscfg_feature_desc **feat_descs)
 {
 	int i, err;
 
-	if (feat_descs) {
-		for (i = 0; feat_descs[i]; i++) {
-			err = cscfg_configfs_add_feature(feat_descs[i]);
-			if (err)
-				return err;
-		}
+	err = cscfg_register_feats(feat_descs);
+	if (err)
+		return err;
+
+	err = cscfg_register_configs(config_descs);
+	if (err) {
+		cscfg_unregister_feats(feat_descs);
+		return err;
 	}
-	if (config_descs) {
-		for (i = 0; config_descs[i]; i++) {
-			err = cscfg_configfs_add_config(config_descs[i]);
-			if (err)
-				return err;
-		}
-	}
+
 	return 0;
 }
 
@@ -572,70 +558,17 @@ static int cscfg_fs_register_cfgs_feats(struct cscfg_config_desc **config_descs,
  *
  * @config_descs: 0 terminated array of configuration descriptors.
  * @feat_descs:   0 terminated array of feature descriptors.
- * @owner_info:	  Information on the owner of this set.
  */
 int cscfg_load_config_sets(struct cscfg_config_desc **config_descs,
-			   struct cscfg_feature_desc **feat_descs,
-			   struct cscfg_load_owner_info *owner_info)
+			   struct cscfg_feature_desc **feat_descs)
 {
 	int err = 0;
 
-	mutex_lock(&cscfg_mutex);
-	if (cscfg_mgr->load_state != CSCFG_NONE) {
-		mutex_unlock(&cscfg_mutex);
-		return -EBUSY;
-	}
-	cscfg_mgr->load_state = CSCFG_LOAD;
-
-	/* first load and add to the lists */
-	err = cscfg_load_owned_cfgs_feats(config_descs, feat_descs, owner_info);
-	if (err)
-		goto err_clean_load;
-
-	/* add the load owner to the load order list */
-	list_add_tail(&owner_info->item, &cscfg_mgr->load_order_list);
-	if (!list_is_singular(&cscfg_mgr->load_order_list)) {
-		/* lock previous item in load order list */
-		err = cscfg_owner_get(list_prev_entry(owner_info, item));
-		if (err)
-			goto err_clean_owner_list;
-	}
-
-	/*
-	 * make visible to configfs - configfs manipulation must occur outside
-	 * the list mutex lock to avoid circular lockdep issues with configfs
-	 * built in mutexes and semaphores. This is safe as it is not possible
-	 * to start a new load/unload operation till the current one is done.
-	 */
-	mutex_unlock(&cscfg_mutex);
+	guard(mutex)(&cscfg_mutex);
 
 	/* create the configfs elements */
 	err = cscfg_fs_register_cfgs_feats(config_descs, feat_descs);
-	mutex_lock(&cscfg_mutex);
 
-	if (err)
-		goto err_clean_cfs;
-
-	/* mark any new configs as available for activation */
-	cscfg_set_configs_available(config_descs);
-	goto exit_unlock;
-
-err_clean_cfs:
-	/* cleanup after error registering with configfs */
-	cscfg_fs_unregister_cfgs_feats(owner_info);
-
-	if (!list_is_singular(&cscfg_mgr->load_order_list))
-		cscfg_owner_put(list_prev_entry(owner_info, item));
-
-err_clean_owner_list:
-	list_del(&owner_info->item);
-
-err_clean_load:
-	cscfg_unload_owned_cfgs_feats(owner_info);
-
-exit_unlock:
-	cscfg_mgr->load_state = CSCFG_NONE;
-	mutex_unlock(&cscfg_mutex);
 	return err;
 }
 EXPORT_SYMBOL_GPL(cscfg_load_config_sets);
