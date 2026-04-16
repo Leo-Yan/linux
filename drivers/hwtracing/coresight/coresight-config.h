@@ -25,11 +25,23 @@
 		.mask	= (_mask),				\
 	}
 
+#define CS_CFG_REG64(_name, _offset, _type, _v64)		\
+	{							\
+		.name	= (_name),				\
+		.offset	= (_offset),				\
+		.type	= (_type),				\
+		.val	= (_v64),				\
+	}
+
 #define CS_CFG_REG_RO(_name, _offset, _v32)			\
 	CS_CFG_REG(_name, _offset, CS_CFG_REG_TYPE_RO, _v32, 0)
 
 #define CS_CFG_REG_RW(_name, _offset, _v32)			\
 	CS_CFG_REG(_name, _offset, CS_CFG_REG_TYPE_RW, _v32, 0)
+
+#define CS_CFG_REG64_RW(_name, _offset, _v64)			\
+	CS_CFG_REG64(_name, _offset,				\
+		     (CS_CFG_REG_TYPE_RW | CS_CFG_REG_TYPE_64BIT), _v64)
 
 #define CS_CFG_REG_RO_MASK(_name, _offset, _v32, _mask) 	\
 	CS_CFG_REG(_name, _offset,				\
@@ -99,6 +111,7 @@ struct cscfg_feature_desc {
 	struct list_head item;
 	struct cscfg_parameter_desc *params_desc;
 	u32 flags;
+	int nr_params;
 	int nr_regs;
 	struct cscfg_reg_desc *regs_desc;
 	void *load_owner;
@@ -136,6 +149,7 @@ struct cscfg_config_desc {
 	const char *feat_name;
 	int nr_presets;
 	int nr_total_params;
+	const char **param_names;
 	const u64 *presets; /* nr_presets * nr_total_params */
 	struct dev_ext_attribute *event_ea;
 	atomic_t active_cnt;
@@ -154,7 +168,7 @@ struct cscfg_config_desc {
  *			in hardware.
  */
 struct cscfg_regval_csdev {
-	struct cscfg_regval_desc reg_desc;
+	struct cscfg_reg_desc reg_desc;
 	void *driver_regval;
 };
 
@@ -243,7 +257,7 @@ struct cscfg_csdev_feat_ops {
 };
 
 struct cscfg_reg {
-	struct cscfg_regval_desc *regs;
+	struct cscfg_reg_desc *regs;
 	int nr_regs;
 };
 
@@ -251,11 +265,11 @@ struct cscfg_dynamic_cfg {
 	struct cscfg_feature_desc *desc;
 	struct cscfg_reg reg;
 	struct config_group group;
+	int refcnt;
 	u32 type;
 
 	/* For legacy reason */
 	struct cscfg_config_desc *config_desc;
-	bool active;
 	int preset;
 };
 
@@ -267,5 +281,69 @@ void cscfg_csdev_disable_config(struct cscfg_config_csdev *config_csdev);
 
 /* reset a feature to default values */
 void cscfg_reset_feat(struct cscfg_feature_csdev *feat_csdev);
+
+static inline struct cscfg_dynamic_cfg *to_dynamic_cfg(struct config_item *item)
+{
+	return container_of(to_config_group(item), struct cscfg_dynamic_cfg,
+			    group);
+}
+
+#define CS_STRINGS_W(__struct, __id, __val) 				\
+static ssize_t __struct##_##__id##_store(struct config_item *item, 	\
+                const char *page, size_t len) 				\
+{ 									\
+	struct cscfg_dynamic_cfg *cfg = to_dynamic_cfg(item);		\
+	struct cscfg_reg_desc *reg_desc = NULL;			\
+	uint32_t val;							\
+	int ret, i;							\
+									\
+	ret = kstrtou32(page, 0, &val);					\
+    	if (ret)							\
+        	return ret;						\
+									\
+	for (i = 0; i < cfg->reg.nr_regs; i++) {			\
+		if (cfg->reg.regs[i].offset == __val) {			\
+			reg_desc = &cfg->reg.regs[i];			\
+			break;						\
+		}							\
+	}								\
+									\
+	if (!reg_desc)							\
+		return -ENOENT;						\
+									\
+	reg_desc->val32 = val;						\
+									\
+        return len; 							\
+}
+
+#define CS_STRINGS_R(__struct, __id, __val) 				\
+static ssize_t __struct##_##__id##_show(struct config_item *item,	\
+					char *page) 			\
+{									\
+	struct cscfg_dynamic_cfg *cfg = to_dynamic_cfg(item);		\
+	struct cscfg_reg_desc *reg_desc = NULL;			\
+	int i;								\
+									\
+	for (i = 0; i < cfg->reg.nr_regs; i++) {			\
+		if (cfg->reg.regs[i].offset == __val) {			\
+			reg_desc = &cfg->reg.regs[i];			\
+			break;						\
+		}							\
+	}								\
+									\
+	if (!reg_desc)							\
+		return -ENOENT;						\
+									\
+        return sprintf(page, "%x\n", reg_desc->val32); 			\
+}
+
+#define CS_STRINGS_RW(struct_name, _id, _val) \
+        CS_STRINGS_R(struct_name, _id, _val) \
+        CS_STRINGS_W(struct_name, _id, _val) \
+        CONFIGFS_ATTR(struct_name##_, _id)
+
+#define CS_STRINGS_RO(struct_name, _id, _val) \
+        CS_STRINGS_R(struct_name, _id, _val) \
+        CONFIGFS_ATTR_RO(struct_name##_, _id)
 
 #endif /* _CORESIGHT_CORESIGHT_CONFIG_H */

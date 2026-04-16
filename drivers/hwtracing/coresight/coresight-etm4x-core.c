@@ -1082,15 +1082,11 @@ static int etm4_disable_perf(struct coresight_device *csdev,
 	u32 control;
 	struct etm_filters *filters = event->hw.addr_filters;
 	struct etmv4_drvdata *drvdata = dev_get_drvdata(csdev->dev.parent);
-	struct perf_event_attr *attr = &event->attr;
 
 	if (WARN_ON_ONCE(drvdata->cpu != smp_processor_id()))
 		return -EINVAL;
 
 	etm4_disable_hw(drvdata);
-	/* If configid is non-zero then we will have enabled a config. */
-	if (ATTR_CFG_GET_FLD(attr, configid))
-		cscfg_csdev_disable_active_config(csdev);
 
 	/*
 	 * Check if the start/stop logic was active when the unit was stopped.
@@ -1133,8 +1129,6 @@ static void etm4_disable_sysfs(struct coresight_device *csdev)
 				 drvdata, 1);
 
 	raw_spin_unlock(&drvdata->spinlock);
-
-	cscfg_csdev_disable_active_config(csdev);
 
 	cpus_read_unlock();
 
@@ -2273,13 +2267,6 @@ static int etm4_add_coresight_dev(struct etm4_init_arg *init_arg)
 		return ret;
 	}
 
-	/* register with config infrastructure & load any current features */
-	ret = etm4_cscfg_register(drvdata->csdev);
-	if (ret) {
-		coresight_unregister(drvdata->csdev);
-		return ret;
-	}
-
 	etmdrvdata[drvdata->cpu] = drvdata;
 
 	dev_info(&drvdata->csdev->dev, "CPU%d: %s v%d.%d initialized\n",
@@ -2480,7 +2467,6 @@ static void etm4_remove_dev(struct etmv4_drvdata *drvdata)
 
 	if (!had_delayed_probe) {
 		etm_perf_symlink(drvdata->csdev, false);
-		cscfg_unregister_csdev(drvdata->csdev);
 		coresight_unregister(drvdata->csdev);
 	}
 }

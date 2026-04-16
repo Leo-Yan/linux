@@ -18,33 +18,24 @@ static struct cscfg_parameter_desc gen_etrig_params[] = {
 	},
 };
 
-static struct cscfg_regval_desc gen_etrig_regs[] = {
-	/* resource selector */
-	{
-		.type = CS_CFG_REG_TYPE_RESOURCE,
-		.offset = TRCRSCTLRn(2),
-		.hw_info = ETM4_CFG_RES_SEL,
-		.val32 = 0x40001,
-	},
-	/* single address comparator */
-	{
-		.type = CS_CFG_REG_TYPE_RESOURCE | CS_CFG_REG_TYPE_VAL_64BIT |
-			CS_CFG_REG_TYPE_VAL_PARAM,
-		.offset =  TRCACVRn(0),
-		.val32 = 0x0,
-	},
-	{
-		.type = CS_CFG_REG_TYPE_RESOURCE,
-		.offset = TRCACATRn(0),
-		.val64 = 0xf00,
-	},
-	/* Driver external output[0] with comparator out */
-	{
-		.type = CS_CFG_REG_TYPE_RESOURCE,
-		.offset = TRCEVENTCTL0R,
-		.val32 = 0x2,
-	},
-	/* end of regs */
+static struct cscfg_reg_desc gen_etrig_regs[] = {
+	CS_CFG_REG_RO("TRCRSCTLRn(2)", TRCRSCTLRn(2), 0x40001),
+	CS_CFG_REG64_RW("TRCACVRn(0)", TRCACVRn(0), (u64)panic),
+	CS_CFG_REG_RO("TRCACATRn(0)", TRCACATRn(0), 0xf00),
+	CS_CFG_REG_RO("TRCEVENTCTL0R", TRCEVENTCTL0R, 0x2),
+};
+
+CS_STRINGS_RO(gen_etrig, trcrsctlr2, TRCRSCTLRn(2));
+CS_STRINGS_RW(gen_etrig, trcacvr0, TRCACVRn(0));
+CS_STRINGS_RO(gen_etrig, trcacatr0, TRCACATRn(0));
+CS_STRINGS_RO(gen_etrig, trceventctl0r, TRCEVENTCTL0R);
+
+static struct configfs_attribute *gen_etrig_attrs[] = {
+	&gen_etrig_attr_trcrsctlr2,
+	&gen_etrig_attr_trcacvr0,
+	&gen_etrig_attr_trcacatr0,
+	&gen_etrig_attr_trceventctl0r,
+	NULL,
 };
 
 struct cscfg_feature_desc gen_etrig_etm4x = {
@@ -55,16 +46,15 @@ struct cscfg_feature_desc gen_etrig_etm4x = {
 	.params_desc = gen_etrig_params,
 	.nr_regs = ARRAY_SIZE(gen_etrig_regs),
 	.regs_desc = gen_etrig_regs,
-};
-
-static const char *pstop_ref_names[] = {
-	"gen_etrig",
+	.nr_params = 1,
+	.attrs = gen_etrig_attrs,
+	.nr_attrs = ARRAY_SIZE(gen_etrig_attrs),
 };
 
 struct cscfg_config_desc pstop_etm4x = {
 	.name = "panicstop",
 	.description = "Stop ETM on kernel panic\n",
-	.feat_name = "strobing",
+	.feat_name = "gen_etrig",
 	.nr_total_params = 1,
 };
 

@@ -273,8 +273,6 @@ static ssize_t reset_store(struct device *dev,
 	/* for sysfs - only release trace id when resetting */
 	etm4_release_trace_id(drvdata);
 
-	cscfg_csdev_reset_feats(to_coresight_device(dev));
-
 	return size;
 }
 static DEVICE_ATTR_WO(reset);

@@ -9,6 +9,17 @@
 #include "coresight-config.h"
 #include "coresight-syscfg-configfs.h"
 
+static const struct config_item_type cscfg_features_type = {
+	.ct_owner = THIS_MODULE,
+};
+
+static struct config_group cscfg_features_grp = {
+	.cg_item = {
+		.ci_namebuf = "features",
+		.ci_type = &cscfg_features_type,
+	},
+};
+
 /* create a default ci_type. */
 static struct config_item_type *cscfg_create_ci_type(void)
 {
@@ -26,35 +37,28 @@ static struct config_item_type *cscfg_create_ci_type(void)
 /* attributes for the config view group */
 static ssize_t cscfg_cfg_description_show(struct config_item *item, char *page)
 {
-	struct cscfg_fs_config *fs_config = container_of(to_config_group(item),
-							 struct cscfg_fs_config, group);
+	struct cscfg_dynamic_cfg *cfg = container_of(to_config_group(item),
+						     struct cscfg_dynamic_cfg, group);
 
-	return scnprintf(page, PAGE_SIZE, "%s", fs_config->config_desc->description);
+	return scnprintf(page, PAGE_SIZE, "%s", cfg->config_desc->description);
 }
 CONFIGFS_ATTR_RO(cscfg_cfg_, description);
 
 static ssize_t cscfg_cfg_feature_refs_show(struct config_item *item, char *page)
 {
-	struct cscfg_fs_config *fs_config = container_of(to_config_group(item),
-							 struct cscfg_fs_config, group);
-	const struct cscfg_config_desc *config_desc = fs_config->config_desc;
-	ssize_t ch_used = 0;
-	int i;
+	struct cscfg_dynamic_cfg *cfg = container_of(to_config_group(item),
+						     struct cscfg_dynamic_cfg, group);
 
-	for (i = 0; i < config_desc->nr_feat_refs; i++)
-		ch_used += scnprintf(page + ch_used, PAGE_SIZE - ch_used,
-				     "%s\n", config_desc->feat_ref_names[i]);
-	return ch_used;
+	return scnprintf(page, PAGE_SIZE, "%s\n", cfg->desc->name);
 }
 CONFIGFS_ATTR_RO(cscfg_cfg_, feature_refs);
 
 /* list preset values in order of features and params */
 static ssize_t cscfg_cfg_values_show(struct config_item *item, char *page)
 {
-	const struct cscfg_feature_desc *feat_desc;
 	const struct cscfg_config_desc *config_desc;
 	struct cscfg_fs_preset *fs_preset;
-	int i, j, val_idx, preset_idx;
+	int i, val_idx, preset_idx;
 	ssize_t used = 0;
 
 	fs_preset = container_of(to_config_group(item), struct cscfg_fs_preset, group);
@@ -68,82 +72,81 @@ static ssize_t cscfg_cfg_values_show(struct config_item *item, char *page)
 	/* start index on the correct array line */
 	val_idx = config_desc->nr_total_params * preset_idx;
 
-	feat_desc = cscfg_get_named_feat_desc(config_desc->feat_ref_names[i]);
-	for (j = 0; j < feat_desc->nr_params; j++) {
+	for (i = 0; i < config_desc->nr_total_params; i++) {
 		used += scnprintf(page + used, PAGE_SIZE - used,
 				  "%s.%s = 0x%llx ",
-				  feat_desc->name,
-				  feat_desc->params_desc[j].name,
+				  config_desc->feat_name,
+				  config_desc->param_names[i],
 				  config_desc->presets[val_idx++]);
 	}
 
 	used += scnprintf(page + used, PAGE_SIZE - used, "\n");
-
 	return used;
 }
 CONFIGFS_ATTR_RO(cscfg_cfg_, values);
 
 static ssize_t cscfg_cfg_enable_show(struct config_item *item, char *page)
 {
-	struct cscfg_fs_config *fs_config = container_of(to_config_group(item),
-							 struct cscfg_fs_config, group);
+	struct cscfg_dynamic_cfg *cfg = container_of(to_config_group(item),
+						     struct cscfg_dynamic_cfg, group);
 
-	return scnprintf(page, PAGE_SIZE, "%d\n", fs_config->active);
+	return scnprintf(page, PAGE_SIZE, "%d\n", !!cfg->refcnt);
 }
 
 static ssize_t cscfg_cfg_enable_store(struct config_item *item,
 					const char *page, size_t count)
 {
-	struct cscfg_fs_config *fs_config = container_of(to_config_group(item),
-							 struct cscfg_fs_config, group);
-	int err;
+	struct cscfg_dynamic_cfg *cfg = container_of(to_config_group(item),
+						     struct cscfg_dynamic_cfg, group);
 	bool val;
+	int ret;
 
-	err = kstrtobool(page, &val);
-	if (!err)
-		err = cscfg_config_sysfs_activate(fs_config->config_desc, val);
-	if (!err) {
-		fs_config->active = val;
-		if (val)
-			cscfg_config_sysfs_set_preset(fs_config->preset);
-	}
-	return err ? err : count;
+	ret = kstrtobool(page, &val);
+	if (ret < 0)
+		return ret;
+
+	/* TODO: add locking */
+	if (val)
+		cfg->refcnt++;
+	else
+		cfg->refcnt--;
+
+	return 0;
 }
 CONFIGFS_ATTR(cscfg_cfg_, enable);
 
 static ssize_t cscfg_cfg_preset_show(struct config_item *item, char *page)
 {
-	struct cscfg_fs_config *fs_config = container_of(to_config_group(item),
-							 struct cscfg_fs_config, group);
+	struct cscfg_dynamic_cfg *cfg = container_of(to_config_group(item),
+						     struct cscfg_dynamic_cfg, group);
 
-	return scnprintf(page, PAGE_SIZE, "%d\n", fs_config->preset);
+	return scnprintf(page, PAGE_SIZE, "%d\n", cfg->preset);
 }
 
 static ssize_t cscfg_cfg_preset_store(struct config_item *item,
 					     const char *page, size_t count)
 {
-	struct cscfg_fs_config *fs_config = container_of(to_config_group(item),
-							 struct cscfg_fs_config, group);
-	int preset, err;
+	struct cscfg_dynamic_cfg *cfg = container_of(to_config_group(item),
+						     struct cscfg_dynamic_cfg, group);
+	const struct cscfg_config_desc *config_desc = cfg->config_desc;
+	int preset, ret;
 
-	err = kstrtoint(page, 0, &preset);
-	if (!err) {
-		/*
-		 * presets start at 1, and go up to max (15),
-		 * but the config may provide fewer.
-		 */
-		if ((preset < 1) || (preset > fs_config->config_desc->nr_presets))
-			err = -EINVAL;
-	}
+	ret = kstrtoint(page, 0, &preset);
+	if (ret < 0)
+		return ret;
 
-	if (!err) {
-		/* set new value */
-		fs_config->preset = preset;
-		/* set on system if active */
-		if (fs_config->active)
-			cscfg_config_sysfs_set_preset(fs_config->preset);
-	}
-	return err ? err : count;
+	/*
+	 * presets start at 1, and go up to max (15),
+	 * but the config may provide fewer.
+	 */
+	if ((preset < 1) || (preset > config_desc->nr_presets))
+		return -EINVAL;
+
+	/* set new value */
+	cfg->preset = preset;
+
+	/* TODO: apply preset to cfg's reg list */
+	return 0;
 }
 CONFIGFS_ATTR(cscfg_cfg_, preset);
 
@@ -199,12 +202,27 @@ static int cscfg_add_preset_groups(struct cscfg_dynamic_cfg *cfg,
 
 static struct config_group *cscfg_create_config_group(struct cscfg_config_desc *config_desc)
 {
+	struct cscfg_fs_feature *feat;
+	struct cscfg_feature_desc *desc = NULL;
 	struct cscfg_dynamic_cfg *cfg;
-	struct device *dev = cscfg_device();
+	struct config_item *ci;
 	int err;
 
-	if (!dev)
-		return ERR_PTR(-EINVAL);
+	list_for_each_entry(ci, &cscfg_features_grp.cg_children, ci_entry) {
+		feat = container_of(to_config_group(ci),
+				    struct cscfg_fs_feature, group);
+
+		printk("%s: feat=%s config=%s\n", __func__,
+			feat->feat_desc->name, config_desc->feat_name);
+		if (!strcmp(config_desc->feat_name, feat->feat_desc->name)) {
+		        printk("%s: found feat\n", __func__);
+			desc = feat->feat_desc;
+			break;
+		}
+	}
+
+	if (!desc)
+		return ERR_PTR(-ENOENT);
 
 	cfg = kzalloc(sizeof(*cfg), GFP_KERNEL);
 	if (!cfg)
@@ -241,16 +259,12 @@ static ssize_t cscfg_feat_matches_show(struct config_item *item, char *page)
 {
 	struct cscfg_fs_feature *fs_feat = container_of(to_config_group(item),
 							struct cscfg_fs_feature, group);
-	u32 match_flags = fs_feat->feat_desc->match_flags;
+	u32 flags = fs_feat->feat_desc->flags;
 	int used = 0;
 
-	if (match_flags & CS_CFG_MATCH_CLASS_SRC_ALL)
-		used = scnprintf(page, PAGE_SIZE, "SRC_ALL ");
+	if (flags & CS_CFG_CLASS_SRC_ETM4)
+		used = scnprintf(page, PAGE_SIZE, "SRC_ETMV4\n");
 
-	if (match_flags & CS_CFG_MATCH_CLASS_SRC_ETM4)
-		used += scnprintf(page + used, PAGE_SIZE - used, "SRC_ETMV4 ");
-
-	used += scnprintf(page + used, PAGE_SIZE - used, "\n");
 	return used;
 }
 CONFIGFS_ATTR_RO(cscfg_feat_, matches);
@@ -289,16 +303,16 @@ static ssize_t cscfg_param_value_show(struct config_item *item, char *page)
 static ssize_t cscfg_param_value_store(struct config_item *item,
 				       const char *page, size_t size)
 {
-	struct cscfg_fs_param *param_item = container_of(to_config_group(item),
-							 struct cscfg_fs_param, group);
-	struct cscfg_feature_desc *feat_desc = param_item->feat_desc;
-	int param_idx = param_item->param_idx;
+	//struct cscfg_fs_param *param_item = container_of(to_config_group(item),
+	//						 struct cscfg_fs_param, group);
+	//struct cscfg_feature_desc *feat_desc = param_item->feat_desc;
+	//int param_idx = param_item->param_idx;
 	u64 value;
 	int err;
 
 	err = kstrtoull(page, 0, &value);
-	if (!err)
-		err = cscfg_update_feat_param_val(feat_desc, param_idx, value);
+
+	/* TODO */
 
 	return err ? err : size;
 }
@@ -400,6 +414,7 @@ int cscfg_configfs_add_config(struct cscfg_config_desc *config_desc)
 	new_group = cscfg_create_config_group(config_desc);
 	if (IS_ERR(new_group))
 		return PTR_ERR(new_group);
+
 	err =  configfs_register_group(&cscfg_configs_grp, new_group);
 	if (!err)
 		config_desc->fs_group = new_group;
@@ -413,17 +428,6 @@ void cscfg_configfs_del_config(struct cscfg_config_desc *config_desc)
 		config_desc->fs_group = NULL;
 	}
 }
-
-static const struct config_item_type cscfg_features_type = {
-	.ct_owner = THIS_MODULE,
-};
-
-static struct config_group cscfg_features_grp = {
-	.cg_item = {
-		.ci_namebuf = "features",
-		.ci_type = &cscfg_features_type,
-	},
-};
 
 /* add feature to features group */
 int cscfg_configfs_add_feature(struct cscfg_feature_desc *feat_desc)

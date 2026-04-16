@@ -11,6 +11,17 @@
 #include "coresight-etm4x-cfg.h"
 #include "coresight-cfg-preload.h"
 
+static struct cscfg_parameter_desc strobe_params[] = {
+	{
+		.name = "window",
+		.value = 5000,
+	},
+	{
+		.name = "period",
+		.value = 10000,
+	},
+};
+
 static struct cscfg_reg_desc strobe_regs[] = {
 	CS_CFG_REG_RO("TRCRSCTLRn(2)", TRCRSCTLRn(2), 0x20001),
 	CS_CFG_REG_RO("TRCRSCTLRn(3)", TRCRSCTLRn(3), 0x20002),
@@ -22,72 +33,6 @@ static struct cscfg_reg_desc strobe_regs[] = {
 	CS_CFG_REG_RO("TRCSEQEVRn(1)", TRCSEQEVRn(1), 0x0),
 	CS_CFG_REG_RO_MASK("TRCVICTLR", TRCVICTLR, 0x3, 0x3),
 };
-
-#include <linux/configfs.h>
-
-static inline struct cscfg_dynamic_cfg *to_dynamic_cfg(struct config_item *item)
-{
-	return container_of(to_config_group(item), struct cscfg_dynamic_cfg,
-			    group);
-}
-
-#define CS_STRINGS_W(__struct, __id, __val) 				\
-static ssize_t __struct##_##__id##_store(struct config_item *item, 	\
-                const char *page, size_t len) 				\
-{ 									\
-	struct cscfg_dynamic_cfg *cfg = to_dynamic_cfg(item);		\
-	struct cscfg_regval_desc *reg_desc = NULL;			\
-	uint32_t val;							\
-	int ret, i;							\
-									\
-	ret = kstrtou32(page, 0, &val);					\
-    	if (ret)							\
-        	return ret;						\
-									\
-	for (i = 0; i < cfg->reg.nr_regs; i++) {			\
-		if (cfg->reg.regs[i].offset == __val) {			\
-			reg_desc = &cfg->reg.regs[i];			\
-			break;						\
-		}							\
-	}								\
-									\
-	if (!reg_desc)							\
-		return -ENOENT;						\
-									\
-	reg_desc->val32 = val;						\
-									\
-        return len; 							\
-}
-
-#define CS_STRINGS_R(__struct, __id, __val) 				\
-static ssize_t __struct##_##__id##_show(struct config_item *item,	\
-					char *page) 			\
-{									\
-	struct cscfg_dynamic_cfg *cfg = to_dynamic_cfg(item);		\
-	struct cscfg_regval_desc *reg_desc = NULL;			\
-	int i;								\
-									\
-	for (i = 0; i < cfg->reg.nr_regs; i++) {			\
-		if (cfg->reg.regs[i].offset == __val) {			\
-			reg_desc = &cfg->reg.regs[i];			\
-			break;						\
-		}							\
-	}								\
-									\
-	if (!reg_desc)							\
-		return -ENOENT;						\
-									\
-        return sprintf(page, "%x\n", reg_desc->val32); 			\
-}
-
-#define CS_STRINGS_RW(struct_name, _id, _val) \
-        CS_STRINGS_R(struct_name, _id, _val) \
-        CS_STRINGS_W(struct_name, _id, _val) \
-        CONFIGFS_ATTR(struct_name##_, _id)
-
-#define CS_STRINGS_RO(struct_name, _id, _val) \
-        CS_STRINGS_R(struct_name, _id, _val) \
-        CONFIGFS_ATTR_RO(struct_name##_, _id)
 
 CS_STRINGS_RO(strobing, trcrsctlr2, TRCRSCTLRn(2));
 CS_STRINGS_RO(strobing, trcrsctlr3, TRCRSCTLRn(3));
@@ -122,8 +67,10 @@ struct cscfg_feature_desc strobe_etm4x = {
 		       "parameter \'window\': a number of CPU cycles (W)\n"
 		       "parameter \'period\': trace enabled for W cycles every period x W cycles\n",
 	.flags = CS_CFG_CLASS_SRC_ETM4,
+	.params_desc = strobe_params,
 	.nr_regs = ARRAY_SIZE(strobe_regs),
 	.regs_desc = strobe_regs,
+	.nr_params = 2,
 	.attrs = strobing_attrs,
 	.nr_attrs = ARRAY_SIZE(strobing_attrs),
 };
@@ -153,6 +100,7 @@ struct cscfg_config_desc afdo_etm4x = {
 	.feat_name = "strobing",
 	.nr_presets = ARRAY_SIZE(afdo_presets),
 	.nr_total_params = 2,
+	//.param_names = { "window", "period" },
 	.presets = &afdo_presets[0][0],
 };
 

@@ -225,8 +225,8 @@ static void free_event_data(struct work_struct *work)
 	free_sink_buffer(event_data);
 
 	/* clear any configuration we were using */
-	if (event_data->cfg_hash)
-		cscfg_deactivate_config(event_data->cfg_hash);
+	// if (event_data->cfg_hash)
+	//	cscfg_deactivate_config(event_data->cfg_hash);
 
 	for_each_cpu(cpu, mask) {
 		struct coresight_path **ppath;
@@ -891,6 +891,7 @@ etm_perf_add_symlink_group(struct device *dev, const char *name, const char *gro
 	ea->attr.attr.mode = 0444;
 	ea->var = (unsigned long *)hash;
 
+	printk("%s: pmu_dev=%px\n", __func__, pmu_dev);
 	ret = sysfs_add_file_to_group(&pmu_dev->kobj,
 				      &ea->attr.attr, group_name);
 
@@ -1008,8 +1009,10 @@ int __init etm_perf_init(void)
 	etm_pmu.module			= THIS_MODULE;
 
 	ret = perf_pmu_register(&etm_pmu, CORESIGHT_ETM_PMU_NAME, -1);
-	if (ret == 0)
+	if (ret == 0) {
+		printk("%s: pmu->dev=%px\n", __func__, etm_pmu.dev);
 		etm_perf_up = true;
+	}
 
 	return ret;
 }
