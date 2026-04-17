@@ -105,7 +105,7 @@ struct cscfg_reg_desc {
  * @load_owner:	 handle to load owner for dynamic load and unload of features.
  * @fs_group:	 reference to configfs group for dynamic unload.
  */
-struct cscfg_feature_desc {
+struct cscfg_feat_desc {
 	const char *name;
 	const char *description;
 	struct list_head item;
@@ -209,7 +209,7 @@ struct cscfg_parameter_csdev {
  * @regs_csdev:		Programming details for the registers
  */
 struct cscfg_feature_csdev {
-	const struct cscfg_feature_desc *feat_desc;
+	const struct cscfg_feat_desc *feat_desc;
 	struct coresight_device *csdev;
 	struct list_head node;
 	raw_spinlock_t *drv_spinlock;
@@ -262,7 +262,7 @@ struct cscfg_reg {
 };
 
 struct cscfg_dynamic_cfg {
-	struct cscfg_feature_desc *desc;
+	struct cscfg_feat_desc *desc;
 	struct cscfg_reg reg;
 	struct config_group group;
 	int refcnt;

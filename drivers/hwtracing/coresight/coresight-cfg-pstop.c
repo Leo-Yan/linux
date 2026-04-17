@@ -38,7 +38,7 @@ static struct configfs_attribute *gen_etrig_attrs[] = {
 	NULL,
 };
 
-struct cscfg_feature_desc gen_etrig_etm4x = {
+struct cscfg_feat_desc gen_etrig_etm4x = {
 	.name = "gen_etrig",
 	.description = "Generate external trigger on address match\n"
 		       "parameter \'address\': address of kernel address\n",

@@ -98,15 +98,15 @@ struct cscfg_load_owner_info {
 int __init cscfg_init(void);
 void cscfg_exit(void);
 int cscfg_preload(void *owner_handle);
-const struct cscfg_feature_desc *cscfg_get_named_feat_desc(const char *name);
-int cscfg_update_feat_param_val(struct cscfg_feature_desc *feat_desc,
+const struct cscfg_feat_desc *cscfg_get_named_feat_desc(const char *name);
+int cscfg_update_feat_param_val(struct cscfg_feat_desc *feat_desc,
 				int param_idx, u64 value);
 int cscfg_config_sysfs_activate(struct cscfg_config_desc *cfg_desc, bool activate);
 void cscfg_config_sysfs_set_preset(int preset);
 
 /* syscfg manager external API */
 int cscfg_load_config_sets(struct cscfg_config_desc **cfg_descs,
-			   struct cscfg_feature_desc **feat_descs);
+			   struct cscfg_feat_desc **feat_descs);
 int cscfg_unload_config_sets(struct cscfg_load_owner_info *owner_info);
 int cscfg_register_csdev(struct coresight_device *csdev, u32 match_flags,
 			 struct cscfg_csdev_feat_ops *ops);

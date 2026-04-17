@@ -10,7 +10,7 @@
 
 /* Basic features and configurations pre-loaded on initialisation */
 
-static struct cscfg_feature_desc *preload_feats[] = {
+static struct cscfg_feat_desc *preload_feats[] = {
 #if IS_ENABLED(CONFIG_CORESIGHT_SOURCE_ETM4X)
 	&strobe_etm4x,
 	&gen_etrig_etm4x,

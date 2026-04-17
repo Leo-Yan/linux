@@ -36,11 +36,9 @@ static struct cscfg_reg_desc strobe_regs[] = {
 
 CS_STRINGS_RO(strobing, trcrsctlr2, TRCRSCTLRn(2));
 CS_STRINGS_RO(strobing, trcrsctlr3, TRCRSCTLRn(3));
-CS_STRINGS_RW(strobing, trccntvr0, TRCCNTVRn(0));
-CS_STRINGS_RO(strobing, trccntrldvr0, TRCCNTRLDVRn(0));
+CS_STRINGS_RW(strobing, trccntrldvr0, TRCCNTRLDVRn(0));
 CS_STRINGS_RO(strobing, trccntctlr0, TRCCNTCTLRn(0));
-CS_STRINGS_RW(strobing, trccntvr1, TRCCNTVRn(1));
-CS_STRINGS_RO(strobing, trccntrldvr1, TRCCNTRLDVRn(1));
+CS_STRINGS_RW(strobing, trccntrldvr1, TRCCNTRLDVRn(1));
 CS_STRINGS_RO(strobing, trccntctlr1, TRCCNTCTLRn(1));
 CS_STRINGS_RO(strobing, trcseqevr0, TRCSEQEVRn(0));
 CS_STRINGS_RO(strobing, trcseqevr1, TRCSEQEVRn(1));
@@ -49,10 +47,8 @@ CS_STRINGS_RO(strobing, trcvictlr, TRCVICTLR);
 static struct configfs_attribute *strobing_attrs[] = {
 	&strobing_attr_trcrsctlr2,
 	&strobing_attr_trcrsctlr3,
-	&strobing_attr_trccntvr0,
 	&strobing_attr_trccntrldvr0,
 	&strobing_attr_trccntctlr0,
-	&strobing_attr_trccntvr1,
 	&strobing_attr_trccntrldvr1,
 	&strobing_attr_trccntctlr1,
 	&strobing_attr_trcseqevr0,
@@ -61,7 +57,7 @@ static struct configfs_attribute *strobing_attrs[] = {
 	NULL,
 };
 
-struct cscfg_feature_desc strobe_etm4x = {
+struct cscfg_feat_desc strobe_etm4x = {
 	.name = "strobing",
 	.description = "Generate periodic trace capture windows.\n"
 		       "parameter \'window\': a number of CPU cycles (W)\n"
@@ -92,6 +88,8 @@ static u64 afdo_presets[][2] = {
 	{ 5000,  4096 },
 };
 
+const char *afdo_param_name[] = { "window", "period" };
+
 struct cscfg_config_desc afdo_etm4x = {
 	.name = "autofdo",
 	.description = "Setup ETMs with strobing for autofdo\n"
@@ -100,7 +98,7 @@ struct cscfg_config_desc afdo_etm4x = {
 	.feat_name = "strobing",
 	.nr_presets = ARRAY_SIZE(afdo_presets),
 	.nr_total_params = 2,
-	//.param_names = { "window", "period" },
+	.param_names = afdo_param_name,
 	.presets = &afdo_presets[0][0],
 };
 

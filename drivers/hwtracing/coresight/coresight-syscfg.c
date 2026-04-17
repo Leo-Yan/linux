@@ -46,9 +46,9 @@ static int cscfg_load_config(struct cscfg_config_desc *config_desc)
 }
 #endif
 
-static int cscfg_register_feats(struct cscfg_feature_desc **feat_descs)
+static int cscfg_register_feats(struct cscfg_feat_desc **feat_descs)
 {
-	struct cscfg_feature_desc *desc;
+	struct cscfg_feat_desc *desc;
 	int i, j, err;
 
 	if (!feat_descs)
@@ -69,9 +69,9 @@ failed:
 	return err;
 }
 
-static void cscfg_unregister_feats(struct cscfg_feature_desc **feat_descs)
+static void cscfg_unregister_feats(struct cscfg_feat_desc **feat_descs)
 {
-	struct cscfg_feature_desc *desc;
+	struct cscfg_feat_desc *desc;
 	int i;
 
 	for (i = 0; (desc = feat_descs[i]) != NULL; i++)
@@ -114,7 +114,7 @@ static int cscfg_unregister_configs(struct cscfg_config_desc **config_descs)
 #endif
 
 static int cscfg_fs_register_cfgs_feats(struct cscfg_config_desc **config_descs,
-					struct cscfg_feature_desc **feat_descs)
+					struct cscfg_feat_desc **feat_descs)
 {
 	int err;
 
@@ -149,7 +149,7 @@ static int cscfg_fs_register_cfgs_feats(struct cscfg_config_desc **config_descs,
  * @feat_descs:   0 terminated array of feature descriptors.
  */
 int cscfg_load_config_sets(struct cscfg_config_desc **config_descs,
-			   struct cscfg_feature_desc **feat_descs)
+			   struct cscfg_feat_desc **feat_descs)
 {
 	int err = 0;
 

@@ -9,30 +9,151 @@
 #include "coresight-config.h"
 #include "coresight-syscfg-configfs.h"
 
-static const struct config_item_type cscfg_features_type = {
+#define attr_item_to_feat(item)	\
+	container_of(to_config_group(item), struct cscfg_feat, group)
+
+#define attr_item_to_feat_param(item)	\
+	container_of(to_config_group(item), struct cscfg_feat_param, group)
+
+static const struct config_item_type cscfg_feats_type = {
 	.ct_owner = THIS_MODULE,
 };
 
-static struct config_group cscfg_features_grp = {
+static struct config_group cscfg_feats_grp = {
 	.cg_item = {
 		.ci_namebuf = "features",
-		.ci_type = &cscfg_features_type,
+		.ci_type = &cscfg_feats_type,
 	},
 };
 
-/* create a default ci_type. */
-static struct config_item_type *cscfg_create_ci_type(void)
+static ssize_t cscfg_feat_description_show(struct config_item *item, char *page)
 {
-	struct config_item_type *ci_type;
+	struct cscfg_feat *feat = attr_item_to_feat(item);
+	struct cscfg_feat_desc *desc = feat->feat_desc;
 
-	ci_type = devm_kzalloc(cscfg_device(), sizeof(*ci_type), GFP_KERNEL);
-	if (ci_type)
-		ci_type->ct_owner = THIS_MODULE;
+	return scnprintf(page, PAGE_SIZE, "%s", desc->description);
+}
+CONFIGFS_ATTR_RO(cscfg_feat_, description);
 
-	return ci_type;
+static ssize_t cscfg_feat_matches_show(struct config_item *item, char *page)
+{
+	struct cscfg_feat *feat = attr_item_to_feat(item);
+	struct cscfg_feat_desc *desc = feat->feat_desc;
+
+	if (!(desc->flags & CS_CFG_CLASS_SRC_ETM4))
+		return 0;
+
+	return scnprintf(page, PAGE_SIZE, "SRC_ETMV4\n");
+}
+CONFIGFS_ATTR_RO(cscfg_feat_, matches);
+
+static ssize_t cscfg_feat_nr_params_show(struct config_item *item, char *page)
+{
+	struct cscfg_feat *feat = attr_item_to_feat(item);
+	struct cscfg_feat_desc *desc = feat->feat_desc;
+
+	return scnprintf(page, PAGE_SIZE, "%d\n", desc->nr_params);
+}
+CONFIGFS_ATTR_RO(cscfg_feat_, nr_params);
+
+static struct configfs_attribute *cscfg_feat_attrs[] = {
+	&cscfg_feat_attr_description,
+	&cscfg_feat_attr_matches,
+	&cscfg_feat_attr_nr_params,
+	NULL,
+};
+
+static const struct config_item_type cscfg_feat_type = {
+	.ct_owner = THIS_MODULE,
+	.ct_attrs = cscfg_feat_attrs,
+};
+
+static ssize_t cscfg_feat_param_value_show(struct config_item *item, char *page)
+{
+	struct cscfg_feat_param *param = attr_item_to_feat_param(item);
+	struct cscfg_feat *feat = attr_item_to_feat(item->ci_parent->ci_parent);
+	struct cscfg_feat_desc *desc = feat->feat_desc;
+
+	return scnprintf(page, PAGE_SIZE, "0x%llx\n",
+			 desc->params_desc[param->idx].value);
+}
+CONFIGFS_ATTR_RO(cscfg_feat_param_, value);
+
+static struct configfs_attribute *cscfg_feat_param_attrs[] = {
+	&cscfg_feat_param_attr_value,
+	NULL,
+};
+
+static const struct config_item_type cscfg_feat_param_type = {
+	.ct_owner = THIS_MODULE,
+	.ct_attrs = cscfg_feat_param_attrs,
+};
+
+static void cscfg_release_feat_param_group(struct config_group *params_group)
+{
+	struct cscfg_feat_param *param;
+	struct config_item *ci, *n;
+
+	list_for_each_entry_safe(ci, n, &cscfg_feats_grp.cg_children, ci_entry) {
+		param = attr_item_to_feat_param(ci);
+		list_del(&ci->ci_entry);
+		kfree(param);
+	}
 }
 
-/* configurations sub-group */
+static int cscfg_create_param_group_items(struct config_group *params_group,
+					  struct cscfg_feat_desc *feat_desc)
+{
+	struct cscfg_feat_param *param;
+	int i;
+
+	for (i = 0; i < feat_desc->nr_params; i++) {
+		param = kzalloc(sizeof(*param), GFP_KERNEL);
+		if (!param)
+			goto failed;
+
+		param->idx = i;
+		config_group_init_type_name(&param->group,
+					    feat_desc->params_desc[i].name,
+					    &cscfg_feat_param_type);
+		configfs_add_default_group(&param->group, params_group);
+	}
+	return 0;
+
+failed:
+	cscfg_release_feat_param_group(params_group);
+	return -ENOMEM;
+}
+
+static const struct config_item_type cscfg_params_group_type = {
+	.ct_owner = THIS_MODULE,
+};
+
+static struct config_group *
+cscfg_create_feature_group(struct cscfg_feat_desc *feat_desc)
+{
+	struct cscfg_feat *feat;
+	int ret;
+
+	feat = kzalloc(sizeof(*feat), GFP_KERNEL);
+	if (!feat)
+		return ERR_PTR(-ENOMEM);
+
+	feat->feat_desc = feat_desc;
+	config_group_init_type_name(&feat->group, feat_desc->name,
+				    &cscfg_feat_type);
+
+	config_group_init_type_name(&feat->params_group, "params",
+				    &cscfg_params_group_type);
+	configfs_add_default_group(&feat->params_group, &feat->group);
+	ret = cscfg_create_param_group_items(&feat->params_group, feat_desc);
+	if (ret) {
+		kfree(feat);
+		return ERR_PTR(ret);
+	}
+
+	return &feat->group;
+}
 
 /* attributes for the config view group */
 static ssize_t cscfg_cfg_description_show(struct config_item *item, char *page)
@@ -202,15 +323,14 @@ static int cscfg_add_preset_groups(struct cscfg_dynamic_cfg *cfg,
 
 static struct config_group *cscfg_create_config_group(struct cscfg_config_desc *config_desc)
 {
-	struct cscfg_fs_feature *feat;
-	struct cscfg_feature_desc *desc = NULL;
+	struct cscfg_feat *feat;
+	struct cscfg_feat_desc *desc = NULL;
 	struct cscfg_dynamic_cfg *cfg;
 	struct config_item *ci;
 	int err;
 
-	list_for_each_entry(ci, &cscfg_features_grp.cg_children, ci_entry) {
-		feat = container_of(to_config_group(ci),
-				    struct cscfg_fs_feature, group);
+	list_for_each_entry(ci, &cscfg_feats_grp.cg_children, ci_entry) {
+		feat = attr_item_to_feat(ci);
 
 		printk("%s: feat=%s config=%s\n", __func__,
 			feat->feat_desc->name, config_desc->feat_name);
@@ -244,155 +364,6 @@ static struct config_group *cscfg_create_config_group(struct cscfg_config_desc *
 	return &cfg->group;
 }
 
-/* attributes for features view */
-
-static ssize_t cscfg_feat_description_show(struct config_item *item, char *page)
-{
-	struct cscfg_fs_feature *fs_feat = container_of(to_config_group(item),
-							struct cscfg_fs_feature, group);
-
-	return scnprintf(page, PAGE_SIZE, "%s", fs_feat->feat_desc->description);
-}
-CONFIGFS_ATTR_RO(cscfg_feat_, description);
-
-static ssize_t cscfg_feat_matches_show(struct config_item *item, char *page)
-{
-	struct cscfg_fs_feature *fs_feat = container_of(to_config_group(item),
-							struct cscfg_fs_feature, group);
-	u32 flags = fs_feat->feat_desc->flags;
-	int used = 0;
-
-	if (flags & CS_CFG_CLASS_SRC_ETM4)
-		used = scnprintf(page, PAGE_SIZE, "SRC_ETMV4\n");
-
-	return used;
-}
-CONFIGFS_ATTR_RO(cscfg_feat_, matches);
-
-static ssize_t cscfg_feat_nr_params_show(struct config_item *item, char *page)
-{
-	struct cscfg_fs_feature *fs_feat = container_of(to_config_group(item),
-							struct cscfg_fs_feature, group);
-
-	return scnprintf(page, PAGE_SIZE, "%d\n", fs_feat->feat_desc->nr_params);
-}
-CONFIGFS_ATTR_RO(cscfg_feat_, nr_params);
-
-/* base feature desc attrib structures */
-static struct configfs_attribute *cscfg_feature_view_attrs[] = {
-	&cscfg_feat_attr_description,
-	&cscfg_feat_attr_matches,
-	&cscfg_feat_attr_nr_params,
-	NULL,
-};
-
-static const struct config_item_type cscfg_feature_view_type = {
-	.ct_owner = THIS_MODULE,
-	.ct_attrs = cscfg_feature_view_attrs,
-};
-
-static ssize_t cscfg_param_value_show(struct config_item *item, char *page)
-{
-	struct cscfg_fs_param *param_item = container_of(to_config_group(item),
-							 struct cscfg_fs_param, group);
-	u64 value = param_item->feat_desc->params_desc[param_item->param_idx].value;
-
-	return scnprintf(page, PAGE_SIZE, "0x%llx\n", value);
-}
-
-static ssize_t cscfg_param_value_store(struct config_item *item,
-				       const char *page, size_t size)
-{
-	//struct cscfg_fs_param *param_item = container_of(to_config_group(item),
-	//						 struct cscfg_fs_param, group);
-	//struct cscfg_feature_desc *feat_desc = param_item->feat_desc;
-	//int param_idx = param_item->param_idx;
-	u64 value;
-	int err;
-
-	err = kstrtoull(page, 0, &value);
-
-	/* TODO */
-
-	return err ? err : size;
-}
-CONFIGFS_ATTR(cscfg_param_, value);
-
-static struct configfs_attribute *cscfg_param_view_attrs[] = {
-	&cscfg_param_attr_value,
-	NULL,
-};
-
-static const struct config_item_type cscfg_param_view_type = {
-	.ct_owner = THIS_MODULE,
-	.ct_attrs = cscfg_param_view_attrs,
-};
-
-/*
- * configfs has far less functionality provided to add attributes dynamically than sysfs,
- * and the show and store fns pass the enclosing config_item so the actual attribute cannot
- * be determined. Therefore we add each item as a group directory, with a value attribute.
- */
-static int cscfg_create_params_group_items(struct cscfg_feature_desc *feat_desc,
-					   struct config_group *params_group)
-{
-	struct device *dev = cscfg_device();
-	struct cscfg_fs_param *param_item;
-	int i;
-
-	/* parameter items - as groups with default_value attribute */
-	for (i = 0; i < feat_desc->nr_params; i++) {
-		param_item = devm_kzalloc(dev, sizeof(struct cscfg_fs_param), GFP_KERNEL);
-		if (!param_item)
-			return -ENOMEM;
-		param_item->feat_desc = feat_desc;
-		param_item->param_idx = i;
-		config_group_init_type_name(&param_item->group,
-					    feat_desc->params_desc[i].name,
-					    &cscfg_param_view_type);
-		configfs_add_default_group(&param_item->group, params_group);
-	}
-	return 0;
-}
-
-static struct config_group *cscfg_create_feature_group(struct cscfg_feature_desc *feat_desc)
-{
-	struct cscfg_fs_feature *feat_view;
-	struct config_item_type *params_group_type;
-	struct config_group *params_group = NULL;
-	struct device *dev = cscfg_device();
-	int item_err;
-
-	if (!dev)
-		return ERR_PTR(-EINVAL);
-
-	feat_view = devm_kzalloc(dev, sizeof(struct cscfg_fs_feature), GFP_KERNEL);
-	if (!feat_view)
-		return ERR_PTR(-ENOMEM);
-
-	if (feat_desc->nr_params) {
-		params_group = devm_kzalloc(dev, sizeof(struct config_group), GFP_KERNEL);
-		if (!params_group)
-			return ERR_PTR(-ENOMEM);
-
-		params_group_type = cscfg_create_ci_type();
-		if (!params_group_type)
-			return ERR_PTR(-ENOMEM);
-	}
-
-	feat_view->feat_desc = feat_desc;
-	config_group_init_type_name(&feat_view->group,
-				    feat_desc->name,
-				    &cscfg_feature_view_type);
-	if (params_group) {
-		config_group_init_type_name(params_group, "params", params_group_type);
-		configfs_add_default_group(params_group, &feat_view->group);
-		item_err = cscfg_create_params_group_items(feat_desc, params_group);
-		if (item_err)
-			return ERR_PTR(item_err);
-	}
-	return &feat_view->group;
-}
 
 static const struct config_item_type cscfg_configs_type = {
 	.ct_owner = THIS_MODULE,
@@ -430,7 +401,7 @@ void cscfg_configfs_del_config(struct cscfg_config_desc *config_desc)
 }
 
 /* add feature to features group */
-int cscfg_configfs_add_feature(struct cscfg_feature_desc *feat_desc)
+int cscfg_configfs_add_feature(struct cscfg_feat_desc *feat_desc)
 {
 	struct config_group *new_group;
 	int err;
@@ -438,13 +409,13 @@ int cscfg_configfs_add_feature(struct cscfg_feature_desc *feat_desc)
 	new_group = cscfg_create_feature_group(feat_desc);
 	if (IS_ERR(new_group))
 		return PTR_ERR(new_group);
-	err =  configfs_register_group(&cscfg_features_grp, new_group);
+	err =  configfs_register_group(&cscfg_feats_grp, new_group);
 	if (!err)
 		feat_desc->fs_group = new_group;
 	return err;
 }
 
-void cscfg_configfs_del_feature(struct cscfg_feature_desc *feat_desc)
+void cscfg_configfs_del_feature(struct cscfg_feat_desc *feat_desc)
 {
 	if (feat_desc->fs_group) {
 		configfs_unregister_group(feat_desc->fs_group);
@@ -534,9 +505,8 @@ static ssize_t cscfg_root_bind_show(struct config_item *item, char *page)
 {
 	struct config_item *ci;
 
-	list_for_each_entry(ci, &cscfg_features_grp.cg_children, ci_entry) {
-		struct cscfg_fs_feature *feat = container_of(to_config_group(ci),
-							     struct cscfg_fs_feature, group);
+	list_for_each_entry(ci, &cscfg_feats_grp.cg_children, ci_entry) {
+		struct cscfg_feat *feat = attr_item_to_feat(ci);
 
 		printk("%s: feat=%s\n", __func__, feat->feat_desc->name);
 	}
@@ -547,8 +517,8 @@ static ssize_t cscfg_root_bind_show(struct config_item *item, char *page)
 static ssize_t cscfg_root_bind_store(struct config_item *item, const char *page,
 				     size_t len)
 {
-	struct cscfg_fs_feature *feat;
-	struct cscfg_feature_desc *desc = NULL;
+	struct cscfg_feat *feat;
+	struct cscfg_feat_desc *desc = NULL;
 	struct cscfg_dynamic_cfg *cfg;
 	struct config_item *ci;
 
@@ -557,9 +527,8 @@ static ssize_t cscfg_root_bind_store(struct config_item *item, const char *page,
 
 	printk("%s: page=%s\n", __func__, page);
 
-	list_for_each_entry(ci, &cscfg_features_grp.cg_children, ci_entry) {
-		feat = container_of(to_config_group(ci),
-				    struct cscfg_fs_feature, group);
+	list_for_each_entry(ci, &cscfg_feats_grp.cg_children, ci_entry) {
+		feat = attr_item_to_feat(ci);
 
 		printk("%s: feat=%s\n", __func__, feat->feat_desc->name);
 		if (sysfs_streq(page, feat->feat_desc->name)) {
@@ -663,14 +632,9 @@ static const struct config_item_type cscfg_type = {
 int cscfg_configfs_init(struct cscfg_manager *cscfg_mgr)
 {
 	struct configfs_subsystem *subsys;
-	struct config_item_type *ci_type;
 
 	if (!cscfg_mgr)
 		return -EINVAL;
-
-	ci_type = cscfg_create_ci_type();
-	if (!ci_type)
-		return -ENOMEM;
 
 	subsys = &cscfg_mgr->cfgfs_subsys;
 	config_item_set_name(&subsys->su_group.cg_item, CSCFG_FS_SUBSYS_NAME);
@@ -683,8 +647,8 @@ int cscfg_configfs_init(struct cscfg_manager *cscfg_mgr)
 	config_group_init(&cscfg_configs_grp);
 	configfs_add_default_group(&cscfg_configs_grp, &subsys->su_group);
 
-	config_group_init(&cscfg_features_grp);
-	configfs_add_default_group(&cscfg_features_grp, &subsys->su_group);
+	config_group_init(&cscfg_feats_grp);
+	configfs_add_default_group(&cscfg_feats_grp, &subsys->su_group);
 
 	return configfs_register_subsystem(subsys);
 }
