@@ -55,7 +55,7 @@ static int cscfg_register_feats(struct cscfg_feat_desc **feat_descs)
 		return -EINVAL;
 
 	for (i = 0; (desc = feat_descs[i]) != NULL; i++) {
-		err = cscfg_configfs_add_feature(desc);
+		err = cscfg_feat_create_group(desc);
 		if (err)
 			goto failed;
 	}
@@ -64,7 +64,7 @@ static int cscfg_register_feats(struct cscfg_feat_desc **feat_descs)
 
 failed:
 	for (j = 0; j < i; j++)
-		cscfg_configfs_del_feature(feat_descs[j]);
+		cscfg_feat_delete_group(feat_descs[j]);
 
 	return err;
 }
@@ -75,7 +75,7 @@ static void cscfg_unregister_feats(struct cscfg_feat_desc **feat_descs)
 	int i;
 
 	for (i = 0; (desc = feat_descs[i]) != NULL; i++)
-		cscfg_configfs_del_feature(desc);
+		cscfg_feat_delete_group(desc);
 }
 
 static int cscfg_register_configs(struct cscfg_config_desc **config_descs)
@@ -87,7 +87,7 @@ static int cscfg_register_configs(struct cscfg_config_desc **config_descs)
 		return -EINVAL;
 
 	for (i = 0; (desc = config_descs[i]) != NULL; i++) {
-		err = cscfg_configfs_add_config(desc);
+		err = cscfg_preload_cfg_create_group(desc);
 		if (err)
 			goto failed;
 	}
@@ -161,28 +161,6 @@ int cscfg_load_config_sets(struct cscfg_config_desc **config_descs,
 	return err;
 }
 EXPORT_SYMBOL_GPL(cscfg_load_config_sets);
-
-/**
- * cscfg_unload_config_sets - unload a set of configurations by owner.
- *
- * Dynamic unload of configuration and feature sets is done on the basis of
- * the load owner of that set. Later loaded configurations can depend on
- * features loaded earlier.
- *
- * Therefore, unload is only possible if:-
- * 1) no configurations are active.
- * 2) the set being unloaded was the last to be loaded to maintain dependencies.
- *
- * Once the unload operation commences, we disallow any configuration being
- * made active until it is complete.
- *
- * @owner_info:	Information on owner for set being unloaded.
- */
-int cscfg_unload_config_sets(struct cscfg_load_owner_info *owner_info)
-{
-	return 0;
-}
-EXPORT_SYMBOL_GPL(cscfg_unload_config_sets);
 
 struct device *cscfg_device(void)
 {

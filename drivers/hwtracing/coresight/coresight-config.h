@@ -11,6 +11,56 @@
 #include <linux/coresight.h>
 #include <linux/types.h>
 
+struct cscfg_feat {
+	struct cscfg_feat_desc *feat_desc;
+	struct config_group group;
+	struct config_group params_group;
+};
+
+struct cscfg_feat_param {
+	int idx;
+	struct config_group group;
+};
+
+struct cscfg_reg {
+	struct cscfg_reg_desc *regs;
+	int nr_regs;
+};
+
+struct cscfg_cfg {
+	struct cscfg_feat_desc *desc;
+	struct cscfg_reg reg;
+	struct config_group group;
+	int refcnt;
+	u32 type;
+
+	/* For preload configuration */
+	struct cscfg_config_desc *config_desc;
+	struct cscfg_cfg_preset *presets;
+	int nr_presets;
+	int current_preset;
+};
+
+struct cscfg_cfg_preset {
+	int idx;
+	struct config_group group;
+};
+
+struct cscfg_info {
+	int hash;
+	struct config_group group;
+};
+
+struct cscfg_manager {
+	struct device dev;
+	struct list_head config_desc_list;
+	struct list_head load_order_list;
+	atomic_t sys_active_cnt;
+	struct configfs_subsystem cfgfs_subsys;
+	u32 sysfs_active_config;
+	int sysfs_active_preset;
+};
+
 #define CS_CFG_REG_TYPE_MASK		0x0001	/* reg value bit masked */
 #define CS_CFG_REG_TYPE_64BIT		0x0002	/* reg value 64 bit */
 #define CS_CFG_REG_TYPE_RO		0x0004	/* reg is read only */
@@ -158,141 +208,16 @@ struct cscfg_config_desc {
 	bool available;
 };
 
-/**
- * config register instance - part of a loaded feature.
- *                            maps register values to csdev driver structures
- *
- * @reg_desc:		value to use when setting feature on device / store for
- *			readback of volatile values.
- * @driver_regval:	pointer to internal driver element used to set the value
- *			in hardware.
- */
-struct cscfg_regval_csdev {
-	struct cscfg_reg_desc reg_desc;
-	void *driver_regval;
-};
-
-/**
- * config parameter instance - part of a loaded feature.
- *
- * @feat_csdev:		parent feature
- * @reg_csdev:		register value updated by this parameter.
- * @current_value:	current value of parameter - may be set by user via
- *			sysfs, or modified during device operation.
- * @val64:		true if 64 bit value
- */
-struct cscfg_parameter_csdev {
-	struct cscfg_feature_csdev *feat_csdev;
-	struct cscfg_regval_csdev *reg_csdev;
-	u64 current_value;
-	bool val64;
-};
-
-/**
- * Feature instance loaded into a CoreSight device.
- *
- * When a feature is loaded into a specific device, then this structure holds
- * the connections between the register / parameter values used and the
- * internal data structures that are written when the feature is enabled.
- *
- * Since applying a feature modifies internal data structures in the device,
- * then we have a reference to the device spinlock to protect access to these
- * structures (@drv_spinlock).
- *
- * @feat_desc:		pointer to the static descriptor for this feature.
- * @csdev:		parent CoreSight device instance.
- * @node:		list entry into feature list for this device.
- * @drv_spinlock:	device spinlock for access to driver register data.
- * @nr_params:		number of parameters.
- * @params_csdev:	current parameter values on this device
- * @nr_regs:		number of registers to be programmed.
- * @regs_csdev:		Programming details for the registers
- */
-struct cscfg_feature_csdev {
-	const struct cscfg_feat_desc *feat_desc;
-	struct coresight_device *csdev;
-	struct list_head node;
-	raw_spinlock_t *drv_spinlock;
-	int nr_params;
-	struct cscfg_parameter_csdev *params_csdev;
-	int nr_regs;
-	struct cscfg_regval_csdev *regs_csdev;
-};
-
-/**
- * Configuration instance when loaded into a CoreSight device.
- *
- * The instance contains references to loaded features on this device that are
- * used by the configuration.
- *
- * @config_desc:reference to the descriptor for this configuration
- * @csdev:	parent coresight device for this configuration instance.
- * @enabled:	true if configuration is enabled on this device.
- * @node:	list entry within the coresight device
- * @nr_feat:	Number of features on this device that are used in the
- *		configuration.
- * @feats_csdev:references to the device features to enable.
- */
-struct cscfg_config_csdev {
-	struct cscfg_config_desc *config_desc;
-	struct coresight_device *csdev;
-	bool enabled;
-	struct list_head node;
-	int nr_feat;
-	struct cscfg_feature_csdev *feats_csdev[];
-};
-
-/**
- * Coresight device operations.
- *
- * Registered coresight devices provide these operations to manage feature
- * instances compatible with the device hardware and drivers
- *
- * @load_feat:	Pass a feature descriptor into the device and create the
- *		loaded feature instance (struct cscfg_feature_csdev).
- */
-struct cscfg_csdev_feat_ops {
-	int (*load_feat)(struct coresight_device *csdev,
-			 struct cscfg_feature_csdev *feat_csdev);
-};
-
-struct cscfg_reg {
-	struct cscfg_reg_desc *regs;
-	int nr_regs;
-};
-
-struct cscfg_dynamic_cfg {
-	struct cscfg_feat_desc *desc;
-	struct cscfg_reg reg;
-	struct config_group group;
-	int refcnt;
-	u32 type;
-
-	/* For legacy reason */
-	struct cscfg_config_desc *config_desc;
-	int preset;
-};
-
-/* coresight config helper functions*/
-
-/* enable / disable config on a device - called with appropriate locks set.*/
-int cscfg_csdev_enable_config(struct cscfg_config_csdev *config_csdev, int preset);
-void cscfg_csdev_disable_config(struct cscfg_config_csdev *config_csdev);
-
-/* reset a feature to default values */
-void cscfg_reset_feat(struct cscfg_feature_csdev *feat_csdev);
-
-static inline struct cscfg_dynamic_cfg *to_dynamic_cfg(struct config_item *item)
+static inline struct cscfg_cfg *to_dynamic_cfg(struct config_item *item)
 {
-	return container_of(to_config_group(item), struct cscfg_dynamic_cfg,
-			    group);
+	return container_of(to_config_group(item), struct cscfg_cfg, group);
 }
 
 #define CS_STRINGS_W(__struct, __id, __val) 				\
 static ssize_t __struct##_##__id##_store(struct config_item *item, 	\
                 const char *page, size_t len) 				\
 { 									\
-	struct cscfg_dynamic_cfg *cfg = to_dynamic_cfg(item);		\
+	struct cscfg_cfg *cfg = to_dynamic_cfg(item);		\
 	struct cscfg_reg_desc *reg_desc = NULL;			\
 	uint32_t val;							\
 	int ret, i;							\
@@ -320,7 +245,7 @@ static ssize_t __struct##_##__id##_store(struct config_item *item, 	\
 static ssize_t __struct##_##__id##_show(struct config_item *item,	\
 					char *page) 			\
 {									\
-	struct cscfg_dynamic_cfg *cfg = to_dynamic_cfg(item);		\
+	struct cscfg_cfg *cfg = to_dynamic_cfg(item);		\
 	struct cscfg_reg_desc *reg_desc = NULL;			\
 	int i;								\
 									\
