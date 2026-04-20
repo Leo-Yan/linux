@@ -21,6 +21,15 @@
 #define attr_item_to_cfg_preset(item) \
 	container_of(to_config_group(item), struct cscfg_cfg_preset, group);
 
+static ssize_t cscfg_root_hash_show(struct config_item *item, char *page)
+{
+	struct cscfg_info *cfg_info = container_of(to_config_group(item),
+						   struct cscfg_info, group);
+
+	return sysfs_emit(page, "%lx\n", cfg_info->hash);
+}
+CONFIGFS_ATTR_RO(cscfg_root_, hash);
+
 static const struct config_item_type cscfg_feats_type = {
 	.ct_owner = THIS_MODULE,
 };
@@ -312,7 +321,7 @@ static int cscfg_preload_cfg_add_preset_groups(struct cscfg_cfg *cfg,
 		presets[i].idx = i;
 		config_group_init_type_name(&presets[i].group, name,
 					    &cscfg_preload_cfg_preset_type);
-		configfs_add_default_group(&presets[i].group, &cfg->group);
+		configfs_add_default_group(&presets[i].group, &cfg->legacy_group);
 	}
 
 	cfg->nr_presets = config_desc->nr_presets;
@@ -320,7 +329,7 @@ static int cscfg_preload_cfg_add_preset_groups(struct cscfg_cfg *cfg,
 	return 0;
 }
 
-static struct config_group *
+static struct cscfg_cfg *
 cscfg_preload_cfg_alloc_group(struct cscfg_config_desc *config_desc)
 {
 	struct cscfg_feat *feat;
@@ -355,7 +364,7 @@ cscfg_preload_cfg_alloc_group(struct cscfg_config_desc *config_desc)
 	cfg->reg.regs = kzalloc(sizeof(*desc->regs_desc) * desc->nr_regs, GFP_KERNEL);
 	memcpy(cfg->reg.regs, desc->regs_desc, sizeof(*desc->regs_desc) * desc->nr_regs);
 
-	config_group_init_type_name(&cfg->group, config_desc->name, &cscfg_preload_cfg_type);
+	config_group_init_type_name(&cfg->legacy_group, config_desc->name, &cscfg_preload_cfg_type);
 
 	/* add in a preset<n> dir for each preset */
 	err = cscfg_preload_cfg_add_preset_groups(cfg, config_desc);
@@ -365,7 +374,7 @@ cscfg_preload_cfg_alloc_group(struct cscfg_config_desc *config_desc)
 		return ERR_PTR(err);
 	}
 
-	return &cfg->group;
+	return cfg;
 }
 
 static const struct config_item_type cscfg_preload_cfg_grp_type = {
@@ -379,18 +388,49 @@ static struct config_group cscfg_preload_cfg_grp = {
 	},
 };
 
-int cscfg_preload_cfg_create_group(struct cscfg_config_desc *config_desc)
+static struct configfs_attribute *cscfg_preload_cfg_xxx_attrs[] = {
+	&cscfg_root_attr_hash,
+	NULL,
+};
+
+static const struct config_item_type cscfg_preload_xxx_type = {
+	.ct_attrs	= cscfg_preload_cfg_xxx_attrs,
+	.ct_owner	= THIS_MODULE,
+};
+
+static struct config_item_type dyn_cfg_xxx_type = {
+	.ct_owner = THIS_MODULE,
+};
+
+int cscfg_preload_cfg_create_group(struct cscfg_manager *cscfg_mgr,
+				   struct cscfg_config_desc *config_desc)
 {
+	struct configfs_subsystem *subsys = &cscfg_mgr->cfgfs_subsys;
 	struct config_group *new_group;
+	struct cscfg_info *cfg_info;
+	struct cscfg_cfg *cfg;
+	char name[CONFIGFS_ITEM_NAME_LEN];
 	int err;
 
-	new_group = cscfg_preload_cfg_alloc_group(config_desc);
-	if (IS_ERR(new_group))
+	cfg_info = kzalloc(sizeof(*cfg_info), GFP_KERNEL);
+	cfg_info->hash = hashlen_hash(hashlen_string(NULL, config_desc->name));
+	//printk("%s: cscfg_info=%px hash=%x\n", __func__, cfg_info, cfg_info->hash);
+
+	snprintf(name, CONFIGFS_ITEM_NAME_LEN, "preload-%s", config_desc->name);
+	config_group_init_type_name(&cfg_info->group, name, &cscfg_preload_xxx_type);
+	configfs_register_group(&subsys->su_group, &cfg_info->group);
+
+	cfg = cscfg_preload_cfg_alloc_group(config_desc);
+	if (IS_ERR(cfg))
 		return PTR_ERR(new_group);
 
-	err =  configfs_register_group(&cscfg_preload_cfg_grp, new_group);
+	config_group_init_type_name(&cfg->group, config_desc->name, &dyn_cfg_xxx_type);
+	configfs_register_group(&cfg_info->group, &cfg->group);
+
+	err = configfs_register_group(&cscfg_preload_cfg_grp, &cfg->legacy_group);
 	if (!err)
 		config_desc->fs_group = new_group;
+
 	return err;
 }
 
@@ -472,14 +512,6 @@ static struct configfs_item_operations cscfg_root_item_ops = {
 	.release	= cscfg_config_attr_release,
 };
 
-static ssize_t cscfg_root_hash_show(struct config_item *item, char *page)
-{
-	struct cscfg_info *cfg_info = container_of(to_config_group(item),
-						   struct cscfg_info, group);
-
-	return sysfs_emit(page, "%x\n", cfg_info->hash);
-}
-
 static ssize_t cscfg_root_bind_show(struct config_item *item, char *page)
 {
 	struct config_item *ci;
@@ -551,7 +583,6 @@ static ssize_t cscfg_root_unbind_store(struct config_item *item, const char *pag
 
 CONFIGFS_ATTR(cscfg_root_, bind);
 CONFIGFS_ATTR(cscfg_root_, unbind);
-CONFIGFS_ATTR_RO(cscfg_root_, hash);
 
 static struct configfs_attribute *cscfg_root_attrs[] = {
 	&cscfg_root_attr_bind,
@@ -576,7 +607,7 @@ static struct config_group *cscfg_make(struct config_group *group,
 		return ERR_PTR(-ENOMEM);
 
 	cfg_info->hash = hashlen_hash(hashlen_string(NULL, name));
-	printk("%s: cscfg_info=%px hash=%x\n", __func__, cfg_info, cfg_info->hash);
+	printk("%s: cscfg_info=%px hash=%lx\n", __func__, cfg_info, cfg_info->hash);
 
 	config_group_init_type_name(&cfg_info->group, name, &cscfg_root_type);
 
@@ -655,11 +686,12 @@ static struct cscfg_info *cscfg_search_group(struct config_group *grp,
 		 * If you know which items in your subsystem are groups,
 		 * you can check that and cast.
 		 */
-		if (item->ci_type && item->ci_type->ct_item_ops) {
+		if (strstr(config_item_name(item), "preload-") ||
+		    (item->ci_type && item->ci_type->ct_item_ops)) {
 			struct cscfg_info *cfg_info = container_of(to_config_group(item),
 						   struct cscfg_info, group);
 
-			pr_info("%s: cfg_info->hash=%x\n", __func__, cfg_info->hash);
+			pr_info("%s: cfg_info->hash=%lx hash=%lx\n", __func__, cfg_info->hash, hash);
 
 			if (cfg_info->hash == hash) {
 				pr_info("%s: found cfg_info for %s\n", __func__, config_item_name(item));

@@ -31,6 +31,7 @@ struct cscfg_cfg {
 	struct cscfg_feat_desc *desc;
 	struct cscfg_reg reg;
 	struct config_group group;
+	struct config_group legacy_group;
 	int refcnt;
 	u32 type;
 
@@ -47,7 +48,7 @@ struct cscfg_cfg_preset {
 };
 
 struct cscfg_info {
-	int hash;
+	unsigned long hash;
 	struct config_group group;
 };
 

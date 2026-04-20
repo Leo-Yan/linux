@@ -87,9 +87,11 @@ static int cscfg_register_configs(struct cscfg_config_desc **config_descs)
 		return -EINVAL;
 
 	for (i = 0; (desc = config_descs[i]) != NULL; i++) {
-		err = cscfg_preload_cfg_create_group(desc);
+		err = cscfg_preload_cfg_create_group(cscfg_mgr, desc);
 		if (err)
 			goto failed;
+
+		etm_perf_add_symlink_cscfg(cscfg_device(), desc);
 	}
 
 	return 0;
