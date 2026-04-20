@@ -9,6 +9,9 @@
 #include "coresight-config.h"
 #include "coresight-syscfg-configfs.h"
 
+#define attr_item_to_info(item) \
+	container_of(to_config_group(item), struct cscfg_info, group)
+
 #define attr_item_to_feat(item) \
 	container_of(to_config_group(item), struct cscfg_feat, group)
 
@@ -21,14 +24,14 @@
 #define attr_item_to_cfg_preset(item) \
 	container_of(to_config_group(item), struct cscfg_cfg_preset, group);
 
-static ssize_t cscfg_root_hash_show(struct config_item *item, char *page)
+static ssize_t cscfg_dyn_cfg_hash_show(struct config_item *item, char *page)
 {
 	struct cscfg_info *cfg_info = container_of(to_config_group(item),
 						   struct cscfg_info, group);
 
 	return sysfs_emit(page, "%lx\n", cfg_info->hash);
 }
-CONFIGFS_ATTR_RO(cscfg_root_, hash);
+CONFIGFS_ATTR_RO(cscfg_dyn_cfg_, hash);
 
 static const struct config_item_type cscfg_feats_type = {
 	.ct_owner = THIS_MODULE,
@@ -388,17 +391,17 @@ static struct config_group cscfg_preload_cfg_grp = {
 	},
 };
 
-static struct configfs_attribute *cscfg_preload_cfg_xxx_attrs[] = {
-	&cscfg_root_attr_hash,
+static struct configfs_attribute *cscfg_preload_dyn_attrs[] = {
+	&cscfg_dyn_cfg_attr_hash,
 	NULL,
 };
 
-static const struct config_item_type cscfg_preload_xxx_type = {
-	.ct_attrs	= cscfg_preload_cfg_xxx_attrs,
+static const struct config_item_type cscfg_preload_dyn_type = {
+	.ct_attrs	= cscfg_preload_dyn_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 
-static struct config_item_type dyn_cfg_xxx_type = {
+static struct config_item_type cscfg_preload_dyn_cfg_type = {
 	.ct_owner = THIS_MODULE,
 };
 
@@ -406,25 +409,40 @@ int cscfg_preload_cfg_create_group(struct cscfg_manager *cscfg_mgr,
 				   struct cscfg_config_desc *config_desc)
 {
 	struct configfs_subsystem *subsys = &cscfg_mgr->cfgfs_subsys;
+	struct cscfg_feat *feat;
+	struct cscfg_feat_desc *desc = NULL;
 	struct config_group *new_group;
 	struct cscfg_info *cfg_info;
 	struct cscfg_cfg *cfg;
+	struct config_item *ci;
 	char name[CONFIGFS_ITEM_NAME_LEN];
 	int err;
+
+	list_for_each_entry(ci, &cscfg_feats_grp.cg_children, ci_entry) {
+		feat = attr_item_to_feat(ci);
+
+		printk("%s: feat=%s\n", __func__, feat->feat_desc->name);
+		if (sysfs_streq(config_desc->feat_name, feat->feat_desc->name)) {
+		        printk("%s: found feat\n", __func__);
+			desc = feat->feat_desc;
+			break;
+		}
+	}
 
 	cfg_info = kzalloc(sizeof(*cfg_info), GFP_KERNEL);
 	cfg_info->hash = hashlen_hash(hashlen_string(NULL, config_desc->name));
 	//printk("%s: cscfg_info=%px hash=%x\n", __func__, cfg_info, cfg_info->hash);
 
 	snprintf(name, CONFIGFS_ITEM_NAME_LEN, "preload-%s", config_desc->name);
-	config_group_init_type_name(&cfg_info->group, name, &cscfg_preload_xxx_type);
+	config_group_init_type_name(&cfg_info->group, name, &cscfg_preload_dyn_type);
 	configfs_register_group(&subsys->su_group, &cfg_info->group);
 
 	cfg = cscfg_preload_cfg_alloc_group(config_desc);
 	if (IS_ERR(cfg))
 		return PTR_ERR(new_group);
 
-	config_group_init_type_name(&cfg->group, config_desc->name, &dyn_cfg_xxx_type);
+	cfg->type = desc->flags;
+	config_group_init_type_name(&cfg->group, desc->name, &cscfg_preload_dyn_cfg_type);
 	configfs_register_group(&cfg_info->group, &cfg->group);
 
 	err = configfs_register_group(&cscfg_preload_cfg_grp, &cfg->legacy_group);
@@ -442,77 +460,22 @@ void cscfg_preload_cfg_delete_group(struct cscfg_config_desc *config_desc)
 	}
 }
 
-static inline struct cscfg_info *to_cscfg_info(struct config_item *item)
-{
-	return container_of(to_config_group(item), struct cscfg_info, group);
-}
-
-static struct config_item_type dyn_cfg_type = {
+static struct config_item_type cscfg_dyn_cfg_bind_type = {
 	.ct_owner = THIS_MODULE,
 };
 
-//static int features_desc_link(struct config_item *feat_desc_ci,
-//			      struct config_item *feat_ci)
-//{
-//	struct cscfg_info *cfg_info = container_of(to_config_group(feat_desc_ci),
-//						   struct cscfg_info, features_group);
-//	struct cscfg_cfg *dyn_cfg;
-//	int ret;
-//
-//	printk("%s: src_feat_ci=%px feat_ci=%px cscfg_info=%px\n",
-//		__func__, feat_desc_ci, feat_ci, cfg_info);
-//
-//	dyn_cfg = kzalloc(sizeof(*dyn_cfg), GFP_KERNEL);
-//	if (!dyn_cfg)
-//		return -ENOMEM;
-//
-//	config_group_init_type_name(&dyn_cfg->group, "test", &dyn_cfg_type);
-//	ret = configfs_register_group(&cfg_info->configs_group, &dyn_cfg->group);
-//	if (ret) {
-//		kfree(dyn_cfg);
-//		return ret;
-//	}
-//
-//	return 0;
-//}
-//
-//static void features_desc_unlink(struct config_item *src_feat_ci,
-//				 struct config_item *feat_ci)
-//{
-//	struct cscfg_info *cfg_info = container_of(to_config_group(feat_ci),
-//						   struct cscfg_info, features_group);
-//
-//	printk("%s: cscfg_info=%px\n", __func__, cfg_info);
-//
-//	return;
-//}
-
-//static struct configfs_item_operations features_desc_ops = {
-//	.allow_link	= features_desc_link,
-//	.drop_link	= features_desc_unlink,
-//};
-//
-//static const struct config_item_type features_desc = {
-//	.ct_item_ops	= &features_desc_ops,
-//	.ct_owner       = THIS_MODULE,
-//};
-
-//static const struct config_item_type configs_type = {
-//	.ct_owner       = THIS_MODULE,
-//};
-
-static void cscfg_config_attr_release(struct config_item *item)
+static void cscfg_dyn_cfg_attr_release(struct config_item *item)
 {
-	struct cscfg_info *cfg_info = to_cscfg_info(item);
+	struct cscfg_info *cfg_info = attr_item_to_info(item);
 
 	kfree(cfg_info);
 }
 
-static struct configfs_item_operations cscfg_root_item_ops = {
-	.release	= cscfg_config_attr_release,
+static struct configfs_item_operations cscfg_dyn_cfg_item_ops = {
+	.release	= cscfg_dyn_cfg_attr_release,
 };
 
-static ssize_t cscfg_root_bind_show(struct config_item *item, char *page)
+static ssize_t cscfg_dyn_cfg_bind_show(struct config_item *item, char *page)
 {
 	struct config_item *ci;
 
@@ -525,7 +488,7 @@ static ssize_t cscfg_root_bind_show(struct config_item *item, char *page)
 	return sysfs_emit(page, "success\n");
 }
 
-static ssize_t cscfg_root_bind_store(struct config_item *item, const char *page,
+static ssize_t cscfg_dyn_cfg_bind_store(struct config_item *item, const char *page,
 				     size_t len)
 {
 	struct cscfg_feat *feat;
@@ -561,44 +524,44 @@ static ssize_t cscfg_root_bind_store(struct config_item *item, const char *page,
 	cfg->reg.nr_regs = desc->nr_regs;
 	cfg->reg.regs = kzalloc(sizeof(*desc->regs_desc) * desc->nr_regs, GFP_KERNEL);
 	memcpy(cfg->reg.regs, desc->regs_desc, sizeof(*desc->regs_desc) * desc->nr_regs);
-	cfg->type = 0x12345678;
+	cfg->type = desc->flags;
 
-	dyn_cfg_type.ct_attrs = desc->attrs;
+	cscfg_dyn_cfg_bind_type.ct_attrs = desc->attrs;
 
-	config_group_init_type_name(&cfg->group, desc->name, &dyn_cfg_type);
+	config_group_init_type_name(&cfg->group, desc->name, &cscfg_dyn_cfg_bind_type);
 	configfs_register_group(to_config_group(item), &cfg->group);
 	return len;
 }
 
-static ssize_t cscfg_root_unbind_show(struct config_item *item, char *page)
+static ssize_t cscfg_dyn_cfg_unbind_show(struct config_item *item, char *page)
 {
 	return 0;
 }
 
-static ssize_t cscfg_root_unbind_store(struct config_item *item, const char *page,
+static ssize_t cscfg_dyn_cfg_unbind_store(struct config_item *item, const char *page,
 				     size_t len)
 {
 	return 0;
 }
 
-CONFIGFS_ATTR(cscfg_root_, bind);
-CONFIGFS_ATTR(cscfg_root_, unbind);
+CONFIGFS_ATTR(cscfg_dyn_cfg_, bind);
+CONFIGFS_ATTR(cscfg_dyn_cfg_, unbind);
 
-static struct configfs_attribute *cscfg_root_attrs[] = {
-	&cscfg_root_attr_bind,
-	&cscfg_root_attr_unbind,
-	&cscfg_root_attr_hash,
+static struct configfs_attribute *cscfg_dyn_cfg_attrs[] = {
+	&cscfg_dyn_cfg_attr_bind,
+	&cscfg_dyn_cfg_attr_unbind,
+	&cscfg_dyn_cfg_attr_hash,
 	NULL,
 };
 
-static const struct config_item_type cscfg_root_type = {
-	.ct_item_ops	= &cscfg_root_item_ops,
-	.ct_attrs	= cscfg_root_attrs,
+static const struct config_item_type cscfg_dyn_cfg_type = {
+	.ct_item_ops	= &cscfg_dyn_cfg_item_ops,
+	.ct_attrs	= cscfg_dyn_cfg_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 
-static struct config_group *cscfg_make(struct config_group *group,
-				       const char *name)
+static struct config_group *cscfg_dyn_make(struct config_group *group,
+					       const char *name)
 {
 	struct cscfg_info *cfg_info;
 
@@ -609,33 +572,22 @@ static struct config_group *cscfg_make(struct config_group *group,
 	cfg_info->hash = hashlen_hash(hashlen_string(NULL, name));
 	printk("%s: cscfg_info=%px hash=%lx\n", __func__, cfg_info, cfg_info->hash);
 
-	config_group_init_type_name(&cfg_info->group, name, &cscfg_root_type);
-
-	//config_group_init_type_name(&cfg_info->features_group, "features",
-	//			    &features_desc);
-	//configfs_add_default_group(&cfg_info->features_group,
-	//			   &cfg_info->group);
-
-	//config_group_init_type_name(&cfg_info->configs_group, "configs",
-	//			      &configs_type);
-	//configfs_add_default_group(&cfg_info->configs_group,
-	//			   &cfg_info->group);
-
+	config_group_init_type_name(&cfg_info->group, name, &cscfg_dyn_cfg_type);
 	return &cfg_info->group;
 }
 
-static void cscfg_drop(struct config_group *group, struct config_item *item)
+static void cscfg_dyn_drop(struct config_group *group, struct config_item *item)
 {
 	config_item_put(item);
 }
 
-static struct configfs_group_operations cscfg_ops = {
-	.make_group     = &cscfg_make,
-	.drop_item      = &cscfg_drop,
+static struct configfs_group_operations cscfg_dyn_ops = {
+	.make_group     = &cscfg_dyn_make,
+	.drop_item      = &cscfg_dyn_drop,
 };
 
-static const struct config_item_type cscfg_type = {
-	.ct_group_ops   = &cscfg_ops,
+static const struct config_item_type cscfg_dyn_type = {
+	.ct_group_ops   = &cscfg_dyn_ops,
 	.ct_owner       = THIS_MODULE,
 };
 
@@ -648,17 +600,16 @@ int cscfg_configfs_init(struct cscfg_manager *cscfg_mgr)
 
 	subsys = &cscfg_mgr->cfgfs_subsys;
 	config_item_set_name(&subsys->su_group.cg_item, CSCFG_FS_SUBSYS_NAME);
-	subsys->su_group.cg_item.ci_type = &cscfg_type;
-
+	subsys->su_group.cg_item.ci_type = &cscfg_dyn_type;
 	config_group_init(&subsys->su_group);
-	mutex_init(&subsys->su_mutex);
-
-	/* Add default groups to subsystem */
-	config_group_init(&cscfg_preload_cfg_grp);
-	configfs_add_default_group(&cscfg_preload_cfg_grp, &subsys->su_group);
 
 	config_group_init(&cscfg_feats_grp);
 	configfs_add_default_group(&cscfg_feats_grp, &subsys->su_group);
+
+	config_group_init(&cscfg_preload_cfg_grp);
+	configfs_add_default_group(&cscfg_preload_cfg_grp, &subsys->su_group);
+
+	mutex_init(&subsys->su_mutex);
 
 	return configfs_register_subsystem(subsys);
 }
@@ -730,7 +681,7 @@ struct cscfg_reg *cscfg_get_reg_list(struct cscfg_info *cfg_info, int type)
 				   struct cscfg_cfg, group);
 
 		if (cfg->type == type) {
-			pr_info("%s: found cfg for type %x\n", __func__, type);
+			pr_info("%s: found reg list for type %x\n", __func__, type);
 			return &cfg->reg;
 		}
 	}
@@ -738,4 +689,3 @@ struct cscfg_reg *cscfg_get_reg_list(struct cscfg_info *cfg_info, int type)
 	return NULL;
 }
 EXPORT_SYMBOL_GPL(cscfg_get_reg_list);
-

@@ -887,7 +887,8 @@ static int etm4_enable_perf(struct coresight_device *csdev,
 	if (ret)
 		goto out;
 
-	cscfg_get_reg_list(path->cfg, 0x12345678);
+	/* TODO: apply reg list */
+	cscfg_get_reg_list(path->cfg, CS_CFG_CLASS_SRC_ETM4);
 
 	drvdata->trcid = path->trace_id;
 
