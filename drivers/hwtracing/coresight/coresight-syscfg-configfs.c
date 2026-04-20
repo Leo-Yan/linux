@@ -21,6 +21,9 @@
 #define attr_item_to_cfg(item) \
 	container_of(to_config_group(item), struct cscfg_cfg, group)
 
+#define attr_item_to_cfg_with_legacy_group(item) \
+	container_of(to_config_group(item), struct cscfg_cfg, legacy_group)
+
 #define attr_item_to_cfg_preset(item) \
 	container_of(to_config_group(item), struct cscfg_cfg_preset, group);
 
@@ -180,7 +183,7 @@ void cscfg_feat_delete_group(struct cscfg_feat_desc *feat_desc)
 
 static ssize_t cscfg_preload_cfg_description_show(struct config_item *item, char *page)
 {
-	struct cscfg_cfg *cfg = attr_item_to_cfg(item);
+	struct cscfg_cfg *cfg = attr_item_to_cfg_with_legacy_group(item);
 
 	return scnprintf(page, PAGE_SIZE, "%s", cfg->config_desc->description);
 }
@@ -188,7 +191,7 @@ CONFIGFS_ATTR_RO(cscfg_preload_cfg_, description);
 
 static ssize_t cscfg_preload_cfg_feature_refs_show(struct config_item *item, char *page)
 {
-	struct cscfg_cfg *cfg = attr_item_to_cfg(item);
+	struct cscfg_cfg *cfg = attr_item_to_cfg_with_legacy_group(item);
 
 	return scnprintf(page, PAGE_SIZE, "%s\n", cfg->desc->name);
 }
@@ -196,8 +199,7 @@ CONFIGFS_ATTR_RO(cscfg_preload_cfg_, feature_refs);
 
 static ssize_t cscfg_preload_cfg_enable_show(struct config_item *item, char *page)
 {
-	struct cscfg_cfg *cfg = container_of(to_config_group(item),
-						     struct cscfg_cfg, group);
+	struct cscfg_cfg *cfg = attr_item_to_cfg_with_legacy_group(item);
 
 	return scnprintf(page, PAGE_SIZE, "%d\n", !!cfg->refcnt);
 }
@@ -205,8 +207,7 @@ static ssize_t cscfg_preload_cfg_enable_show(struct config_item *item, char *pag
 static ssize_t cscfg_preload_cfg_enable_store(struct config_item *item,
 					const char *page, size_t count)
 {
-	struct cscfg_cfg *cfg = container_of(to_config_group(item),
-						     struct cscfg_cfg, group);
+	struct cscfg_cfg *cfg = attr_item_to_cfg_with_legacy_group(item);
 	bool val;
 	int ret;
 
@@ -226,7 +227,7 @@ CONFIGFS_ATTR(cscfg_preload_cfg_, enable);
 
 static ssize_t cscfg_preload_cfg_preset_show(struct config_item *item, char *page)
 {
-	struct cscfg_cfg *cfg = attr_item_to_cfg(item);
+	struct cscfg_cfg *cfg = attr_item_to_cfg_with_legacy_group(item);
 
 	return scnprintf(page, PAGE_SIZE, "%d\n", cfg->current_preset);
 }
@@ -234,7 +235,7 @@ static ssize_t cscfg_preload_cfg_preset_show(struct config_item *item, char *pag
 static ssize_t cscfg_preload_cfg_preset_store(struct config_item *item,
 					     const char *page, size_t count)
 {
-	struct cscfg_cfg *cfg = attr_item_to_cfg(item);
+	struct cscfg_cfg *cfg = attr_item_to_cfg_with_legacy_group(item);
 	int preset, ret;
 
 	ret = kstrtoint(page, 0, &preset);
@@ -268,7 +269,7 @@ static const struct config_item_type cscfg_preload_cfg_type = {
 
 static ssize_t cscfg_preload_cfg_preset_values_show(struct config_item *item, char *page)
 {
-	struct cscfg_cfg *cfg = attr_item_to_cfg(item->ci_parent);
+	struct cscfg_cfg *cfg = attr_item_to_cfg_with_legacy_group(item->ci_parent);
 	const struct cscfg_config_desc *config_desc = cfg->config_desc;
 	struct cscfg_cfg_preset *preset = attr_item_to_cfg_preset(item);
 	int i, val_idx, preset_idx;
@@ -442,6 +443,7 @@ int cscfg_preload_cfg_create_group(struct cscfg_manager *cscfg_mgr,
 		return PTR_ERR(new_group);
 
 	cfg->type = desc->flags;
+	cscfg_preload_dyn_cfg_type.ct_attrs = desc->attrs;
 	config_group_init_type_name(&cfg->group, desc->name, &cscfg_preload_dyn_cfg_type);
 	configfs_register_group(&cfg_info->group, &cfg->group);
 
@@ -619,53 +621,53 @@ void cscfg_configfs_release(struct cscfg_manager *cscfg_mgr)
 	configfs_unregister_subsystem(&cscfg_mgr->cfgfs_subsys);
 }
 
-static struct cscfg_info *cscfg_search_group(struct config_group *grp,
-					     unsigned long hash)
+struct cscfg_info *cscfg_get_dyn_config(struct cscfg_manager *cscfg_mgr,
+					unsigned long hash)
 {
+	struct configfs_subsystem *subsys = &cscfg_mgr->cfgfs_subsys;
+	struct cscfg_info *cfg_info = NULL;
 	struct config_item *item;
 
-	pr_info("%s: hash=%lx\n", __func__, hash);
+	guard(mutex)(&subsys->su_mutex);
 
-	list_for_each_entry(item, &grp->cg_children, ci_entry) {
-		pr_info("%s: group %s\n", __func__, config_item_name(item));
+	list_for_each_entry(item, &subsys->su_group.cg_children, ci_entry) {
 
-		/*
-		 * If this item is actually a group, recurse into it.
-		 *
-		 * In configfs, groups are also config_items. A common way
-		 * to identify "group-ness" is by the type used for that item.
-		 * If you know which items in your subsystem are groups,
-		 * you can check that and cast.
-		 */
-		if (strstr(config_item_name(item), "preload-") ||
-		    (item->ci_type && item->ci_type->ct_item_ops)) {
-			struct cscfg_info *cfg_info = container_of(to_config_group(item),
-						   struct cscfg_info, group);
+		if (!strstr(config_item_name(item), "preload-") &&
+		    !(item->ci_type && item->ci_type->ct_item_ops))
+			continue;
 
-			pr_info("%s: cfg_info->hash=%lx hash=%lx\n", __func__, cfg_info->hash, hash);
-
-			if (cfg_info->hash == hash) {
-				pr_info("%s: found cfg_info for %s\n", __func__, config_item_name(item));
-				return cfg_info;
-			}
+		cfg_info = attr_item_to_info(item);
+		if (cfg_info->hash == hash) {
+			configfs_depend_item(subsys, item);
+			//config_group_get(&cfg_info->group);
+			pr_info("Found cfg_info for %s\n", config_item_name(item));
+			return cfg_info;
 		}
 	}
 
-	return NULL;
+	return cfg_info;
 }
 
-struct cscfg_info *cscfg_search_config(struct cscfg_manager *cscfg_mgr,
-				       unsigned long hash)
+void cscfg_put_dyn_config(struct cscfg_manager *cscfg_mgr,
+			  struct cscfg_info *cfg_info)
 {
 	struct configfs_subsystem *subsys = &cscfg_mgr->cfgfs_subsys;
-	struct cscfg_info *cfg_info;
+	struct config_item *item;
 
-	mutex_lock(&subsys->su_mutex);
-	printk("%s\n", config_item_name(&subsys->su_group.cg_item));
-	cfg_info = cscfg_search_group(&subsys->su_group, hash);
-	mutex_unlock(&subsys->su_mutex);
+	guard(mutex)(&subsys->su_mutex);
 
-	return cfg_info;
+	list_for_each_entry(item, &subsys->su_group.cg_children, ci_entry) {
+
+		if (!strstr(config_item_name(item), "preload-") &&
+		    !(item->ci_type && item->ci_type->ct_item_ops))
+			continue;
+
+		if (cfg_info == attr_item_to_info(item)) {
+			configfs_undepend_item(item);
+			//config_group_put(&cfg_info->group);
+			return;
+		}
+	}
 }
 
 struct cscfg_reg *cscfg_get_reg_list(struct cscfg_info *cfg_info, int type)

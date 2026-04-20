@@ -96,7 +96,7 @@ struct etm_event_data {
 	cpumask_t mask;
 	cpumask_t aux_hwid_done;
 	void *snk_config;
-	u32 cfg_hash;
+	struct cscfg_info *cfg_info;
 	struct coresight_path * __percpu *path;
 };
 

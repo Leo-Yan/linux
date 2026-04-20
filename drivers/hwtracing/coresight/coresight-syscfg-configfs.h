@@ -21,8 +21,11 @@ int cscfg_preload_cfg_create_group(struct cscfg_manager *cscfg_mgr,
 				   struct cscfg_config_desc *config_desc);
 void cscfg_preload_cfg_delete_group(struct cscfg_config_desc *config_desc);
 
-struct cscfg_info *cscfg_search_config(struct cscfg_manager *cscfg_mgr,
-				       unsigned long hash);
+struct cscfg_info *cscfg_get_dyn_config(struct cscfg_manager *cscfg_mgr,
+					unsigned long hash);
+void cscfg_put_dyn_config(struct cscfg_manager *cscfg_mgr,
+			  struct cscfg_info *cfg_info);
+
 struct cscfg_reg *cscfg_get_reg_list(struct cscfg_info *cfg_info, int type);
 
 #endif /* CORESIGHT_SYSCFG_CONFIGFS_H */

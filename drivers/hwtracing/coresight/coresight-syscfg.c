@@ -21,12 +21,20 @@ struct cscfg_info *cscfg_get_config(unsigned long cfg_hash)
 	struct cscfg_info *cfg_info;
 
 	mutex_lock(&cscfg_mutex);
-	cfg_info = cscfg_search_config(cscfg_mgr, cfg_hash);
+	cfg_info = cscfg_get_dyn_config(cscfg_mgr, cfg_hash);
 	mutex_unlock(&cscfg_mutex);
 
 	return cfg_info;
 }
 EXPORT_SYMBOL_GPL(cscfg_get_config);
+
+void cscfg_put_config(struct cscfg_info *cfg_info)
+{
+	mutex_lock(&cscfg_mutex);
+	cscfg_put_dyn_config(cscfg_mgr, cfg_info);
+	mutex_unlock(&cscfg_mutex);
+}
+EXPORT_SYMBOL_GPL(cscfg_put_config);
 
 #if 0
 /*

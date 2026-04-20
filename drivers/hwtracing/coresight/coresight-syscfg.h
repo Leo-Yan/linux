@@ -46,5 +46,6 @@ int cscfg_load_config_sets(struct cscfg_config_desc **config_descs,
 			   struct cscfg_feat_desc **feat_descs);
 
 struct cscfg_info *cscfg_get_config(unsigned long cfg_hash);
+void cscfg_put_config(struct cscfg_info *cfg_info);
 
 #endif /* CORESIGHT_SYSCFG_H */

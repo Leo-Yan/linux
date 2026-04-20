@@ -225,8 +225,7 @@ static void free_event_data(struct work_struct *work)
 	free_sink_buffer(event_data);
 
 	/* clear any configuration we were using */
-	// if (event_data->cfg_hash)
-	//	cscfg_deactivate_config(event_data->cfg_hash);
+	cscfg_put_config(event_data->cfg_info);
 
 	for_each_cpu(cpu, mask) {
 		struct coresight_path **ppath;
@@ -342,7 +341,7 @@ static void *etm_setup_aux(struct perf_event *event, void **pages,
 		cfg_info = cscfg_get_config(cfg_hash);
 		if (!cfg_info)
 			goto err;
-		//event_data->cfg_hash = cfg_hash;
+		event_data->cfg_info = cfg_info;
 	}
 
 	mask = &event_data->mask;

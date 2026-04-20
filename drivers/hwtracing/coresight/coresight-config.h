@@ -223,6 +223,11 @@ static ssize_t __struct##_##__id##_store(struct config_item *item, 	\
 	uint32_t val;							\
 	int ret, i;							\
 									\
+	if (strstr(config_item_name(item->ci_parent), "preload-")) {	\
+		printk("No permission, set preset for preload cfg\n");	\
+		return -EPERM;						\
+	}								\
+									\
 	ret = kstrtou32(page, 0, &val);					\
     	if (ret)							\
         	return ret;						\
