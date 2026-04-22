@@ -103,13 +103,59 @@ static void coresight_clear_percpu_source(struct coresight_device *csdev)
 	per_cpu(csdev_source, csdev->cpu) = NULL;
 }
 
-struct coresight_device *coresight_get_percpu_source(int cpu)
+struct coresight_device *coresight_get_percpu_source_ref(int cpu)
 {
+	struct coresight_device *csdev;
+	struct device *dev;
+
 	if (WARN_ON(cpu < 0))
 		return NULL;
 
 	guard(raw_spinlock_irqsave)(&coresight_dev_lock);
-	return per_cpu(csdev_source, cpu);
+
+	csdev = per_cpu(csdev_source, cpu);
+	if (!csdev)
+		return NULL;
+
+	/*
+	 * Note that an ETM device is not expected to be unbound (e.g. via
+	 * sysfs unbind or dynamic removal through DT overlays).
+	 *
+	 * csdev->dev is only used for the CoreSight bus; the parent device is
+	 * used for driver probing. Therefore, take references to both the
+	 * driver module and the parent device. This is sufficient to prevent
+	 * the device from being unbound and the module from being unloaded,
+	 * ensuring that csdev is not released and can be safely accessed.
+	 */
+	dev = csdev->dev.parent;
+
+	/* Make sure the driver can't be removed */
+	if (!try_module_get(dev->driver->owner))
+		return NULL;
+
+	/* Make sure the device can't go away */
+	get_device(dev);
+
+	return csdev;
+}
+
+void coresight_put_percpu_source_ref(struct coresight_device *csdev)
+{
+	struct device *dev;
+
+	if (!csdev || !coresight_is_percpu_source(csdev))
+		return;
+
+	dev = csdev->dev.parent;
+
+	guard(raw_spinlock_irqsave)(&coresight_dev_lock);
+
+	/*
+	 * Here, only the device's refcount is decremented; the release is
+	 * deferred until module unload. So this is safe in atomic context.
+	 */
+	put_device(dev);
+	module_put(dev->driver->owner);
 }
 
 struct coresight_device *coresight_get_source(struct coresight_path *path)
