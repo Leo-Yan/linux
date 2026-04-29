@@ -67,12 +67,6 @@ static int coresight_enable_source_sysfs(struct coresight_device *csdev,
 {
 	int ret;
 
-	/*
-	 * Comparison with CS_MODE_SYSFS works without taking any device
-	 * specific spinlock because the truthyness of that comparison can only
-	 * change with coresight_mutex held, which we already have here.
-	 */
-	lockdep_assert_held(&coresight_mutex);
 	if (coresight_get_mode(csdev) != CS_MODE_SYSFS) {
 		ret = coresight_enable_source(csdev, NULL, mode, path);
 		if (ret)
@@ -97,7 +91,6 @@ static int coresight_enable_source_sysfs(struct coresight_device *csdev,
 static bool coresight_disable_source_sysfs(struct coresight_device *csdev,
 					   void *data)
 {
-	lockdep_assert_held(&coresight_mutex);
 	if (coresight_get_mode(csdev) != CS_MODE_SYSFS)
 		return false;
 
@@ -120,6 +113,8 @@ coresight_find_activated_sysfs_sink(struct coresight_device *csdev)
 {
 	int i;
 	struct coresight_device *sink = NULL;
+
+	guard(mutex)(&coresight_mutex);
 
 	if ((csdev->type == CORESIGHT_DEV_TYPE_SINK ||
 	     csdev->type == CORESIGHT_DEV_TYPE_LINKSINK) &&
@@ -146,8 +141,6 @@ coresight_find_activated_sysfs_sink(struct coresight_device *csdev)
  *  be used via sysfs.
  *  @csdev:	the device structure for a source.
  *  @function:	the function this was called from.
- *
- * Assumes the coresight_mutex is held.
  */
 static int coresight_validate_source_sysfs(struct coresight_device *csdev,
 				     const char *function)
@@ -181,8 +174,6 @@ int coresight_enable_sysfs(struct coresight_device *csdev)
 	int ret = 0;
 	struct coresight_device *sink;
 	struct coresight_path *path;
-
-	mutex_lock(&coresight_mutex);
 
 	ret = coresight_validate_source_sysfs(csdev, __func__);
 	if (ret)
@@ -225,7 +216,6 @@ int coresight_enable_sysfs(struct coresight_device *csdev)
 		goto err_source;
 
 out:
-	mutex_unlock(&coresight_mutex);
 	return ret;
 
 err_source:
@@ -242,11 +232,9 @@ void coresight_disable_sysfs(struct coresight_device *csdev)
 	struct coresight_path *path;
 	int ret;
 
-	mutex_lock(&coresight_mutex);
-
 	ret = coresight_validate_source_sysfs(csdev, __func__);
 	if (ret)
-		goto out;
+		return;
 
 	/*
 	 * coresight_disable_source_sysfs() clears the 'csdev->path' pointer
@@ -255,13 +243,10 @@ void coresight_disable_sysfs(struct coresight_device *csdev)
 	path = csdev->path;
 
 	if (!coresight_disable_source_sysfs(csdev, NULL))
-		goto out;
+		return;
 
 	coresight_disable_path(path);
 	coresight_release_path(path);
-
-out:
-	mutex_unlock(&coresight_mutex);
 }
 EXPORT_SYMBOL_GPL(coresight_disable_sysfs);
 
@@ -297,7 +282,6 @@ static ssize_t enable_source_show(struct device *dev,
 {
 	struct coresight_device *csdev = to_coresight_device(dev);
 
-	guard(mutex)(&coresight_mutex);
 	return scnprintf(buf, PAGE_SIZE, "%u\n",
 			 coresight_get_mode(csdev) == CS_MODE_SYSFS);
 }

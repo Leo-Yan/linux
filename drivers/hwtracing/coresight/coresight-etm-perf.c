@@ -336,7 +336,7 @@ etm_event_build_path(struct perf_event *event, int cpu,
 	struct coresight_path *path = NULL;
 	struct coresight_device *source, *sink;
 
-	source = coresight_get_percpu_source_ref(cpu);
+	source = coresight_get_cpu_source_ref(cpu);
 
 	/*
 	 * If there is no ETM associated with this CPU or ever we try to trace
@@ -374,7 +374,7 @@ etm_event_build_path(struct perf_event *event, int cpu,
 		 */
 
 		/* Find the default sink for this ETM */
-		sink = coresight_find_default_sink(source);
+		sink = coresight_get_default_sink_ref(source);
 		if (!sink)
 			goto out;
 
@@ -403,7 +403,9 @@ etm_event_build_path(struct perf_event *event, int cpu,
 	coresight_trace_id_perf_start(&sink->perf_sink_id_map);
 
 out:
-	coresight_put_percpu_source_ref(source);
+	if (match_sink && sink)
+		coresight_put_sink_ref(sink);
+	coresight_put_cpu_source_ref(source);
 	return IS_ERR_OR_NULL(path) ? NULL : path;
 }
 
@@ -457,7 +459,6 @@ static void *etm_setup_aux(struct perf_event *event, void **pages,
 			continue;
 		}
 
-
 		/*
 		 * The first found sink is saved here and passed to
 		 * etm_event_build_path() to check whether the remaining ETMs
@@ -494,6 +495,7 @@ static void *etm_setup_aux(struct perf_event *event, void **pages,
 		goto err;
 
 out:
+	coresight_put_sink_ref(sink);
 	return event_data;
 
 err:

@@ -95,12 +95,14 @@ EXPORT_SYMBOL_GPL(coresight_remove_cti_ops);
 
 void coresight_set_percpu_sink(int cpu, struct coresight_device *csdev)
 {
+	guard(mutex)(&coresight_mutex);
 	per_cpu(csdev_sink, cpu) = csdev;
 }
 EXPORT_SYMBOL_GPL(coresight_set_percpu_sink);
 
 struct coresight_device *coresight_get_percpu_sink(int cpu)
 {
+	guard(mutex)(&coresight_mutex);
 	return per_cpu(csdev_sink, cpu);
 }
 EXPORT_SYMBOL_GPL(coresight_get_percpu_sink);
@@ -126,7 +128,6 @@ static void coresight_clear_percpu_source(struct coresight_device *csdev)
 struct coresight_device *coresight_get_percpu_source_ref(int cpu)
 {
 	struct coresight_device *csdev;
-	struct device *dev;
 
 	if (WARN_ON(cpu < 0))
 		return NULL;
@@ -137,45 +138,58 @@ struct coresight_device *coresight_get_percpu_source_ref(int cpu)
 	if (!csdev)
 		return NULL;
 
-	/*
-	 * Note that an ETM device is not expected to be unbound (e.g. via
-	 * sysfs unbind or dynamic removal through DT overlays).
-	 *
-	 * csdev->dev is only used for the CoreSight bus; the parent device is
-	 * used for driver probing. Therefore, take references to both the
-	 * driver module and the parent device. This is sufficient to prevent
-	 * the device from being unbound and the module from being unloaded,
-	 * ensuring that csdev is not released and can be safely accessed.
-	 */
-	dev = csdev->dev.parent;
-
-	/* Make sure the driver can't be removed */
-	if (!try_module_get(dev->driver->owner))
-		return NULL;
-
-	/* Make sure the device can't go away */
-	get_device(dev);
+	/* Make sure csdev can't go away */
+	get_device(&csdev->dev);
 
 	return csdev;
 }
 
 void coresight_put_percpu_source_ref(struct coresight_device *csdev)
 {
-	struct device *dev;
-
 	if (!csdev || !coresight_is_percpu_source(csdev))
 		return;
 
-	dev = csdev->dev.parent;
-
 	guard(raw_spinlock_irqsave)(&coresight_dev_lock);
+	put_device(&csdev->dev);
+}
 
-	/*
-	 * Here, only the device's refcount is decremented; the release is
-	 * deferred until module unload. So this is safe in atomic context.
-	 */
-	put_device(dev);
-	module_put(dev->driver->owner);
+static int coresight_match_cpu_source(struct device *dev, const void *data)
+{
+	struct coresight_device *csdev = to_coresight_device(dev);
+	int cpu = *(int *)data;
+
+	if (!coresight_is_percpu_source(csdev))
+		return 0;
+
+	if (csdev->cpu == cpu)
+		return 1;
+
+	return 0;
+}
+
+struct coresight_device *coresight_get_cpu_source_ref(int cpu)
+{
+	struct device *dev;
+
+	guard(mutex)(&coresight_mutex);
+
+	dev = bus_find_device(&coresight_bustype, NULL, &cpu,
+			      coresight_match_cpu_source);
+	if (!dev)
+		return NULL;
+
+	/* Make sure csdev can't go away */
+	get_device(dev);
+	return to_coresight_device(dev);
+}
+
+void coresight_put_cpu_source_ref(struct coresight_device *csdev)
+{
+	if (!coresight_is_percpu_source(csdev))
+		return;
+
+	guard(mutex)(&coresight_mutex);
+	put_device(&csdev->dev);
 }
 
 struct coresight_device *coresight_get_source(struct coresight_path *path)
@@ -798,10 +812,18 @@ struct coresight_device *coresight_get_sink_by_id(u32 id)
 {
 	struct device *dev = NULL;
 
+	guard(mutex)(&coresight_mutex);
+
 	dev = bus_find_device(&coresight_bustype, NULL, &id,
 			      coresight_sink_by_id);
 
 	return dev ? to_coresight_device(dev) : NULL;
+}
+
+void coresight_put_sink_ref(struct coresight_device *csdev)
+{
+	guard(mutex)(&coresight_mutex);
+	put_device(&csdev->dev);
 }
 
 /**
@@ -815,14 +837,14 @@ struct coresight_device *coresight_get_sink_by_id(u32 id)
  */
 static bool coresight_get_ref(struct coresight_device *csdev)
 {
-	struct device *dev = csdev->dev.parent;
+	lockdep_assert_held(&coresight_mutex);
 
-	/* Make sure the driver can't be removed */
-	if (!try_module_get(dev->driver->owner))
-		return false;
-	/* Make sure the device can't go away */
-	get_device(dev);
-	pm_runtime_get_sync(dev);
+	/* Ensure csdev is not released */
+	get_device(&csdev->dev);
+
+	/* Ensure it is powered up */
+	get_device(csdev->dev.parent);
+	pm_runtime_get_sync(csdev->dev.parent);
 	return true;
 }
 
@@ -834,11 +856,12 @@ static bool coresight_get_ref(struct coresight_device *csdev)
  */
 static void coresight_put_ref(struct coresight_device *csdev)
 {
-	struct device *dev = csdev->dev.parent;
 
-	pm_runtime_put(dev);
-	put_device(dev);
-	module_put(dev->driver->owner);
+	lockdep_assert_held(&coresight_mutex);
+
+	pm_runtime_put(csdev->dev.parent);
+	put_device(csdev->dev.parent);
+	put_device(&csdev->dev);
 }
 
 /*
@@ -951,7 +974,7 @@ static int _coresight_build_path(struct coresight_device *csdev,
 				 struct coresight_device *sink,
 				 struct coresight_path *path)
 {
-	int i, ret;
+	int i, j, ret;
 	bool found = false;
 	struct coresight_node *node;
 
@@ -969,15 +992,26 @@ static int _coresight_build_path(struct coresight_device *csdev,
 
 	/* Not a sink - recursively explore each port found on this element */
 	for (i = 0; i < csdev->pdata->nr_outconns; i++) {
-		struct coresight_device *child_dev;
+		struct coresight_connection *conn = csdev->pdata->out_conns[i];
+		struct coresight_device *dest_dev = conn->dest_dev;
+		bool connected = false;
 
-		child_dev = csdev->pdata->out_conns[i]->dest_dev;
-
-		if (coresight_blocks_source(source, csdev->pdata->out_conns[i]))
+		if (coresight_blocks_source(source, conn))
 			continue;
 
-		if (child_dev &&
-		    _coresight_build_path(child_dev, source, sink, path) == 0) {
+		/* Need to confirm if really connected */
+		for (j = 0; j < dest_dev->pdata->nr_inconns; ++j) {
+			if (dest_dev->pdata->in_conns[j] == conn) {
+				connected = true;
+				break;
+			}
+		}
+
+		if (!connected)
+			continue;
+
+		if (dest_dev &&
+		    _coresight_build_path(dest_dev, source, sink, path) == 0) {
 			found = true;
 			break;
 		}
@@ -1013,6 +1047,8 @@ struct coresight_path *coresight_build_path(struct coresight_device *source,
 	struct coresight_path *path;
 	int rc;
 
+	guard(mutex)(&coresight_mutex);
+
 	if (!sink)
 		return ERR_PTR(-EINVAL);
 
@@ -1042,6 +1078,8 @@ void coresight_release_path(struct coresight_path *path)
 {
 	struct coresight_device *csdev;
 	struct coresight_node *nd, *next;
+
+	guard(mutex)(&coresight_mutex);
 
 	list_for_each_entry_safe(nd, next, &path->path_list, link) {
 		csdev = nd->csdev;
@@ -1126,7 +1164,7 @@ coresight_select_best_sink(struct coresight_device *sink, int *depth,
 static struct coresight_device *
 coresight_find_sink(struct coresight_device *csdev, int *depth)
 {
-	int i, curr_depth = *depth + 1, found_depth = 0;
+	int i, j, curr_depth = *depth + 1, found_depth = 0;
 	struct coresight_device *found_sink = NULL;
 
 	if (coresight_is_def_sink_type(csdev)) {
@@ -1142,12 +1180,26 @@ coresight_find_sink(struct coresight_device *csdev, int *depth)
 	 * recursively explore each port found on this element.
 	 */
 	for (i = 0; i < csdev->pdata->nr_outconns; i++) {
-		struct coresight_device *child_dev, *sink = NULL;
+		struct coresight_connection *conn = csdev->pdata->out_conns[i];
+		struct coresight_device *dest_dev, *sink = NULL;
 		int child_depth = curr_depth;
+		bool connected = false;
 
-		child_dev = csdev->pdata->out_conns[i]->dest_dev;
-		if (child_dev)
-			sink = coresight_find_sink(child_dev, &child_depth);
+		dest_dev = csdev->pdata->out_conns[i]->dest_dev;
+
+		/* Need to confirm if really connected */
+		for (j = 0; j < dest_dev->pdata->nr_inconns; ++j) {
+			if (dest_dev->pdata->in_conns[j] == conn) {
+				connected = true;
+				break;
+			}
+		}
+
+		if (!connected)
+		         continue;
+
+		if (dest_dev)
+			sink = coresight_find_sink(dest_dev, &child_depth);
 
 		if (sink)
 			found_sink = coresight_select_best_sink(found_sink,
@@ -1180,9 +1232,11 @@ return_def_sink:
  * sink.
  */
 struct coresight_device *
-coresight_find_default_sink(struct coresight_device *csdev)
+coresight_get_default_sink_ref(struct coresight_device *csdev)
 {
 	int depth = 0;
+
+	guard(mutex)(&coresight_mutex);
 
 	/* look for a default sink if we have not found for this device */
 	if (!csdev->def_sink) {
@@ -1191,9 +1245,13 @@ coresight_find_default_sink(struct coresight_device *csdev)
 		if (!csdev->def_sink)
 			csdev->def_sink = coresight_find_sink(csdev, &depth);
 	}
+
+	if (csdev->def_sink)
+		get_device(&csdev->def_sink->dev);
+
 	return csdev->def_sink;
 }
-EXPORT_SYMBOL_GPL(coresight_find_default_sink);
+EXPORT_SYMBOL_GPL(coresight_get_default_sink_ref);
 
 static int coresight_remove_sink_ref(struct device *dev, void *data)
 {
