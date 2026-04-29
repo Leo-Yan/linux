@@ -711,7 +711,9 @@ static long etm_event_snapshot_aux(struct perf_event *event,
 		return 0;
 
 	event_data = READ_ONCE(ctxt->event_data);
-	if (WARN_ON_ONCE(!event_data))
+
+	/* The event has been disabled (e.g., throttling) */
+	if (!event_data)
 		return 0;
 
 	path = etm_event_get_ctxt_path(ctxt);
@@ -813,13 +815,17 @@ static void etm_event_stop(struct perf_event *event, int mode)
 	 * handle due to lack of buffer space), we don't
 	 * have to do anything here.
 	 */
-	if (handle->event && (mode & PERF_EF_UPDATE)) {
+	if (!handle->event)
+		goto out;
+
+	/* Event core layer may call with mode == 0 for throttling */
+	if (mode & PERF_EF_UPDATE || !mode) {
 		if (WARN_ON_ONCE(handle->event != event))
-			return;
+			goto out;
 
 		/* update trace information */
 		if (!sink_ops(sink)->update_buffer)
-			return;
+			goto out;
 
 		size = sink_ops(sink)->update_buffer(sink, handle,
 					      event_data->snk_config);
@@ -838,8 +844,11 @@ static void etm_event_stop(struct perf_event *event, int mode)
 			perf_aux_output_end(handle, size);
 		else
 			WARN_ON(size);
+	} else {
+		perf_aux_output_end(handle, 0);
 	}
 
+out:
 	/* Disabling the path make its elements available to other sessions */
 	coresight_disable_path(path);
 }
