@@ -642,14 +642,18 @@ struct coresight_device *coresight_get_sink_by_id(u32 id)
  */
 static bool coresight_get_ref(struct coresight_device *csdev)
 {
-	struct device *dev = csdev->dev.parent;
+	struct device *parent = csdev->dev.parent;
 
 	/* Make sure the driver can't be removed */
-	if (!try_module_get(dev->driver->owner))
+	if (!try_module_get(parent->driver->owner))
 		return false;
-	/* Make sure the device can't go away */
-	get_device(dev);
-	pm_runtime_get_sync(dev);
+
+	/* Make sure csdev and parent device can't go away */
+	get_device(&csdev->dev);
+	get_device(parent);
+
+	/* Make sure the device is powered on */
+	pm_runtime_get_sync(parent);
 	return true;
 }
 
@@ -661,11 +665,12 @@ static bool coresight_get_ref(struct coresight_device *csdev)
  */
 static void coresight_put_ref(struct coresight_device *csdev)
 {
-	struct device *dev = csdev->dev.parent;
+	struct device *parent = csdev->dev.parent;
 
-	pm_runtime_put(dev);
-	put_device(dev);
-	module_put(dev->driver->owner);
+	pm_runtime_put(parent);
+	put_device(parent);
+	put_device(&csdev->dev);
+	module_put(parent->driver->owner);
 }
 
 /*
