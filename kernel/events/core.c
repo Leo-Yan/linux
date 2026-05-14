@@ -10745,6 +10745,14 @@ static int __perf_event_overflow(struct perf_event *event,
 	 * events
 	 */
 
+	/*
+	 * If the event is disable pending when another overflow occurs,
+	 * bail out to avoid overwriting pending_kill and recording
+	 * samples beyond the event limit.
+	 */
+	if (event->pending_disable)
+		goto out;
+
 	event->pending_kill = POLL_IN;
 	if (events && atomic_dec_and_test(&event->event_limit)) {
 		ret = 1;
