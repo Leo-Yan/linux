@@ -158,6 +158,7 @@ enum cs_etm_sample_type {
 	CS_ETM_DISCONTINUITY,
 	CS_ETM_EXCEPTION,
 	CS_ETM_EXCEPTION_RET,
+	CS_ETM_CONTEXT,
 };
 
 enum cs_etm_isa {
@@ -184,6 +185,8 @@ struct cs_etm_packet {
 	u8 last_instr_size;
 	u8 trace_chan_id;
 	int cpu;
+	pid_t tid;
+	int el;
 };
 
 #define CS_ETM_PACKET_MAX_BUFFER 1024

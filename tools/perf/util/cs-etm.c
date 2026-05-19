@@ -1103,6 +1103,9 @@ static u32 cs_etm__mem_access(struct cs_etm_queue *etmq, u8 trace_chan_id,
 	if (!tidq)
 		goto out;
 
+	if (tidq->el == ocsd_EL_unknown)
+		goto out;
+
 	/*
 	 * We've already tracked EL along side the PID in cs_etm__set_thread()
 	 * so double check that it matches what OpenCSD thinks as well. It
@@ -1638,8 +1641,8 @@ static int cs_etm__synth_branch_sample(struct cs_etm_queue *etmq,
 	sample.time = cs_etm__resolve_sample_time(etmq, tidq);
 
 	sample.ip = ip;
-	sample.pid = thread__pid(tidq->prev_packet_thread);
-	sample.tid = thread__tid(tidq->prev_packet_thread);
+	sample.pid = thread__pid(tidq->thread);
+	sample.tid = thread__tid(tidq->thread);
 	sample.addr = cs_etm__first_executed_instr(tidq->packet);
 	sample.id = etmq->etm->branches_id;
 	sample.stream_id = etmq->etm->branches_id;
@@ -1874,7 +1877,8 @@ static int cs_etm__sample(struct cs_etm_queue *etmq,
 		bool generate_sample = false;
 
 		/* Generate sample for tracing on packet */
-		if (tidq->prev_packet->sample_type == CS_ETM_DISCONTINUITY)
+		if (tidq->prev_packet->sample_type == CS_ETM_DISCONTINUITY ||
+		    tidq->prev_packet->sample_type == CS_ETM_CONTEXT)
 			generate_sample = true;
 
 		/* Generate sample for branch taken packet */
@@ -1890,6 +1894,18 @@ static int cs_etm__sample(struct cs_etm_queue *etmq,
 	}
 
 	cs_etm__packet_swap(etm, tidq);
+
+	return 0;
+}
+
+static int cs_etm__context(struct cs_etm_queue *etmq,
+			  struct cs_etm_traceid_queue *tidq)
+{
+	u8 trace_chan_id = tidq->trace_chan_id;
+	struct cs_etm_packet *packet = tidq->packet;
+
+	cs_etm__etmq_set_tid_el(etmq, packet->tid, trace_chan_id,
+				packet->el);
 
 	return 0;
 }
@@ -2376,6 +2392,7 @@ static int cs_etm__set_sample_flags(struct cs_etm_queue *etmq,
 					     PERF_IP_FLAG_RETURN |
 					     PERF_IP_FLAG_INTERRUPT;
 		break;
+	case CS_ETM_CONTEXT:
 	case CS_ETM_EMPTY:
 	default:
 		break;
@@ -2450,6 +2467,9 @@ static int cs_etm__process_traceid_queue(struct cs_etm_queue *etmq,
 			 * events.
 			 */
 			cs_etm__sample(etmq, tidq);
+			break;
+		case CS_ETM_CONTEXT:
+			cs_etm__context(etmq, tidq);
 			break;
 		case CS_ETM_EXCEPTION:
 		case CS_ETM_EXCEPTION_RET:
