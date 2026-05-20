@@ -89,6 +89,7 @@ struct cs_etm_traceid_queue {
 	struct thread *prev_packet_thread;
 	ocsd_ex_level prev_packet_el;
 	ocsd_ex_level el;
+	ocsd_ex_level dec_el;
 	struct branch_stack *last_branch;
 	struct branch_stack *last_branch_rb;
 	struct cs_etm_packet *prev_packet;
@@ -1083,9 +1084,9 @@ static u8 cs_etm__cpu_mode(struct cs_etm_queue *etmq, u64 address,
 	}
 }
 
-static u32 cs_etm__mem_access(struct cs_etm_queue *etmq, u8 trace_chan_id,
-			      u64 address, size_t size, u8 *buffer,
-			      const ocsd_mem_space_acc_t mem_space)
+static u32 __cs_etm__mem_access(struct cs_etm_queue *etmq, u8 trace_chan_id,
+			       u64 address, size_t size, u8 *buffer,
+			       bool is_decoder)
 {
 	u8  cpumode;
 	u64 offset;
@@ -1094,6 +1095,7 @@ static u32 cs_etm__mem_access(struct cs_etm_queue *etmq, u8 trace_chan_id,
 	struct dso *dso;
 	struct cs_etm_traceid_queue *tidq;
 	int ret = 0;
+	ocsd_ex_level el;
 
 	if (!etmq)
 		return 0;
@@ -1106,6 +1108,11 @@ static u32 cs_etm__mem_access(struct cs_etm_queue *etmq, u8 trace_chan_id,
 	if (tidq->el == ocsd_EL_unknown)
 		goto out;
 
+	el = is_decoder ? tidq->dec_el : tidq->el;
+
+	pr_debug("tidq->el=%d el=%d address=%lx\n", tidq->el, el, address);
+	fflush(NULL);
+
 	/*
 	 * We've already tracked EL along side the PID in cs_etm__set_thread()
 	 * so double check that it matches what OpenCSD thinks as well. It
@@ -1113,18 +1120,18 @@ static u32 cs_etm__mem_access(struct cs_etm_queue *etmq, u8 trace_chan_id,
 	 * so we had to do the extra tracking. Skip validation if it's any of
 	 * the 'any' values.
 	 */
-	if (!(mem_space == OCSD_MEM_SPACE_ANY ||
-	      mem_space == OCSD_MEM_SPACE_N || mem_space == OCSD_MEM_SPACE_S)) {
-		if (mem_space & OCSD_MEM_SPACE_EL1N) {
-			/* Includes both non secure EL1 and EL0 */
-			assert(tidq->el == ocsd_EL1 || tidq->el == ocsd_EL0);
-		} else if (mem_space & OCSD_MEM_SPACE_EL2)
-			assert(tidq->el == ocsd_EL2);
-		else if (mem_space & OCSD_MEM_SPACE_EL3)
-			assert(tidq->el == ocsd_EL3);
-	}
+	//if (!(mem_space == OCSD_MEM_SPACE_ANY ||
+	//      mem_space == OCSD_MEM_SPACE_N || mem_space == OCSD_MEM_SPACE_S)) {
+	//	if (mem_space & OCSD_MEM_SPACE_EL1N) {
+	//		/* Includes both non secure EL1 and EL0 */
+	//		assert(tidq->el == ocsd_EL1 || tidq->el == ocsd_EL0);
+	//	} else if (mem_space & OCSD_MEM_SPACE_EL2)
+	//		assert(tidq->el == ocsd_EL2);
+	//	else if (mem_space & OCSD_MEM_SPACE_EL3)
+	//		assert(tidq->el == ocsd_EL3);
+	//}
 
-	cpumode = cs_etm__cpu_mode(etmq, address, tidq->el);
+	cpumode = cs_etm__cpu_mode(etmq, address, el);
 
 	if (!thread__find_map(tidq->thread, cpumode, address, &al))
 		goto out;
@@ -1159,6 +1166,22 @@ static u32 cs_etm__mem_access(struct cs_etm_queue *etmq, u8 trace_chan_id,
 out:
 	addr_location__exit(&al);
 	return ret;
+}
+
+static u32 cs_etm__mem_access(struct cs_etm_queue *etmq, u8 trace_chan_id,
+			       u64 address, size_t size, u8 *buffer,
+			       const ocsd_mem_space_acc_t mem_space __maybe_unused)
+{
+	return 	__cs_etm__mem_access(etmq, trace_chan_id, address, size,
+				     buffer, false);
+}
+
+static u32 cs_etm__decoder_mem_access(struct cs_etm_queue *etmq, u8 trace_chan_id,
+				      u64 address, size_t size, u8 *buffer,
+				      const ocsd_mem_space_acc_t mem_space __maybe_unused)
+{
+	return 	__cs_etm__mem_access(etmq, trace_chan_id, address, size,
+				     buffer, true);
 }
 
 static struct cs_etm_queue *cs_etm__alloc_queue(void)
@@ -1503,6 +1526,19 @@ int cs_etm__etmq_set_tid_el(struct cs_etm_queue *etmq, pid_t tid,
 		return -EINVAL;
 
 	cs_etm__set_thread(etmq, tidq, tid, el);
+	return 0;
+}
+
+int cs_etm__etmq_set_dec_el(struct cs_etm_queue *etmq,
+			    u8 trace_chan_id, ocsd_ex_level el)
+{
+	struct cs_etm_traceid_queue *tidq;
+
+	tidq = cs_etm__etmq_get_traceid_queue(etmq, trace_chan_id);
+	if (!tidq)
+		return -EINVAL;
+
+	tidq->dec_el = el;
 	return 0;
 }
 
@@ -2459,6 +2495,8 @@ static int cs_etm__process_traceid_queue(struct cs_etm_queue *etmq,
 		if (ret < 0)
 			break;
 
+		pr_debug("sample_type=%d\n", tidq->packet->sample_type);
+
 		switch (tidq->packet->sample_type) {
 		case CS_ETM_RANGE:
 			/*
@@ -3330,7 +3368,7 @@ static int cs_etm__create_queue_decoders(struct cs_etm_queue *etmq)
 	 */
 	if (cs_etm_decoder__add_mem_access_cb(etmq->decoder,
 					      0x0L, ((u64) -1L),
-					      cs_etm__mem_access))
+					      cs_etm__decoder_mem_access))
 		goto out_free_decoder;
 
 	zfree(&t_params);

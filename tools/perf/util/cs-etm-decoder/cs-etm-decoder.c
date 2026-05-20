@@ -117,6 +117,8 @@ int cs_etm_decoder__get_packet(struct cs_etm_packet_queue *packet_queue,
 	packet_queue->head = (packet_queue->head + 1) &
 			     (CS_ETM_PACKET_MAX_BUFFER - 1);
 
+	pr_debug("%s: fetch head=%d\n", __func__, packet_queue->head);
+
 	*packet = packet_queue->packet_buffer[packet_queue->head];
 
 	packet_queue->packet_count--;
@@ -388,6 +390,9 @@ cs_etm_decoder__buffer_packet(struct cs_etm_queue *etmq,
 	packet_queue->tail = et;
 	packet_queue->packet_count++;
 
+	pr_debug("%s: et=%u packet_count=%u\n", __func__,
+		et, packet_queue->packet_count);
+
 	packet_queue->packet_buffer[et].sample_type = sample_type;
 	packet_queue->packet_buffer[et].isa = CS_ETM_ISA_UNKNOWN;
 	packet_queue->packet_buffer[et].cpu = cpu;
@@ -457,6 +462,9 @@ cs_etm_decoder__buffer_range(struct cs_etm_queue *etmq,
 
 	packet->last_instr_size = elem->last_instr_sz;
 
+	pr_debug("%s: start=%lx end=%lx ins_cnt=%d\n", __func__,
+		packet->start_addr, packet->end_addr, packet->instr_count);
+
 	/* per-thread scenario, no need to generate a timestamp */
 	if (cs_etm__etmq_is_timeless(etmq))
 		goto out;
@@ -482,6 +490,8 @@ cs_etm_decoder__buffer_discontinuity(struct cs_etm_queue *etmq,
 				     struct cs_etm_packet_queue *queue,
 				     const uint8_t trace_chan_id)
 {
+	pr_debug("%s\n", __func__);
+
 	/*
 	 * Something happened and who knows when we'll get new traces so
 	 * reset time statistics.
@@ -504,6 +514,9 @@ cs_etm_decoder__buffer_exception(struct cs_etm_queue *etmq,
 	if (ret != OCSD_RESP_CONT && ret != OCSD_RESP_WAIT)
 		return ret;
 
+	pr_debug("%s: exception_number=%d\n", __func__,
+		elem->exception_number);
+
 	packet = &queue->packet_buffer[queue->tail];
 	packet->exception_number = elem->exception_number;
 
@@ -515,6 +528,8 @@ cs_etm_decoder__buffer_exception_ret(struct cs_etm_queue *etmq,
 				     struct cs_etm_packet_queue *queue,
 				     const uint8_t trace_chan_id)
 {
+	pr_debug("%s: trace_chan_id=%d\n", __func__, trace_chan_id);
+
 	return cs_etm_decoder__buffer_packet(etmq, queue, trace_chan_id,
 					     CS_ETM_EXCEPTION_RET);
 }
@@ -551,6 +566,9 @@ cs_etm_decoder__set_tid(struct cs_etm_queue *etmq,
 	if (tid == -1)
 		return OCSD_RESP_CONT;
 
+	pr_debug("%s: tid=%d trace_chan_id=%d el=%d\n",
+	        __func__, tid, trace_chan_id, elem->context.exception_level);
+
 	ret = cs_etm_decoder__buffer_packet(etmq, packet_queue, trace_chan_id,
 					    CS_ETM_CONTEXT);
 	if (ret != OCSD_RESP_CONT && ret != OCSD_RESP_WAIT)
@@ -564,7 +582,10 @@ cs_etm_decoder__set_tid(struct cs_etm_queue *etmq,
 	 * A timestamp is generated after a PE_CONTEXT element so make sure
 	 * to rely on that coming one.
 	 */
-	cs_etm_decoder__reset_timestamp(packet_queue);
+	//cs_etm_decoder__reset_timestamp(packet_queue);
+
+	cs_etm__etmq_set_dec_el(etmq, trace_chan_id,
+				elem->context.exception_level);
 
 	return ret;
 }
