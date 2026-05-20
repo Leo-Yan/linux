@@ -1600,6 +1600,45 @@ static inline u64 cs_etm__resolve_sample_time(struct cs_etm_queue *etmq,
 		return etm->latest_kernel_timestamp;
 }
 
+static void cs_etm__add_stack_event(struct cs_etm_queue *etmq,
+				    struct cs_etm_traceid_queue *tidq)
+{
+	u64 from, to;
+	int size;
+
+	if (!tidq->prev_packet->last_instr_taken_branch)
+		return;
+
+	if (etmq->etm->synth_opts.thread_stack) {
+		from = cs_etm__last_executed_instr(tidq->prev_packet);
+		to = cs_etm__first_executed_instr(tidq->packet);
+
+		size = cs_etm__instr_size(etmq, tidq->trace_chan_id,
+					  tidq->prev_packet->isa, from);
+
+		/*
+		 * Create thread stacks by keeping track of calls and returns;
+		 * any call pushes thread stack, return pops the stack, and
+		 * flush stack when the trace is discontinuous.
+		 */
+		thread_stack__event(tidq->thread, tidq->prev_packet->cpu,
+				    tidq->prev_packet->flags, from, to, size,
+				    etmq->buffer->buffer_nr + 1, true, 0, 0);
+	} else {
+		/*
+		 * The thread stack can be output via thread_stack__process();
+		 * thus the detailed information about paired calls and returns
+		 * will be facilitated by Python script for the db-export.
+		 *
+		 * Need to set trace buffer number and flush thread stack if the
+		 * trace buffer number has been alternate.
+		 */
+		thread_stack__set_trace_nr(tidq->thread,
+					   tidq->prev_packet->cpu,
+					   etmq->buffer->buffer_nr + 1);
+	}
+}
+
 static int cs_etm__synth_instruction_sample(struct cs_etm_queue *etmq,
 					    struct cs_etm_traceid_queue *tidq,
 					    u64 addr, u64 period)
@@ -1827,6 +1866,8 @@ static int cs_etm__sample(struct cs_etm_queue *etmq,
 	    tidq->prev_packet->sample_type == CS_ETM_RANGE &&
 	    tidq->prev_packet->last_instr_taken_branch)
 		cs_etm__update_last_branch_rb(etmq, tidq);
+
+	cs_etm__add_stack_event(etmq, tidq);
 
 	if (etm->synth_opts.branches) {
 		bool generate_sample = false;
@@ -3511,6 +3552,8 @@ int cs_etm__process_auxtrace_info_full(union perf_event *event,
 		itrace_synth_opts__set_default(&etm->synth_opts,
 				session->itrace_synth_opts->default_no_sample);
 		etm->synth_opts.callchain = false;
+		etm->synth_opts.thread_stack =
+			session->itrace_synth_opts->thread_stack;
 	}
 
 	etm->session = session;
