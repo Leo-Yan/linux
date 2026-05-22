@@ -17,6 +17,7 @@
 #include <stdlib.h>
 
 #include "auxtrace.h"
+#include "callchain.h"
 #include "color.h"
 #include "cs-etm.h"
 #include "cs-etm-decoder/cs-etm-decoder.h"
@@ -85,6 +86,7 @@ struct cs_etm_auxtrace {
 struct cs_etm_traceid_queue {
 	u8 trace_chan_id;
 	u64 period_instructions;
+	u64 kernel_start;
 	union perf_event *event_buf;
 	struct thread *thread;
 	struct thread *prev_packet_thread;
@@ -92,6 +94,7 @@ struct cs_etm_traceid_queue {
 	ocsd_ex_level el;
 	unsigned int br_stack_sz;
 	struct branch_stack *last_branch;
+	struct ip_callchain *callchain;
 	struct cs_etm_packet *prev_packet;
 	struct cs_etm_packet *packet;
 	struct cs_etm_packet_queue packet_queue;
@@ -640,6 +643,16 @@ static int cs_etm__init_traceid_queue(struct cs_etm_queue *etmq,
 		tidq->br_stack_sz = etm->synth_opts.last_branch_sz;
 	}
 
+	if (etm->synth_opts.callchain) {
+		size_t sz = sizeof(struct ip_callchain);
+
+		/* Add 1 to callchain_sz for callchain context */
+		sz += (etm->synth_opts.callchain_sz + 1) * sizeof(u64);
+		tidq->callchain = zalloc(sz);
+		if (!tidq->callchain)
+			goto out_free;
+	}
+
 	tidq->event_buf = malloc(PERF_SAMPLE_MAX_SIZE);
 	if (!tidq->event_buf)
 		goto out_free;
@@ -647,6 +660,7 @@ static int cs_etm__init_traceid_queue(struct cs_etm_queue *etmq,
 	return 0;
 
 out_free:
+	zfree(&tidq->callchain);
 	zfree(&tidq->last_branch);
 	zfree(&tidq->prev_packet);
 	zfree(&tidq->packet);
@@ -939,6 +953,7 @@ static void cs_etm__free_traceid_queues(struct cs_etm_queue *etmq)
 		thread__zput(tidq->thread);
 		thread__zput(tidq->prev_packet_thread);
 		zfree(&tidq->event_buf);
+		zfree(&tidq->callchain);
 		zfree(&tidq->last_branch);
 		zfree(&tidq->prev_packet);
 		zfree(&tidq->packet);
@@ -1437,6 +1452,7 @@ static void cs_etm__set_thread(struct cs_etm_queue *etmq,
 		tidq->thread = machine__idle_thread(machine);
 
 	tidq->el = el;
+	tidq->kernel_start = machine__kernel_start(machine);
 }
 
 int cs_etm__etmq_set_tid_el(struct cs_etm_queue *etmq, pid_t tid,
@@ -1565,6 +1581,14 @@ static int cs_etm__synth_instruction_sample(struct cs_etm_queue *etmq,
 					tidq->last_branch,
 					tidq->br_stack_sz);
 		sample.branch_stack = tidq->last_branch;
+	}
+
+	if (etm->synth_opts.callchain) {
+		thread_stack__sample(tidq->thread, tidq->packet->cpu,
+				     tidq->callchain,
+				     etm->synth_opts.callchain_sz + 1,
+				     sample.ip, tidq->kernel_start);
+		sample.callchain = tidq->callchain;
 	}
 
 	if (etm->synth_opts.inject) {
@@ -1729,6 +1753,9 @@ static int cs_etm__synth_events(struct cs_etm_auxtrace *etm,
 		 */
 		attr.branch_sample_type |= PERF_SAMPLE_BRANCH_HW_INDEX;
 	}
+
+	if (etm->synth_opts.callchain)
+		attr.sample_type |= PERF_SAMPLE_CALLCHAIN;
 
 	if (etm->synth_opts.instructions) {
 		attr.config = PERF_COUNT_HW_INSTRUCTIONS;
@@ -3412,7 +3439,11 @@ int cs_etm__process_auxtrace_info_full(union perf_event *event,
 	} else {
 		itrace_synth_opts__set_default(&etm->synth_opts,
 				session->itrace_synth_opts->default_no_sample);
-		etm->synth_opts.callchain = false;
+
+		if (!session->itrace_synth_opts->default_no_sample &&
+		    !session->itrace_synth_opts->inject)
+			etm->synth_opts.callchain = true;
+
 		etm->synth_opts.thread_stack = session->itrace_synth_opts->thread_stack;
 	}
 
@@ -3421,6 +3452,14 @@ int cs_etm__process_auxtrace_info_full(union perf_event *event,
 
 	if (etm->synth_opts.returns)
 		etm->branches_filter |= PERF_IP_FLAG_RETURN | PERF_IP_FLAG_TRACE_BEGIN;
+
+	if (etm->synth_opts.callchain && !symbol_conf.use_callchain) {
+		symbol_conf.use_callchain = true;
+		if (callchain_register_param(&callchain_param) < 0) {
+			symbol_conf.use_callchain = false;
+			etm->synth_opts.callchain = false;
+		}
+	}
 
 	etm->session = session;
 
@@ -3473,7 +3512,8 @@ int cs_etm__process_auxtrace_info_full(union perf_event *event,
 	}
 
 	etm->use_thread_stack = etm->synth_opts.thread_stack ||
-				etm->synth_opts.last_branch;
+				etm->synth_opts.last_branch ||
+				etm->synth_opts.callchain;
 
 	err = cs_etm__synth_events(etm, session);
 	if (err)
