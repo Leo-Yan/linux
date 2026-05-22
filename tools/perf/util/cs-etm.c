@@ -66,6 +66,7 @@ struct cs_etm_auxtrace {
 	bool snapshot_mode;
 	bool data_queued;
 	bool has_virtual_ts; /* Virtual/Kernel timestamps in the trace. */
+	bool use_thread_stack;
 
 	int num_cpu;
 	u64 latest_kernel_timestamp;
@@ -626,7 +627,7 @@ static int cs_etm__init_traceid_queue(struct cs_etm_queue *etmq,
 	if (!tidq->prev_packet)
 		goto out_free;
 
-	if (etm->synth_opts.last_branch) {
+	if (etm->use_thread_stack) {
 		size_t sz = sizeof(struct branch_stack);
 
 		sz += etm->synth_opts.last_branch_sz *
@@ -1511,7 +1512,7 @@ static void cs_etm__add_stack_event(struct cs_etm_queue *etmq,
 	    tidq->packet->sample_type != CS_ETM_RANGE)
 		return;
 
-	if (etmq->etm->synth_opts.last_branch) {
+	if (etmq->etm->use_thread_stack) {
 		from = cs_etm__last_executed_instr(tidq->prev_packet);
 		to = cs_etm__first_executed_instr(tidq->packet);
 
@@ -1520,7 +1521,7 @@ static void cs_etm__add_stack_event(struct cs_etm_queue *etmq,
 
 		thread_stack__event(tidq->thread, tidq->prev_packet->cpu,
 				    tidq->prev_packet->flags, from, to, size,
-				    etmq->buffer->buffer_nr + 1, false,
+				    etmq->buffer->buffer_nr + 1, true,
 				    etmq->etm->synth_opts.last_branch_sz, 0);
 	} else {
 		thread_stack__set_trace_nr(tidq->thread,
@@ -1920,7 +1921,7 @@ swap_packet:
 	cs_etm__packet_swap(etm, tidq);
 
 	/* Reset last branches after flush the trace */
-	if (etm->synth_opts.last_branch)
+	if (etm->use_thread_stack)
 		thread_stack__flush(tidq->thread);
 
 	return err;
@@ -3407,6 +3408,7 @@ int cs_etm__process_auxtrace_info_full(union perf_event *event,
 		itrace_synth_opts__set_default(&etm->synth_opts,
 				session->itrace_synth_opts->default_no_sample);
 		etm->synth_opts.callchain = false;
+		etm->synth_opts.thread_stack = session->itrace_synth_opts->thread_stack;
 	}
 
 	etm->session = session;
@@ -3458,6 +3460,10 @@ int cs_etm__process_auxtrace_info_full(union perf_event *event,
 		etm->tc.cap_user_time_zero = tc->cap_user_time_zero;
 		etm->tc.cap_user_time_short = tc->cap_user_time_short;
 	}
+
+	etm->use_thread_stack = etm->synth_opts.thread_stack ||
+				etm->synth_opts.last_branch;
+
 	err = cs_etm__synth_events(etm, session);
 	if (err)
 		goto err_free_queues;
