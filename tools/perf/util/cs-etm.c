@@ -2051,7 +2051,7 @@ static int cs_etm__get_data_block(struct cs_etm_queue *etmq)
 	return etmq->buf_len;
 }
 
-static bool cs_etm__is_svc_instr(struct cs_etm_queue *etmq, u8 trace_chan_id,
+static int cs_etm__is_svc_instr(struct cs_etm_queue *etmq, u8 trace_chan_id,
 				 struct cs_etm_packet *packet,
 				 u64 end_addr)
 {
@@ -2075,10 +2075,12 @@ static bool cs_etm__is_svc_instr(struct cs_etm_queue *etmq, u8 trace_chan_id,
 		 * so below only read 2 bytes as instruction size for T32.
 		 */
 		addr = end_addr - 2;
-		cs_etm__mem_access(etmq, trace_chan_id, addr, sizeof(instr16),
-				   (u8 *)&instr16, 0);
+		if (!cs_etm__mem_access(etmq, trace_chan_id, addr, sizeof(instr16),
+				   (u8 *)&instr16, 0))
+			return -EINVAL;
+
 		if ((instr16 & 0xFF00) == 0xDF00)
-			return true;
+			return 1;
 
 		break;
 	case CS_ETM_ISA_A32:
@@ -2091,11 +2093,13 @@ static bool cs_etm__is_svc_instr(struct cs_etm_queue *etmq, u8 trace_chan_id,
 		 * +---------+---------+-------------------------+
 		 */
 		addr = end_addr - 4;
-		cs_etm__mem_access(etmq, trace_chan_id, addr, sizeof(instr32),
-				   (u8 *)&instr32, 0);
+		if (!cs_etm__mem_access(etmq, trace_chan_id, addr, sizeof(instr32),
+				   (u8 *)&instr32, 0))
+			return -EINVAL;
+
 		if ((instr32 & 0x0F000000) == 0x0F000000 &&
 		    (instr32 & 0xF0000000) != 0xF0000000)
-			return true;
+			return 1;
 
 		break;
 	case CS_ETM_ISA_A64:
@@ -2108,10 +2112,12 @@ static bool cs_etm__is_svc_instr(struct cs_etm_queue *etmq, u8 trace_chan_id,
 		 * +-----------------------+---------+-----------+
 		 */
 		addr = end_addr - 4;
-		cs_etm__mem_access(etmq, trace_chan_id, addr, sizeof(instr32),
-				   (u8 *)&instr32, 0);
+		if (!cs_etm__mem_access(etmq, trace_chan_id, addr, sizeof(instr32),
+				   (u8 *)&instr32, 0))
+			return -EINVAL;
+
 		if ((instr32 & 0xFFE0001F) == 0xd4000001)
-			return true;
+			return 1;
 
 		break;
 	case CS_ETM_ISA_UNKNOWN:
@@ -2119,7 +2125,7 @@ static bool cs_etm__is_svc_instr(struct cs_etm_queue *etmq, u8 trace_chan_id,
 		break;
 	}
 
-	return false;
+	return 0;
 }
 
 static bool cs_etm__is_syscall(struct cs_etm_queue *etmq,
@@ -2140,8 +2146,8 @@ static bool cs_etm__is_syscall(struct cs_etm_queue *etmq,
 	 */
 	if (magic == __perf_cs_etmv4_magic) {
 		if (packet->exception_number == CS_ETMV4_EXC_CALL &&
-		    cs_etm__is_svc_instr(etmq, trace_chan_id, prev_packet,
-					 prev_packet->end_addr))
+		    (cs_etm__is_svc_instr(etmq, trace_chan_id, prev_packet,
+					 prev_packet->end_addr) > 0))
 			return true;
 	}
 
@@ -2309,8 +2315,8 @@ static int cs_etm__set_sample_flags(struct cs_etm_queue *etmq,
 		if (prev_packet->flags == (PERF_IP_FLAG_BRANCH |
 					   PERF_IP_FLAG_RETURN |
 					   PERF_IP_FLAG_INTERRUPT) &&
-		    cs_etm__is_svc_instr(etmq, trace_chan_id,
-					 packet, packet->start_addr))
+		    (cs_etm__is_svc_instr(etmq, trace_chan_id,
+					 packet, packet->start_addr) > 0))
 			prev_packet->flags = PERF_IP_FLAG_BRANCH |
 					     PERF_IP_FLAG_RETURN |
 					     PERF_IP_FLAG_SYSCALLRET;
