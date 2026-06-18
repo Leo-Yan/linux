@@ -661,8 +661,6 @@ static enum trbe_fault_action trbe_get_fault_act(struct perf_output_handle *hand
 	const char *err_str;
 	int ec = get_trbe_ec(trbsr);
 	int bsc = get_trbe_bsc(trbsr);
-	struct trbe_buf *buf = etm_perf_sink_config(handle);
-	struct trbe_cpudata *cpudata = buf->cpudata;
 
 	WARN_ON(is_trbe_running(trbsr));
 
@@ -710,14 +708,7 @@ static enum trbe_fault_action trbe_get_fault_act(struct perf_output_handle *hand
 		goto out_fatal;
 	}
 
-	/*
-	 * If the trbe is affected by TRBE_WORKAROUND_OVERWRITE_FILL_MODE,
-	 * it might write data after a WRAP event in the fill mode.
-	 * Thus the check TRBPTR == TRBBASER will not be honored.
-	 */
-	if ((is_trbe_wrap(trbsr) && (ec == TRBSR_EL1_EC_OTHER) && (bsc == TRBSR_EL1_BSC_FILLED)) &&
-	    (trbe_may_overwrite_in_fill_mode(cpudata) ||
-	     get_trbe_write_pointer() == get_trbe_base_pointer()))
+	if (is_trbe_wrap(trbsr))
 		return TRBE_FAULT_ACT_WRAP;
 
 	return TRBE_FAULT_ACT_SPURIOUS;
