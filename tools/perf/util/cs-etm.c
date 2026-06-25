@@ -235,7 +235,21 @@ static int cs_etm__insert_trace_id_node(struct cs_etm_queue *etmq,
 					u8 trace_chan_id, u64 *cpu_metadata)
 {
 	/* Get an RB node for this CPU */
-	struct int_node *inode = intlist__findnew(etmq->traceid_list, trace_chan_id);
+	struct int_node *inode;
+	unsigned int nr_entries = intlist__nr_entries(etmq->traceid_list);
+
+	if (!cpu_metadata) {
+		pr_err("CS ETM: no metadata for trace ID 0x%x queue %u etmq=%p list=%p nr=%u\n",
+		       trace_chan_id, etmq->queue_nr, etmq, etmq->traceid_list, nr_entries);
+		return -EINVAL;
+	}
+
+	inode = intlist__findnew(etmq->traceid_list, trace_chan_id);
+
+	pr_debug("CS ETM: insert trace ID queue=%u etmq=%p trace_id=0x%x list=%p "
+		 "nr_before=%u cpu=%d cpu_data=%p inode=%p inode_priv=%p\n",
+		 etmq->queue_nr, etmq, trace_chan_id, etmq->traceid_list, nr_entries,
+		 (int)cpu_metadata[CS_ETM_CPU], cpu_metadata, inode, inode ? inode->priv : NULL);
 
 	/* Something went wrong, no need to continue */
 	if (!inode)
@@ -257,6 +271,12 @@ static int cs_etm__insert_trace_id_node(struct cs_etm_queue *etmq,
 				pr_err("CS_ETM: overlapping Trace IDs aren't currently supported in per-thread mode\n");
 			else
 				pr_err("CS_ETM: map mismatch between HW_ID packet CPU and Trace ID\n");
+			pr_err("CS ETM: Trace ID 0x%x already mapped: queue=%u etmq=%p "
+			       "list=%p nr=%u old_cpu=%d new_cpu=%d old_data=%p new_data=%p\n",
+			       trace_chan_id, etmq->queue_nr, etmq,
+			       etmq->traceid_list, intlist__nr_entries(etmq->traceid_list),
+			       (int)curr_cpu_data[CS_ETM_CPU],
+			       (int)cpu_metadata[CS_ETM_CPU], curr_cpu_data, cpu_metadata);
 
 			return -EINVAL;
 		}
@@ -268,6 +288,10 @@ static int cs_etm__insert_trace_id_node(struct cs_etm_queue *etmq,
 
 		if (curr_chan_id != trace_chan_id) {
 			pr_err("CS_ETM: mismatch between CPU trace ID and HW_ID packet ID\n");
+			pr_err("CS ETM: Trace ID mismatch queue=%u etmq=%p list=%p "
+			       "cpu=%d curr_trace_id=0x%x hw_trace_id=0x%x\n",
+			       etmq->queue_nr, etmq, etmq->traceid_list,
+			       (int)curr_cpu_data[CS_ETM_CPU], curr_chan_id, trace_chan_id);
 			return -EINVAL;
 		}
 
@@ -277,6 +301,9 @@ static int cs_etm__insert_trace_id_node(struct cs_etm_queue *etmq,
 
 	/* Not one we've seen before, associate the traceID with the metadata pointer */
 	inode->priv = cpu_metadata;
+	pr_debug("CS ETM: inserted trace ID queue=%u trace_id=0x%x list=%p nr_after=%u cpu=%d\n",
+		 etmq->queue_nr, trace_chan_id, etmq->traceid_list,
+		 intlist__nr_entries(etmq->traceid_list), (int)cpu_metadata[CS_ETM_CPU]);
 
 	return 0;
 }
@@ -345,11 +372,29 @@ static int cs_etm__process_trace_id_v0(struct cs_etm_auxtrace *etm, int cpu,
 static int cs_etm__process_trace_id_v0_1(struct cs_etm_auxtrace *etm, int cpu,
 					 u64 hw_id)
 {
-	struct cs_etm_queue *etmq = cs_etm__get_queue(etm, cpu);
+	struct cs_etm_queue *etmq;
 	int ret;
 	u64 *cpu_data;
 	u32 sink_id = FIELD_GET(CS_AUX_HW_ID_SINK_ID_MASK, hw_id);
 	u8 trace_id = FIELD_GET(CS_AUX_HW_ID_TRACE_ID_MASK, hw_id);
+
+	cpu_data = get_cpu_data(etm, cpu);
+	if (!cpu_data) {
+		pr_err("CS ETM: no metadata for HW_ID cpu=%d hw_id=%#" PRIx64
+		       " sink_id=0x%x trace_id=0x%x\n",
+		       cpu, hw_id, sink_id, trace_id);
+		return -EINVAL;
+	}
+
+	etmq = cs_etm__get_queue(etm, cpu);
+
+	pr_debug("CS ETM: map HW_ID hw_id=%#" PRIx64 " cpu=%d queue=%u etmq=%p "
+		 "sink old=0x%x new=0x%x trace_id=0x%x list=%p own=%p nr=%u "
+		 "format=%d per_thread=%d\n",
+		 hw_id, cpu, etmq->queue_nr, etmq, etmq->sink_id, sink_id, trace_id,
+		 etmq->traceid_list, etmq->own_traceid_list,
+		 intlist__nr_entries(etmq->traceid_list), etmq->format,
+		 etm->per_thread_decoding);
 
 	/*
 	 * Check sink id hasn't changed in per-cpu mode. In per-thread mode,
@@ -367,10 +412,18 @@ static int cs_etm__process_trace_id_v0_1(struct cs_etm_auxtrace *etm, int cpu,
 	/* Find which other queues use this sink and link their ID maps */
 	for (unsigned int i = 0; i < etm->queues.nr_queues; ++i) {
 		struct cs_etm_queue *other_etmq = etm->queues.queue_array[i].priv;
+		struct intlist *old_traceid_list;
 
 		/* Different sinks, skip */
 		if (other_etmq->sink_id != etmq->sink_id)
 			continue;
+
+		pr_debug("CS ETM: sink match queue=%u other_queue=%u etmq=%p other_etmq=%p "
+			 "list=%p other_list=%p nr=%u other_nr=%u sink=0x%x\n",
+			 etmq->queue_nr, other_etmq->queue_nr, etmq, other_etmq,
+			 etmq->traceid_list, other_etmq->traceid_list,
+			 intlist__nr_entries(etmq->traceid_list),
+			 intlist__nr_entries(other_etmq->traceid_list), etmq->sink_id);
 
 		/* Already linked, skip */
 		if (other_etmq->traceid_list == etmq->traceid_list)
@@ -379,23 +432,44 @@ static int cs_etm__process_trace_id_v0_1(struct cs_etm_auxtrace *etm, int cpu,
 		/* At the point of first linking, this one should be empty */
 		if (!intlist__empty(etmq->traceid_list)) {
 			pr_err("CS_ETM: Can't link populated trace ID lists\n");
+			pr_err("CS ETM: link failure queue=%u other_queue=%u list=%p other_list=%p "
+			       "nr=%u other_nr=%u sink=0x%x\n",
+			       etmq->queue_nr, other_etmq->queue_nr,
+			       etmq->traceid_list, other_etmq->traceid_list,
+			       intlist__nr_entries(etmq->traceid_list),
+			       intlist__nr_entries(other_etmq->traceid_list), etmq->sink_id);
 			return -EINVAL;
 		}
 
+		old_traceid_list = etmq->traceid_list;
 		etmq->own_traceid_list = NULL;
 		intlist__delete(etmq->traceid_list);
 		etmq->traceid_list = other_etmq->traceid_list;
+
+		pr_debug("CS ETM: shared trace ID list queue=%u other_queue=%u etmq=%p "
+			 "other_etmq=%p old_list=%p new_list=%p nr=%u\n",
+			 etmq->queue_nr, other_etmq->queue_nr, etmq, other_etmq,
+			 old_traceid_list, etmq->traceid_list,
+			 intlist__nr_entries(etmq->traceid_list));
 		break;
 	}
 
-	cpu_data = get_cpu_data(etm, cpu);
 	ret = cs_etm__insert_trace_id_node(etmq, trace_id, cpu_data);
 	if (ret)
 		return ret;
 
 	ret = cs_etm__metadata_set_trace_id(trace_id, cpu_data);
-	if (ret)
+	if (ret) {
+		pr_err("CS ETM: failed to set metadata trace ID cpu=%d queue=%u "
+		       "trace_id=0x%x ret=%d\n",
+		       cpu, etmq->queue_nr, trace_id, ret);
 		return ret;
+	}
+
+	pr_debug("CS ETM: mapped HW_ID cpu=%d queue=%u trace_id=0x%x sink=0x%x "
+		 "list=%p nr=%u\n",
+		 cpu, etmq->queue_nr, trace_id, sink_id, etmq->traceid_list,
+		 intlist__nr_entries(etmq->traceid_list));
 
 	return 0;
 }
@@ -484,11 +558,16 @@ static int cs_etm__process_aux_output_hw_id(struct perf_session *session,
 	struct perf_sample sample;
 	struct evsel *evsel;
 	u64 hw_id;
-	int cpu, version, err;
+	int cpu, version, minor, err;
 
 	/* extract and parse the HW ID */
 	hw_id = event->aux_output_hw_id.hw_id;
+
+	pr_debug("CS ETM: event=%s hw_id=%#" PRIx64 "\n",
+		 perf_event__name(event->header.type), hw_id);
+
 	version = FIELD_GET(CS_AUX_HW_ID_MAJOR_VERSION_MASK, hw_id);
+	minor = FIELD_GET(CS_AUX_HW_ID_MINOR_VERSION_MASK, hw_id);
 
 	/* check that we can handle this version */
 	if (version > CS_AUX_HW_ID_MAJOR_VERSION) {
@@ -518,7 +597,14 @@ static int cs_etm__process_aux_output_hw_id(struct perf_session *session,
 		goto out;
 	}
 
-	if (FIELD_GET(CS_AUX_HW_ID_MINOR_VERSION_MASK, hw_id) == 0) {
+	pr_debug("CS ETM: HW_ID sample cpu=%d tid=%u hw_id=%#" PRIx64
+		 " major=%d minor=%d sink=0x%x trace_id=0x%x per_thread=%d\n",
+		 cpu, sample.tid, hw_id, version, minor,
+		 (u32)FIELD_GET(CS_AUX_HW_ID_SINK_ID_MASK, hw_id),
+		 (u8)FIELD_GET(CS_AUX_HW_ID_TRACE_ID_MASK, hw_id),
+		 etm->per_thread_decoding);
+
+	if (minor == 0) {
 		err = cs_etm__process_trace_id_v0(etm, cpu, hw_id);
 		goto out;
 	}
@@ -1207,6 +1293,8 @@ static int cs_etm__setup_queue(struct cs_etm_auxtrace *etm,
 	queue->cpu = queue_nr; /* Placeholder, may be reset to -1 in per-thread mode */
 	etmq->offset = 0;
 	etmq->sink_id = SINK_UNSET;
+
+	pr_debug("%s: etmq=%p queue_nr=%d\n", __func__, etmq, queue_nr);
 
 	return 0;
 }
@@ -2022,6 +2110,21 @@ static int cs_etm__get_data_block(struct cs_etm_queue *etmq)
 		ret = cs_etm__get_trace(etmq);
 		if (ret <= 0)
 			return ret;
+
+		pr_debug("CS ETM: reset decoder: etmq=%p decoder=%p\n",
+			 etmq, etmq->decoder);
+
+		if (!etmq->decoder) {
+			pr_err("CS ETM: missing decoder queue=%u etmq=%p format=%d "
+			       "sink=0x%x traceid_list=%p nr=%u buf_len=%zu "
+			       "offset=%#" PRIx64 "\n",
+			       etmq->queue_nr, etmq, etmq->format, etmq->sink_id,
+			       etmq->traceid_list,
+			       intlist__nr_entries(etmq->traceid_list),
+			       etmq->buf_len, etmq->offset);
+			return -EINVAL;
+		}
+
 		/*
 		 * We cannot assume consecutive blocks in the data file
 		 * are contiguous, reset the decoder to force re-sync.
@@ -3026,6 +3129,9 @@ static int cs_etm__queue_aux_fragment(struct perf_session *session, off_t file_o
 						   struct cs_etm_auxtrace,
 						   auxtrace);
 
+	pr_debug("CS ETM: AUX fragment: file offset=0x%lx size=%lx\n",
+		 file_offset, sz);
+
 	/*
 	 * There should be a PERF_RECORD_AUXTRACE event at the file_offset that we got
 	 * from looping through the auxtrace index.
@@ -3035,11 +3141,16 @@ static int cs_etm__queue_aux_fragment(struct perf_session *session, off_t file_o
 	if (err)
 		return err;
 	auxtrace_event = &auxtrace_event_union->auxtrace;
-	if (auxtrace_event->header.type != PERF_RECORD_AUXTRACE)
+	if (auxtrace_event->header.type != PERF_RECORD_AUXTRACE) {
+		pr_debug("CS ETM: AUX fragement: wrong header type=%d\n",
+			 auxtrace_event->header.type);
 		return -EINVAL;
+	}
 
 	if (auxtrace_event->header.size < sizeof(struct perf_record_auxtrace) ||
 		auxtrace_event->header.size != sz) {
+		pr_debug("CS ETM: AUX fragement: wrong header size=%d\n",
+			 auxtrace_event->header.size);
 		return -EINVAL;
 	}
 
@@ -3084,6 +3195,12 @@ static int cs_etm__queue_aux_fragment(struct perf_session *session, off_t file_o
 		aux_offset = aux_event->aux_offset;
 	}
 
+	pr_debug("CS ETM: aux_event range     : [%08llx..%08llx]\n",
+		 aux_offset, aux_offset + aux_size);
+	pr_debug("CS ETM: auxtrace_event range: [%08llx..%08llx]\n",
+		 auxtrace_event->offset,
+		 auxtrace_event->offset + auxtrace_event->size);
+
 	if (aux_offset >= auxtrace_event->offset &&
 	    aux_offset + aux_size <= auxtrace_event->offset + auxtrace_event->size) {
 		struct cs_etm_queue *etmq = etm->queues.queue_array[auxtrace_event->idx].priv;
@@ -3111,6 +3228,8 @@ static int cs_etm__queue_aux_fragment(struct perf_session *session, off_t file_o
 			return -EINVAL;
 		}
 		etmq->format = format;
+		pr_debug("CS ETM: Found format(etmq=%p): format=%d\n",
+			 etmq, etmq->format);
 		return 0;
 	}
 
@@ -3145,6 +3264,8 @@ static int cs_etm__queue_aux_records_cb(struct perf_session *session, union perf
 
 	if (event->header.size < sizeof(struct perf_record_aux))
 		return -EINVAL;
+
+	pr_debug("CS ETM: aux_records: aux_size=0x%llx\n", event->aux.aux_size);
 
 	/* Truncated Aux records can have 0 size and shouldn't result in anything being queued. */
 	if (!event->aux.aux_size)
@@ -3195,6 +3316,10 @@ static int cs_etm__queue_aux_records(struct perf_session *session)
 {
 	struct auxtrace_index *index = list_first_entry_or_null(&session->auxtrace_index,
 								struct auxtrace_index, list);
+
+	pr_debug("CS ETM: auxtrace index=%p index->nr=%zu\n",
+		 index, index ? index->nr : 0);
+
 	if (index && index->nr > 0)
 		return perf_session__peek_events(session, session->header.data_offset,
 						 session->header.data_size,
@@ -3281,8 +3406,18 @@ static int cs_etm__create_queue_decoders(struct cs_etm_queue *etmq)
 	struct cs_etm_trace_params  *t_params;
 	int decoders = intlist__nr_entries(etmq->traceid_list);
 
-	if (decoders == 0)
-		return 0;
+	pr_debug("CS ETM: creating queue decoder queue=%u etmq=%p decoders=%d "
+		 "format=%d sink=0x%x traceid_list=%p own=%p\n",
+		 etmq->queue_nr, etmq, decoders, etmq->format, etmq->sink_id,
+		 etmq->traceid_list, etmq->own_traceid_list);
+
+	if (decoders == 0) {
+		pr_err("CS ETM: no Trace ID mapping for non-empty queue=%u etmq=%p "
+		       "format=%d sink=0x%x traceid_list=%p own=%p decoder=%p\n",
+		       etmq->queue_nr, etmq, etmq->format, etmq->sink_id,
+		       etmq->traceid_list, etmq->own_traceid_list, etmq->decoder);
+		return -EINVAL;
+	}
 
 	/*
 	 * Each queue can only contain data from one CPU when unformatted, so only one decoder is
@@ -3312,6 +3447,11 @@ static int cs_etm__create_queue_decoders(struct cs_etm_queue *etmq)
 	if (!etmq->decoder)
 		goto out_free;
 
+	pr_debug("CS ETM: created queue decoder queue=%u etmq=%p decoder=%p "
+		 "traceid_list=%p nr=%u\n",
+		 etmq->queue_nr, etmq, etmq->decoder, etmq->traceid_list,
+		 intlist__nr_entries(etmq->traceid_list));
+
 	/*
 	 * Register a function to handle all memory accesses required by
 	 * the trace decoder library.
@@ -3338,7 +3478,16 @@ static int cs_etm__create_decoders(struct cs_etm_auxtrace *etm)
 	for (unsigned int i = 0; i < queues->nr_queues; i++) {
 		bool empty = list_empty(&queues->queue_array[i].head);
 		struct cs_etm_queue *etmq = queues->queue_array[i].priv;
+		unsigned int nr_entries = etmq && etmq->traceid_list ?
+					  intlist__nr_entries(etmq->traceid_list) : 0;
 		int ret;
+
+		pr_debug("CS ETM: iterating auxtrace queue index=%u etmq=%p empty=%d "
+			 "format=%d sink=0x%x traceid_list=%p nr=%u decoder=%p\n",
+			 i, etmq, empty, etmq ? etmq->format : UNSET,
+			 etmq ? etmq->sink_id : SINK_UNSET,
+			 etmq ? etmq->traceid_list : NULL, nr_entries,
+			 etmq ? etmq->decoder : NULL);
 
 		/*
 		 * Don't create decoders for empty queues, mainly because
