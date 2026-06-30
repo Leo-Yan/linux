@@ -171,6 +171,21 @@ struct trbe_drvdata {
 	struct platform_device *pdev;
 };
 
+/*
+ * Arm ARM (ARM DDI 0487 M.B), section D6.5.3 Trigger event, R_XRRWP states:
+ *
+ * "If a Trigger Event is generated when collection is not stopped and the
+ *  trigger mode is Stop on trigger, then all of the following occur:
+ *  - The Trace Buffer Unit initiates a trace unit flush of the trace unit.
+ *  - The TRB_TRIG event is generated."
+ *
+ * The TRBE might therefore continue writing trace data after the trigger event
+ * is generated. When Stop-on-trigger is used to protect unconsumed data after
+ * buffer wrap, reserve 4KiB of headroom in the trigger count so it is safe to
+ * complete flush without overwriting that data.
+ */
+#define TRBE_TRIGGER_STOP_HEADROOM	SZ_4K
+
 /* Compute the buffer next state */
 struct trbe_buf_next {
 	u64 head;
@@ -460,11 +475,15 @@ static u32 trbe_normal_trigger_count(struct perf_output_handle *handle,
 	 *                                      limit
 	 *
 	 *                              |>>>>>>>>
-	 * >>>>>>>>>>>>>>>>>>>>>|
-	 *   ` Trigger counter covers the writable region, rounded down
-	 *     to the hardware alignment.
+	 * >>>>>>>>>>>>>>>>>|---|
+	 *                    ` headroom
+	 *
+	 * Trigger counter covers the writable region, but leave headroom
+	 * to avoid overwrite risk caused by trace unit flush after
+	 * trigger event is generated.
 	 */
-	count = round_down(handle->size, cpudata->trbe_hw_align);
+	count = round_down(handle->size - TRBE_TRIGGER_STOP_HEADROOM,
+			   cpudata->trbe_hw_align);
 	if (count <= limit - head)
 		return 0;
 
