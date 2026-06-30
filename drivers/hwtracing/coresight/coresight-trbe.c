@@ -126,12 +126,14 @@ static int trbe_errata_cpucaps[] = {
  * @trbbaser		- Trace Buffer Base Register value
  * @trbptr		- Trace Buffer Write Pointer Register value
  * @trbsr		- Trace Buffer Status Register value
+ * @trbtrg		- Trace Buffer Trigger Counter Register
  */
 struct trbe_save_state {
 	u64 trblimitr;
 	u64 trbbaser;
 	u64 trbptr;
 	u64 trbsr;
+	u64 trbtrg;
 };
 
 /*
@@ -1485,6 +1487,7 @@ static int arm_trbe_save(struct coresight_device *csdev)
 	state->trbbaser = read_sysreg_s(SYS_TRBBASER_EL1);
 	state->trbptr = read_sysreg_s(SYS_TRBPTR_EL1);
 	state->trbsr = read_sysreg_s(SYS_TRBSR_EL1);
+	state->trbtrg = read_sysreg_s(SYS_TRBTRG_EL1);
 	return 0;
 }
 
@@ -1496,6 +1499,7 @@ static void arm_trbe_restore(struct coresight_device *csdev)
 	write_sysreg_s(state->trbbaser, SYS_TRBBASER_EL1);
 	write_sysreg_s(state->trbptr, SYS_TRBPTR_EL1);
 	write_sysreg_s(state->trbsr, SYS_TRBSR_EL1);
+	write_sysreg_s(state->trbtrg, SYS_TRBTRG_EL1);
 
 	if (!(state->trblimitr & TRBLIMITR_EL1_E)) {
 		write_sysreg_s(state->trblimitr, SYS_TRBLIMITR_EL1);
