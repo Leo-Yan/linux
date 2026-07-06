@@ -107,6 +107,7 @@ struct cs_etm_queue {
 	struct cs_etm_decoder *decoder;
 	struct auxtrace_buffer *buffer;
 	unsigned int queue_nr;
+	int raw_trace_cpu;
 	u8 pending_timestamp_chan_id;
 	enum cs_etm_format format;
 	u64 offset;
@@ -148,6 +149,7 @@ static int cs_etm__metadata_set_trace_id(u8 trace_chan_id, u64 *cpu_metadata);
 #define TO_QUEUE_NR(cs_queue_nr) (cs_queue_nr >> 16)
 #define TO_TRACE_CHAN_ID(cs_queue_nr) (cs_queue_nr & 0x0000ffff)
 #define SINK_UNSET ((u32) -1)
+#define CS_ETM_DUMMY_SINK_ID(queue_nr) (SINK_UNSET - (queue_nr) - 1)
 
 static u32 cs_etm__get_v7_protocol_version(u32 etmidr)
 {
@@ -420,6 +422,62 @@ static int cs_etm__process_trace_id_v0_1(struct cs_etm_auxtrace *etm, int cpu,
 	ret = cs_etm__metadata_set_trace_id(trace_id, cpu_data);
 	if (ret)
 		return ret;
+
+	return 0;
+}
+
+static u64 cs_etm__make_aux_hw_id(u8 trace_id, u32 sink_id)
+{
+	u64 hw_id;
+
+	hw_id = FIELD_PREP(CS_AUX_HW_ID_MAJOR_VERSION_MASK,
+			   CS_AUX_HW_ID_MAJOR_VERSION);
+	hw_id |= FIELD_PREP(CS_AUX_HW_ID_MINOR_VERSION_MASK,
+			    CS_AUX_HW_ID_MINOR_VERSION);
+	hw_id |= FIELD_PREP(CS_AUX_HW_ID_TRACE_ID_MASK, trace_id);
+	hw_id |= FIELD_PREP(CS_AUX_HW_ID_SINK_ID_MASK, sink_id);
+
+	return hw_id;
+}
+
+static int cs_etm__synth_unformatted_trace_ids(struct cs_etm_auxtrace *etm)
+{
+	struct auxtrace_queues *queues = &etm->queues;
+
+	for (unsigned int i = 0; i < queues->nr_queues; i++) {
+		struct auxtrace_queue *queue = &queues->queue_array[i];
+		struct cs_etm_queue *etmq = queue->priv;
+		u64 *cpu_data;
+		u64 hw_id;
+		u8 trace_id;
+		int cpu;
+		int ret;
+
+		if (list_empty(&queue->head) || !etmq || etmq->format != UNFORMATTED)
+			continue;
+
+		if (!intlist__empty(etmq->traceid_list))
+			continue;
+
+		cpu = queue->cpu == -1 ? etmq->raw_trace_cpu : queue->cpu;
+		if (cpu == -1) {
+			pr_debug("CS_ETM: no CPU for raw trace queue %u\n", i);
+			continue;
+		}
+
+		cpu_data = get_cpu_data(etm, cpu);
+		if (!cpu_data)
+			return -EINVAL;
+
+		ret = cs_etm__metadata_get_trace_id(&trace_id, cpu_data);
+		if (ret)
+			return ret;
+
+		hw_id = cs_etm__make_aux_hw_id(trace_id, CS_ETM_DUMMY_SINK_ID(i));
+		ret = cs_etm__process_trace_id_v0_1(etm, cpu, hw_id);
+		if (ret)
+			return ret;
+	}
 
 	return 0;
 }
@@ -1231,6 +1289,7 @@ static int cs_etm__setup_queue(struct cs_etm_auxtrace *etm,
 	queue->cpu = queue_nr; /* Placeholder, may be reset to -1 in per-thread mode */
 	etmq->offset = 0;
 	etmq->sink_id = SINK_UNSET;
+	etmq->raw_trace_cpu = -1;
 
 	return 0;
 }
@@ -3128,6 +3187,8 @@ static int cs_etm__queue_aux_fragment(struct perf_session *session, off_t file_o
 			return -EINVAL;
 		}
 		etmq->format = format;
+		if (format == UNFORMATTED && etmq->raw_trace_cpu == -1)
+			etmq->raw_trace_cpu = sample->cpu;
 		return 0;
 	}
 
@@ -3570,6 +3631,10 @@ int cs_etm__process_auxtrace_info_full(union perf_event *event,
 		if (err)
 			goto err_free_queues;
 	}
+
+	err = cs_etm__synth_unformatted_trace_ids(etm);
+	if (err)
+		goto err_free_queues;
 
 	err = cs_etm__create_decoders(etm);
 	if (err)
