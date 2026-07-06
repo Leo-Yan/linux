@@ -341,31 +341,15 @@ static int cs_etm__process_trace_id_v0(struct cs_etm_auxtrace *etm, int cpu,
 	return cs_etm__metadata_set_trace_id(trace_chan_id, cpu_data);
 }
 
-static int cs_etm__process_trace_id_v0_1(struct cs_etm_auxtrace *etm, int cpu,
-					 u64 hw_id)
+static int cs_etm__link_sink_traceid_maps(struct cs_etm_queue *etmq)
 {
-	struct cs_etm_queue *etmq = cs_etm__get_queue(etm, cpu);
-	int ret;
-	u64 *cpu_data;
-	u32 sink_id = FIELD_GET(CS_AUX_HW_ID_SINK_ID_MASK, hw_id);
-	u8 trace_id = FIELD_GET(CS_AUX_HW_ID_TRACE_ID_MASK, hw_id);
+	struct cs_etm_auxtrace *etm = etmq->etm;
 
-	/*
-	 * Check sink id hasn't changed in per-cpu mode. In per-thread mode,
-	 * let it pass for now until an actual overlapping trace ID is hit. In
-	 * most cases IDs won't overlap even if the sink changes.
-	 */
-	if (!etmq->etm->per_thread_decoding && etmq->sink_id != SINK_UNSET &&
-	    etmq->sink_id != sink_id) {
-		pr_err("CS_ETM: mismatch between sink IDs\n");
-		return -EINVAL;
-	}
-
-	etmq->sink_id = sink_id;
-
-	/* Find which other queues use this sink and link their ID maps */
 	for (unsigned int i = 0; i < etm->queues.nr_queues; ++i) {
 		struct cs_etm_queue *other_etmq = etm->queues.queue_array[i].priv;
+
+		if (!other_etmq)
+			continue;
 
 		/* Different sinks, skip */
 		if (other_etmq->sink_id != etmq->sink_id)
@@ -387,7 +371,48 @@ static int cs_etm__process_trace_id_v0_1(struct cs_etm_auxtrace *etm, int cpu,
 		break;
 	}
 
+	return 0;
+}
+
+static int cs_etm__process_trace_id_v0_1(struct cs_etm_auxtrace *etm, int cpu,
+					 u64 hw_id)
+{
+	struct cs_etm_queue *etmq = cs_etm__get_queue(etm, cpu);
+	int ret;
+	u64 *cpu_data;
+	u32 sink_id = FIELD_GET(CS_AUX_HW_ID_SINK_ID_MASK, hw_id);
+	u8 trace_id = FIELD_GET(CS_AUX_HW_ID_TRACE_ID_MASK, hw_id);
+
+	if (!etmq)
+		return -EINVAL;
+
+	/*
+	 * Check sink id hasn't changed in per-cpu mode. In per-thread mode,
+	 * let it pass for now until an actual overlapping trace ID is hit. In
+	 * most cases IDs won't overlap even if the sink changes.
+	 */
+	if (!etmq->etm->per_thread_decoding && etmq->sink_id != SINK_UNSET &&
+	    etmq->sink_id != sink_id) {
+		pr_err("CS_ETM: mismatch between sink IDs\n");
+		return -EINVAL;
+	}
+
+	etmq->sink_id = sink_id;
+
+	/*
+	 * Unformatted trace queues contain data from only one CPU, so keep the
+	 * ID map queue-local even if another queue reports the same sink ID.
+	 */
+	if (etmq->format != UNFORMATTED) {
+		ret = cs_etm__link_sink_traceid_maps(etmq);
+		if (ret)
+			return ret;
+	}
+
 	cpu_data = get_cpu_data(etm, cpu);
+	if (!cpu_data)
+		return -EINVAL;
+
 	ret = cs_etm__insert_trace_id_node(etmq, trace_id, cpu_data);
 	if (ret)
 		return ret;
