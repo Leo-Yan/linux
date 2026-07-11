@@ -17,9 +17,11 @@
 
 #include <asm/barrier.h>
 #include <asm/cpufeature.h>
+#include <linux/iopoll.h>
 #include <linux/kvm_host.h>
 #include <linux/vmalloc.h>
 
+#include "coresight-etm4x.h"
 #include "coresight-self-hosted-trace.h"
 #include "coresight-trbe.h"
 
@@ -1123,13 +1125,70 @@ static void trbe_handle_spurious(struct perf_output_handle *handle)
 	set_trbe_enabled(buf->cpudata, trblimitr);
 }
 
+static u64 read_sys_trcstatr(void)
+{
+	/* Context synchronization for each polling */
+	isb();
+	return read_sysreg_s(SYS_TRCSTATR);
+}
+
+static void arm_trbe_start_tracer(u64 trcprgctlr)
+{
+	u64 val;
+
+	/* Enable tracer with saved trcprgctlr */
+	write_sysreg_s(trcprgctlr, SYS_TRCPRGCTLR);
+
+	/* Wait for TRCSTATR.IDLE to go down to 0 */
+	if (read_poll_timeout_atomic(read_sys_trcstatr, val,
+				     !(val & BIT(TRCSTATR_IDLE_BIT)),
+				     1,		/* delay_us */
+				     10,	/* timeout_us */
+				     false))	/* delay_before_read */
+		pr_err("TRBE: timeout for TRCSTATR IDLE\n");
+
+	/* Context synchronization after programming the tracer */
+	isb();
+}
+
+static void arm_trbe_stop_tracer(u64 *trcprgctlr)
+{
+	u64 val;
+
+	/* Disable tracer and save trcprgctlr */
+	*trcprgctlr = read_sysreg_s(SYS_TRCPRGCTLR);
+	write_sysreg_s(*trcprgctlr & ~BIT(0), SYS_TRCPRGCTLR);
+
+	/* Wait for TRCSTATR.PMSTABLE to go to 1 */
+	if (read_poll_timeout_atomic(read_sys_trcstatr, val,
+				     val & BIT(TRCSTATR_PMSTABLE_BIT),
+				     1,		/* delay_us */
+				     10,	/* timeout_us */
+				     false))	/* delay_before_read */
+		pr_err("TRBE: timeout for TRCSTATR PMSTABLE\n");
+
+	/* Context synchronization after programming the tracer */
+	isb();
+}
+
 static int trbe_handle_overflow(struct perf_output_handle *handle,
-				enum trbe_fault_action act)
+				enum trbe_fault_action act,
+				bool is_buffer_stopped)
 {
 	struct perf_event *event = handle->event;
 	struct trbe_buf *buf = etm_perf_sink_config(handle);
 	unsigned long size;
 	struct etm_event_data *event_data;
+	u64 trcprgctlr = 0;
+	int ret;
+
+	/*
+	 * Since the trace buffer has stopped, disable and re-enable the
+	 * tracer to generate ASYNC packets. This allows the decoder to
+	 * recognize the discontinuity in the trace stream.
+	 */
+	if (is_buffer_stopped)
+		arm_trbe_stop_tracer(&trcprgctlr);
 
 	/*
 	 * Clear the status. No context synchronization is required here,
@@ -1156,7 +1215,14 @@ static int trbe_handle_overflow(struct perf_output_handle *handle,
 		return -EINVAL;
 	}
 
-	return __arm_trbe_enable(buf, handle);
+	ret = __arm_trbe_enable(buf, handle);
+	if (ret)
+		return ret;
+
+	if (is_buffer_stopped)
+		arm_trbe_start_tracer(trcprgctlr);
+
+	return 0;
 }
 
 static bool is_perf_trbe(struct perf_output_handle *handle)
@@ -1241,7 +1307,8 @@ static irqreturn_t arm_trbe_irq_handler(int irq, void *dev)
 	act = trbe_get_fault_act(handle, status);
 	switch (act) {
 	case TRBE_FAULT_ACT_WRAP:
-		truncated = !!trbe_handle_overflow(handle, act);
+		truncated = !!trbe_handle_overflow(handle, act,
+						   !is_trbe_running(status));
 		break;
 	case TRBE_FAULT_ACT_SPURIOUS:
 		trbe_handle_spurious(handle);
