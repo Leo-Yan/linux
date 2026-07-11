@@ -17,9 +17,11 @@
 
 #include <asm/barrier.h>
 #include <asm/cpufeature.h>
+#include <linux/iopoll.h>
 #include <linux/kvm_host.h>
 #include <linux/vmalloc.h>
 
+#include "coresight-etm4x.h"
 #include "coresight-self-hosted-trace.h"
 #include "coresight-trbe.h"
 
@@ -1132,14 +1134,106 @@ static void trbe_handle_spurious(struct trbe_cpudata *cpudata)
 	set_trbe_enabled(cpudata, trblimitr);
 }
 
+static u64 read_sys_trcstatr(void)
+{
+	/* Context synchronization for each polling */
+	isb();
+	return read_sysreg_s(SYS_TRCSTATR);
+}
+
+static int arm_trbe_start_tracer(u64 trcprgctlr)
+{
+	u64 val;
+
+	/* A pending IRQ after AUX pause? */
+	if (!(trcprgctlr & BIT(0)))
+		return 0;
+
+	/* Restore the saved tracer state */
+	write_sysreg_s(trcprgctlr, SYS_TRCPRGCTLR);
+
+	/*
+	 * Context synchronization between writing to the TRCPRGCTLR and
+	 * reading the TRCSTATR.
+	 */
+	isb();
+
+	/* Wait for TRCSTATR.IDLE to go down to 0 */
+	if (read_poll_timeout_atomic(read_sys_trcstatr, val,
+				     !(val & BIT(TRCSTATR_IDLE_BIT)),
+				     1,		/* delay_us */
+				     TIMEOUT_US, /* timeout_us */
+				     false)) {	/* delay_before_read */
+		pr_err("TRBE: timeout for TRCSTATR IDLE\n");
+		return -ETIME;
+	}
+
+	/* Context synchronization after programming the tracer */
+	isb();
+
+	return 0;
+}
+
+static int arm_trbe_stop_tracer(u64 *trcprgctlr)
+{
+	u64 val;
+
+	/* Disable tracer and save trcprgctlr */
+	*trcprgctlr = read_sysreg_s(SYS_TRCPRGCTLR);
+
+	/* No need to stop tracer again */
+	if (!(*trcprgctlr & BIT(0)))
+		return 0;
+
+	write_sysreg_s(*trcprgctlr & ~BIT(0), SYS_TRCPRGCTLR);
+
+	/*
+	 * Context synchronization between writing to the TRCPRGCTLR and
+	 * reading the TRCSTATR.
+	 */
+	isb();
+
+	/*
+	 * PMSTABLE alone does not permit re-enabling the tracer.
+	 * Wait for TRCSTATR.IDLE to go to 1.
+	 */
+	if (read_poll_timeout_atomic(read_sys_trcstatr, val,
+				     val & BIT(TRCSTATR_IDLE_BIT),
+				     1,
+				     TIMEOUT_US,
+				     false)) {
+		pr_err("TRBE: timeout for TRCSTATR IDLE=1\n");
+		return -ETIME;
+	}
+
+	/* Context synchronization after programming the tracer */
+	isb();
+
+	return 0;
+}
+
 static int trbe_handle_overflow(struct trbe_cpudata *cpudata,
-				enum trbe_fault_action act)
+				enum trbe_fault_action act,
+				bool is_buffer_stopped)
 {
 	struct perf_output_handle *handle = cpudata->handle;
 	struct perf_event *event = handle->event;
 	struct trbe_buf *buf = etm_perf_sink_config(handle);
 	unsigned long size;
 	struct etm_event_data *event_data;
+	u64 trcprgctlr = 0;
+	int ret = 0;
+
+	/*
+	 * Since the trace buffer has stopped, disable and re-enable the
+	 * tracer to generate ASYNC packets. This allows the decoder to
+	 * recognize the discontinuity in the trace stream.
+	 */
+	if (is_buffer_stopped) {
+		ret = arm_trbe_stop_tracer(&trcprgctlr);
+		if (ret)
+			goto truncate_event;
+	}
 
 	/*
 	 * Clear the status. No context synchronization is required here,
@@ -1172,11 +1266,27 @@ static int trbe_handle_overflow(struct trbe_cpudata *cpudata,
 	 */
 	buf = etm_perf_sink_config(handle);
 	if (!buf || buf->cpudata != cpudata) {
-		trbe_truncate_event(handle);
-		return -EINVAL;
+		ret = -EINVAL;
+		goto truncate_event;
 	}
 
-	return __arm_trbe_enable(buf, handle);
+	ret = __arm_trbe_enable(buf, handle);
+	if (ret)
+		return ret;
+
+	if (is_buffer_stopped) {
+		ret = arm_trbe_start_tracer(trcprgctlr);
+		if (ret) {
+			trbe_drain_and_disable_local(cpudata);
+			goto truncate_event;
+		}
+	}
+
+	return 0;
+
+truncate_event:
+	trbe_truncate_event(handle);
+	return ret;
 }
 
 static bool is_perf_trbe(struct perf_output_handle *handle)
@@ -1267,7 +1377,8 @@ static irqreturn_t arm_trbe_irq_handler(int irq, void *dev)
 	act = trbe_get_fault_act(handle, status);
 	switch (act) {
 	case TRBE_FAULT_ACT_WRAP:
-		truncated = !!trbe_handle_overflow(cpudata, act);
+		truncated = !!trbe_handle_overflow(cpudata, act,
+						   !is_trbe_running(status));
 		break;
 	case TRBE_FAULT_ACT_SPURIOUS:
 		trbe_handle_spurious(cpudata);
