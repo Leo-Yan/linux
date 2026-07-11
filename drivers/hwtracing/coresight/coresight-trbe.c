@@ -1190,14 +1190,24 @@ static bool is_perf_trbe(struct perf_output_handle *handle)
 	return true;
 }
 
-static u64 cpu_prohibit_trace(void)
+static u64 arm_trbe_prohibit_trace(void)
 {
 	u64 trfcr = read_trfcr();
 
 	/* Prohibit tracing at EL0 & the kernel EL */
 	write_trfcr(trfcr & ~(TRFCR_EL1_ExTRE | TRFCR_EL1_E0TRE));
+
+	/* Ensure the program-flow trace is flushed */
+	trbe_drain_buffer();
+
 	/* Return the original value of the TRFCR */
 	return trfcr;
+}
+
+static void arm_trbe_allow_trace(u64 trfcr)
+{
+	/* Allow tracing at EL0 & the kernel EL */
+	write_trfcr(trfcr);
 }
 
 static irqreturn_t arm_trbe_irq_handler(int irq, void *dev)
@@ -1206,9 +1216,9 @@ static irqreturn_t arm_trbe_irq_handler(int irq, void *dev)
 	struct perf_output_handle *handle = *handle_ptr;
 	struct trbe_buf *buf;
 	enum trbe_fault_action act;
-	u64 status;
 	bool truncated = false;
-	u64 trfcr;
+	u64 status, trfcr;
+	irqreturn_t ret;
 
 	if (WARN_ON_ONCE(!handle) || !perf_get_aux(handle))
 		return IRQ_NONE;
@@ -1216,23 +1226,26 @@ static irqreturn_t arm_trbe_irq_handler(int irq, void *dev)
 	if (!is_perf_trbe(handle))
 		return IRQ_NONE;
 
+	/* Prohibit the CPU from tracing before we disable the TRBE */
+	trfcr = arm_trbe_prohibit_trace();
+
 	/* Reads to TRBSR_EL1 is fine when TRBE is active */
 	status = read_sysreg_s(SYS_TRBSR_EL1);
 	/*
 	 * If the pending IRQ was handled by update_buffer callback
 	 * we have nothing to do here.
 	 */
-	if (!is_trbe_irq(status))
-		return IRQ_NONE;
+	if (!is_trbe_irq(status)) {
+		ret = IRQ_NONE;
+		goto out;
+	}
 
-	/* Prohibit the CPU from tracing before we disable the TRBE */
-	trfcr = cpu_prohibit_trace();
 	/*
 	 * Ensure the trace is visible to the CPUs and
 	 * any external aborts have been resolved.
 	 */
 	buf = etm_perf_sink_config(handle);
-	trbe_drain_and_disable_local(buf->cpudata);
+	set_trbe_disabled(buf->cpudata);
 
 	act = trbe_get_fault_act(handle, status);
 	switch (act) {
@@ -1255,12 +1268,15 @@ static irqreturn_t arm_trbe_irq_handler(int irq, void *dev)
 	 * Otherwise, restore the trace filter controls to
 	 * allow the tracing.
 	 */
-	if (truncated)
+	if (truncated) {
 		irq_work_run();
-	else
-		write_trfcr(trfcr);
+		return IRQ_HANDLED;
+	}
 
-	return IRQ_HANDLED;
+	ret = IRQ_HANDLED;
+out:
+	arm_trbe_allow_trace(trfcr);
+	return ret;
 }
 
 static int arm_trbe_save(struct coresight_device *csdev)
