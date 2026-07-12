@@ -1486,6 +1486,16 @@ cs_etm__get_trace(struct cs_etm_queue *etmq)
 			   (old_buffer->aux_flags & PERF_AUX_FLAG_COLLISION)))
 		etmq->reset_decoder = true;
 
+	/*
+	 * Unknown or different CPUs cannot establish per-thread continuity.
+	 * Internally split buffers still belong to the same AUX fragment.
+	 */
+	if (etmq->etm->per_thread_decoding && old_buffer &&
+	    !aux_buffer->consecutive &&
+	    (old_buffer->cpu.cpu == -1 || aux_buffer->cpu.cpu == -1 ||
+	     old_buffer->cpu.cpu != aux_buffer->cpu.cpu))
+		etmq->reset_decoder = true;
+
 	return 0;
 }
 
@@ -3251,9 +3261,14 @@ static int cs_etm__queue_aux_fragment(struct perf_session *session, off_t file_o
 	if (aux_offset >= auxtrace_event->offset &&
 	    aux_offset + aux_size <= auxtrace_event->offset + auxtrace_event->size) {
 		struct cs_etm_queue *etmq = cs_etm__get_queue(etm, auxtrace_event->cpu);
+		struct auxtrace_buffer *pos;
+		struct list_head *head;
 
 		if (!etmq)
 			return -EINVAL;
+
+		head = &etm->queues.queue_array[etmq->queue_nr].head;
+		pos = list_last_entry_or_null(head, struct auxtrace_buffer, list);
 
 		/*
 		 * If this AUX event was inside this buffer somewhere, create a new auxtrace event
@@ -3272,8 +3287,21 @@ static int cs_etm__queue_aux_fragment(struct perf_session *session, off_t file_o
 		if (err)
 			return err;
 
-		if (buffer)
+		if (buffer) {
 			buffer->aux_flags = aux_event->flags;
+
+			/*
+			 * Preserve queue-time CPU filtering and tag every split
+			 * piece added after the previous tail, up to the returned
+			 * buffer, for migration detection.
+			 */
+			pos = list_prepare_entry(pos, head, list);
+			list_for_each_entry_continue(pos, head, list) {
+				pos->cpu.cpu = sample->cpu;
+				if (pos == buffer)
+					break;
+			}
+		}
 
 		format = (aux_event->flags & PERF_AUX_FLAG_CORESIGHT_FORMAT_RAW) ?
 				UNFORMATTED : FORMATTED;
