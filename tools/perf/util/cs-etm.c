@@ -136,6 +136,9 @@ struct cs_etm_queue {
 	 */
 	struct intlist *own_traceid_list;
 	u32 sink_id;
+
+	/* Reset decoder before processing the fetched data block. */
+	bool reset_decoder;
 };
 
 static int cs_etm__process_timestamped_queues(struct cs_etm_auxtrace *etm);
@@ -1436,6 +1439,13 @@ cs_etm__get_trace(struct cs_etm_queue *etmq)
 	struct auxtrace_buffer *old_buffer = aux_buffer;
 	struct auxtrace_queue *queue;
 
+	/*
+	 * Clear the reset request for the consumed block. Empty buffers have
+	 * no decoded bytes, so preserve requests deferred through them.
+	 */
+	if (etmq->buf_used)
+		etmq->reset_decoder = false;
+
 	queue = &etmq->etm->queues.queue_array[etmq->queue_nr];
 
 	aux_buffer = auxtrace_buffer__next(queue, aux_buffer);
@@ -1467,6 +1477,15 @@ cs_etm__get_trace(struct cs_etm_queue *etmq)
 	etmq->buf_used = 0;
 	etmq->buf_len = aux_buffer->size;
 	etmq->buf = aux_buffer->data;
+
+	/*
+	 * A collision requires a reset after its fragment. Without AUX flags,
+	 * reset between all blocks.
+	 */
+	if (old_buffer && (!etmq->etm->data_queued ||
+			   (old_buffer->aux_flags & PERF_AUX_FLAG_COLLISION)))
+		etmq->reset_decoder = true;
+
 	return 0;
 }
 
@@ -2162,17 +2181,15 @@ static int cs_etm__get_data_block(struct cs_etm_queue *etmq)
 	if (!etmq->buf_len)
 		return 0;
 
-	/*
-	 * We cannot assume consecutive blocks in the data file
-	 * are contiguous, reset the decoder to force re-sync.
-	 */
-	ret = cs_etm_decoder__reset(etmq->decoder);
-	if (ret)
-		return ret;
+	if (etmq->reset_decoder) {
+		ret = cs_etm_decoder__reset(etmq->decoder);
+		if (ret)
+			return ret;
+	}
 
 	/*
-	 * Since the decoder is reset, this causes a global trace
-	 * discontinuity. Flush all thread stacks.
+	 * AUX records do not distinguish buffer maintenance from a source
+	 * restart. Flush all thread stacks before sampling the new block.
 	 */
 	cs_etm__flush_all_stack(etmq);
 
@@ -3154,9 +3171,8 @@ static u64 *cs_etm__create_meta_blk(u64 *buff_in, int *buff_in_offset,
  * file_offset.
  *
  * Normally, whole auxtrace buffers would be added to the queue. But we
- * want to reset the decoder for every PERF_RECORD_AUX event, and the decoder
- * is reset across each buffer, so splitting the buffers up in advance has
- * the same effect.
+ * want to check every PERF_RECORD_AUX event to decide if need to reset
+ * decoder across each buffer, so splitting the buffers up in advance.
  */
 static int cs_etm__queue_aux_fragment(struct perf_session *session, off_t file_offset, size_t sz,
 				      struct perf_record_aux *aux_event, struct perf_sample *sample)
@@ -3168,6 +3184,7 @@ static int cs_etm__queue_aux_fragment(struct perf_session *session, off_t file_o
 	union perf_event auxtrace_fragment;
 	__u64 aux_offset, aux_size;
 	enum cs_etm_format format;
+	struct auxtrace_buffer *buffer = NULL;
 
 	struct cs_etm_auxtrace *etm = container_of(session->auxtrace,
 						   struct cs_etm_auxtrace,
@@ -3251,9 +3268,12 @@ static int cs_etm__queue_aux_fragment(struct perf_session *session, off_t file_o
 		pr_debug3("CS ETM: Queue buffer size: %#"PRI_lx64" offset: %#"PRI_lx64
 			  " tid: %d cpu: %d\n", aux_size, aux_offset, sample->tid, sample->cpu);
 		err = auxtrace_queues__add_event(&etm->queues, session, &auxtrace_fragment,
-						 file_offset, NULL);
+						 file_offset, &buffer);
 		if (err)
 			return err;
+
+		if (buffer)
+			buffer->aux_flags = aux_event->flags;
 
 		format = (aux_event->flags & PERF_AUX_FLAG_CORESIGHT_FORMAT_RAW) ?
 				UNFORMATTED : FORMATTED;
