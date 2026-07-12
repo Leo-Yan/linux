@@ -123,6 +123,9 @@ struct cs_etm_queue {
 	 */
 	struct intlist *own_traceid_list;
 	u32 sink_id;
+
+	/* Reset decoder for fetched data block */
+	bool reset_decoder;
 };
 
 static int cs_etm__process_timestamped_queues(struct cs_etm_auxtrace *etm);
@@ -2021,13 +2024,32 @@ static int cs_etm__get_data_block(struct cs_etm_queue *etmq)
 		ret = cs_etm__get_trace(etmq);
 		if (ret <= 0)
 			return ret;
+
+		if (etmq->reset_decoder) {
+			ret = cs_etm_decoder__reset(etmq->decoder);
+			if (ret) {
+				etmq->reset_decoder = false;
+				return ret;
+			}
+		}
+
 		/*
-		 * We cannot assume consecutive blocks in the data file
-		 * are contiguous, reset the decoder to force re-sync.
+		 * Always reset decoder if not data queued as the AUX flag
+		 * is not available.
 		 */
-		ret = cs_etm_decoder__reset(etmq->decoder);
-		if (ret)
-			return ret;
+		if (!etmq->etm->data_queued) {
+			etmq->reset_decoder = true;
+		} else {
+			/*
+			 * TRBE driver reports COLLISION when the trace buffer
+			 * stops without restarting the ETE, so it is absent
+			 * ASYNC packets in trace stream for a discontinuity.
+			 * Reset decoder so decoder can use a new context for
+			 * the next block.
+			 */
+			etmq->reset_decoder =
+				etmq->buffer->aux_flags & PERF_AUX_FLAG_COLLISION;
+		}
 	}
 
 	return etmq->buf_len;
@@ -2998,9 +3020,8 @@ static u64 *cs_etm__create_meta_blk(u64 *buff_in, int *buff_in_offset,
  * file_offset.
  *
  * Normally, whole auxtrace buffers would be added to the queue. But we
- * want to reset the decoder for every PERF_RECORD_AUX event, and the decoder
- * is reset across each buffer, so splitting the buffers up in advance has
- * the same effect.
+ * want to check every PERF_RECORD_AUX event to decide if need to reset
+ * decoder across each buffer, so splitting the buffers up in advance.
  */
 static int cs_etm__queue_aux_fragment(struct perf_session *session, off_t file_offset, size_t sz,
 				      struct perf_record_aux *aux_event, struct perf_sample *sample)
@@ -3012,6 +3033,7 @@ static int cs_etm__queue_aux_fragment(struct perf_session *session, off_t file_o
 	union perf_event auxtrace_fragment;
 	__u64 aux_offset, aux_size;
 	enum cs_etm_format format;
+	struct auxtrace_buffer *buffer = NULL;
 
 	struct cs_etm_auxtrace *etm = container_of(session->auxtrace,
 						   struct cs_etm_auxtrace,
@@ -3092,9 +3114,12 @@ static int cs_etm__queue_aux_fragment(struct perf_session *session, off_t file_o
 		pr_debug3("CS ETM: Queue buffer size: %#"PRI_lx64" offset: %#"PRI_lx64
 			  " tid: %d cpu: %d\n", aux_size, aux_offset, sample->tid, sample->cpu);
 		err = auxtrace_queues__add_event(&etm->queues, session, &auxtrace_fragment,
-						 file_offset, NULL);
+						 file_offset, &buffer);
 		if (err)
 			return err;
+
+		if (buffer)
+			buffer->aux_flags = aux_event->flags;
 
 		format = (aux_event->flags & PERF_AUX_FLAG_CORESIGHT_FORMAT_RAW) ?
 				UNFORMATTED : FORMATTED;
