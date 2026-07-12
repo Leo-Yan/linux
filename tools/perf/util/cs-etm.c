@@ -2151,21 +2151,38 @@ static void cs_etm__flush_all_stack(struct cs_etm_queue *etmq)
  */
 static int cs_etm__get_data_block(struct cs_etm_queue *etmq)
 {
+	int prev_cpu = -1, next_cpu = -1;
+	bool cpu_changed = false;
 	int ret;
 
 	/* The current block is not finished */
 	if (etmq->buf_len)
 		return 1;
 
+	if (etmq->buffer)
+		prev_cpu = etmq->buffer->cpu.cpu;
+
 	ret = cs_etm__get_trace(etmq);
 	if (ret < 0)
 		return ret;
+
+	if (etmq->buffer)
+		next_cpu = etmq->buffer->cpu.cpu;
 
 	/* No more buffer to read */
 	if (!etmq->buf_len)
 		return 0;
 
-	if (etmq->reset_decoder) {
+	/*
+	 * For per-thread mode, reset the decoder when a task is
+	 * migrated within CPUs.
+	 */
+	if (etmq->etm->per_thread_decoding &&
+		prev_cpu != -1 && next_cpu != -1 &&
+		prev_cpu != next_cpu)
+		cpu_changed = true;
+
+	if (etmq->reset_decoder || cpu_changed) {
 		ret = cs_etm_decoder__reset(etmq->decoder);
 		if (ret)
 			return ret;
@@ -3275,8 +3292,13 @@ static int cs_etm__queue_aux_fragment(struct perf_session *session, off_t file_o
 		if (err)
 			return err;
 
-		if (buffer)
+		if (buffer) {
 			buffer->aux_flags = aux_event->flags;
+
+			/* CPU info will be used to decide resetting decoder. */
+			if (etm->per_thread_decoding)
+				buffer->cpu.cpu = sample->cpu;
+		}
 
 		format = (aux_event->flags & PERF_AUX_FLAG_CORESIGHT_FORMAT_RAW) ?
 				UNFORMATTED : FORMATTED;
