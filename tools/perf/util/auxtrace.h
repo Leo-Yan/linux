@@ -243,6 +243,7 @@ struct auxtrace {
  * @buffer_nr: used to number each buffer
  * @use_size: implementation actually only uses this number of bytes
  * @use_data: implementation actually only uses data starting at this address
+ * @aux_flags: AUX event flags
  */
 struct auxtrace_buffer {
 	struct list_head	list;
@@ -261,6 +262,7 @@ struct auxtrace_buffer {
 	u64			buffer_nr;
 	size_t			use_size;
 	void			*use_data;
+	u64			aux_flags;
 };
 
 /**
