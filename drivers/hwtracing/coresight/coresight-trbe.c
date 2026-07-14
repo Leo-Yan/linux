@@ -1143,11 +1143,17 @@ static irqreturn_t arm_trbe_irq_handler(int irq, void *dev)
 {
 	struct perf_output_handle **handle_ptr = dev;
 	struct perf_output_handle *handle = *handle_ptr;
-	struct trbe_buf *buf = etm_perf_sink_config(handle);
+	struct trbe_buf *buf;
 	enum trbe_fault_action act;
 	u64 status;
 	bool truncated = false;
 	u64 trfcr;
+
+	if (WARN_ON_ONCE(!handle) || !perf_get_aux(handle))
+		return IRQ_NONE;
+
+	if (!is_perf_trbe(handle))
+		return IRQ_NONE;
 
 	/* Reads to TRBSR_EL1 is fine when TRBE is active */
 	status = read_sysreg_s(SYS_TRBSR_EL1);
@@ -1164,15 +1170,10 @@ static irqreturn_t arm_trbe_irq_handler(int irq, void *dev)
 	 * Ensure the trace is visible to the CPUs and
 	 * any external aborts have been resolved.
 	 */
+	buf = etm_perf_sink_config(handle);
 	trbe_drain_and_disable_local(buf->cpudata);
 	clr_trbe_irq();
 	isb();
-
-	if (WARN_ON_ONCE(!handle) || !perf_get_aux(handle))
-		return IRQ_NONE;
-
-	if (!is_perf_trbe(handle))
-		return IRQ_NONE;
 
 	act = trbe_get_fault_act(handle, status);
 	switch (act) {
