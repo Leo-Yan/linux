@@ -136,9 +136,13 @@ struct cs_etm_queue {
 	 */
 	struct intlist *own_traceid_list;
 	u32 sink_id;
+	/* Whether this queue currently occupies a slot in etm->heap */
+	bool on_heap;
 };
 
+static int cs_etm__update_queues(struct cs_etm_auxtrace *etm);
 static int cs_etm__process_timestamped_queues(struct cs_etm_auxtrace *etm);
+static int cs_etm__flush_timestamped_queues(struct cs_etm_auxtrace *etm);
 static int cs_etm__process_timeless_queues(struct cs_etm_auxtrace *etm,
 					   pid_t tid);
 static int cs_etm__get_data_block(struct cs_etm_queue *etmq);
@@ -939,6 +943,8 @@ static int cs_etm__flush_events(struct perf_session *session,
 	struct cs_etm_auxtrace *etm = container_of(session->auxtrace,
 						   struct cs_etm_auxtrace,
 						   auxtrace);
+	int ret;
+
 	if (dump_trace)
 		return 0;
 
@@ -953,7 +959,15 @@ static int cs_etm__flush_events(struct perf_session *session,
 		return cs_etm__process_timeless_queues(etm, -1);
 	}
 
-	return cs_etm__process_timestamped_queues(etm);
+	ret = cs_etm__update_queues(etm);
+	if (ret)
+		return ret;
+
+	ret = cs_etm__process_timestamped_queues(etm);
+	if (ret)
+		return ret;
+
+	return cs_etm__flush_timestamped_queues(etm);
 }
 
 static void cs_etm__free_traceid_queues(struct cs_etm_queue *etmq)
@@ -1330,6 +1344,8 @@ static int cs_etm__queue_first_cs_timestamp(struct cs_etm_auxtrace *etm,
 	 */
 	cs_queue_nr = TO_CS_QUEUE_NR(queue_nr, trace_chan_id);
 	ret = auxtrace_heap__add(&etm->heap, cs_queue_nr, cs_timestamp);
+	if (!ret)
+		etmq->on_heap = true;
 out:
 	return ret;
 }
@@ -2767,29 +2783,49 @@ static int cs_etm__process_timeless_queues(struct cs_etm_auxtrace *etm,
 	return 0;
 }
 
-static int cs_etm__process_timestamped_queues(struct cs_etm_auxtrace *etm)
+/*
+ * Seed the heap with one entry from each queue that is not already
+ * represented in it, so that decoding proceeds in time order across all
+ * queues. Only queues that have newly queued data need to be considered.
+ */
+static int cs_etm__update_queues(struct cs_etm_auxtrace *etm)
 {
 	int ret = 0;
-	unsigned int cs_queue_nr, queue_nr, i;
-	u8 trace_chan_id;
-	u64 cs_timestamp;
-	struct auxtrace_queue *queue;
+	unsigned int i;
 	struct cs_etm_queue *etmq;
-	struct cs_etm_traceid_queue *tidq;
+
+	if (!etm->queues.new_data)
+		return 0;
+
+	etm->queues.new_data = false;
 
 	/*
 	 * Pre-populate the heap with one entry from each queue so that we can
-	 * start processing in time order across all queues.
+	 * start processing in time order across all queues. Skip queues that
+	 * already occupy a heap slot, otherwise they would be added twice.
 	 */
 	for (i = 0; i < etm->queues.nr_queues; i++) {
 		etmq = etm->queues.queue_array[i].priv;
-		if (!etmq)
+		if (!etmq || etmq->on_heap)
 			continue;
 
 		ret = cs_etm__queue_first_cs_timestamp(etm, etmq, i);
 		if (ret)
 			return ret;
 	}
+
+	return ret;
+}
+
+static int cs_etm__process_timestamped_queues(struct cs_etm_auxtrace *etm)
+{
+	int ret = 0;
+	unsigned int cs_queue_nr, queue_nr;
+	u8 trace_chan_id;
+	u64 cs_timestamp;
+	struct auxtrace_queue *queue;
+	struct cs_etm_queue *etmq;
+	struct cs_etm_traceid_queue *tidq;
 
 	while (1) {
 		if (!etm->heap.heap_cnt)
@@ -2807,6 +2843,7 @@ static int cs_etm__process_timestamped_queues(struct cs_etm_auxtrace *etm)
 		 * to process it.
 		 */
 		auxtrace_heap__pop(&etm->heap);
+		etmq->on_heap = false;
 
 		tidq  = cs_etm__etmq_get_traceid_queue(etmq, trace_chan_id);
 		if (!tidq) {
@@ -2874,7 +2911,21 @@ refetch:
 		 */
 		cs_queue_nr = TO_CS_QUEUE_NR(queue_nr, trace_chan_id);
 		ret = auxtrace_heap__add(&etm->heap, cs_queue_nr, cs_timestamp);
+		if (ret)
+			goto out;
+		etmq->on_heap = true;
 	}
+out:
+	return ret;
+}
+
+/* Flush any branch stack entries left over once all trace is decoded */
+static int cs_etm__flush_timestamped_queues(struct cs_etm_auxtrace *etm)
+{
+	int ret = 0;
+	unsigned int i;
+	struct cs_etm_queue *etmq;
+	struct cs_etm_traceid_queue *tidq;
 
 	for (i = 0; i < etm->queues.nr_queues; i++) {
 		struct int_node *inode;
@@ -2893,7 +2944,7 @@ refetch:
 				return ret;
 		}
 	}
-out:
+
 	return ret;
 }
 
