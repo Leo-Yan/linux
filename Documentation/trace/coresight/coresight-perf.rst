@@ -109,6 +109,68 @@ Example for triggering AUX pause and resume with PMU event::
         -e cycles/aux-action=pause,period=10000000/ \
         -e cycles/aux-action=resume,period=1050000/ -- sleep 1
 
+Context-sensitive sampled PGO (CSSPGO) profiling
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A callchain-bearing pause event can be combined with the branch history from
+its preceding ETM trace window. This provides the synchronized callchain and
+branch stack consumed by context-sensitive PGO tools without continuously
+recording ETM trace for a long-running process.
+
+For example, record user-space ETM trace, resume it periodically, and pause it
+with a cycle event that also captures a frame-pointer callchain::
+
+  perf record -T \
+        -e cs_etm/aux-action=start-paused,timestamp/u \
+        -e cycles/aux-action=resume,period=8350251/u \
+        -e cycles/aux-action=pause,period=100003,call-graph=fp/u \
+        -- ./workload
+
+The two cycle events count independently. With pause period ``P`` and resume
+period ``R``, each trace window is approximately 0 to ``P`` cycles long, so the
+average duty cycle is ``P / (2 * R)``. The periods above give about 0.6% duty.
+
+Do not make ``R`` an integer multiple of ``P``: coincident pause and resume
+interrupts can produce zero-length windows. Choosing ``R`` near
+``(k + 1/2) * P``, as above, moves the resume phase across the pause interval.
+Pause events that fire while ETM is already paused have no branch history; the
+dlfilter below removes those samples.
+
+The ``-T`` option timestamps the pause samples, while ``timestamp`` enables
+ETM timestamp packets. Both are required to correlate the sample with ETM
+trace. This mode also requires virtual ETM timestamps correlated to perf time
+and a callchain on the pause event. Use ``call-graph=dwarf`` instead of
+``call-graph=fp`` when the workload does not preserve frame pointers.
+
+Tuning duty cycle
+^^^^^^^^^^^^^^^^^
+
+The example above favors low recording overhead for fleet collection. With
+independent counters, ``P / R`` is the nominal window ratio while
+``P / (2 * R)`` is the expected average ETM-on duty. For ``P = 100003``, two
+measured Neoverse V2 operating points are:
+
+- Fleet collection: ``R = 8350251``, 1.2% nominal ratio and 0.6% average duty.
+- Targeted profiling: ``R = 1050031``, 9.5% nominal ratio and 4.8% average duty.
+
+AUX buffer size must also scale with trace volume. A 128 KiB AUX buffer worked
+at 0.6% duty but was unstable at some higher-duty points, where it increased
+output size or overran and reduced useful-sample yield. Use 4 MiB as a
+conservative starting point around ``R/P = 6.7`` to ``12.5``. These values are
+workload and platform dependent; verify useful samples per MiB and lost AUX
+records when tuning another system.
+
+Add up to 64 decoded ETM branches to each existing pause sample and emit the
+hybrid samples in the regular perf-script format::
+
+  perf script -i perf.data --itrace=L64 \
+        --dlfilter=dlfilter-nonempty-brstack.so > perf.script
+
+The ``dlfilter-nonempty-brstack.so`` filter drops samples that ended up with
+no branch history at all, for example samples from a thread that was never
+traced, or samples recorded before the first or after the last trace window.
+It is built and installed with perf's other dlfilters.
+
 Perf test - Verify kernel and userspace perf CoreSight work
 -----------------------------------------------------------
 
