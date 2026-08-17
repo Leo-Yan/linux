@@ -614,6 +614,23 @@ out:
 	}
 }
 
+/*
+ * Branch history belongs to the sample that ends the trace window, so a
+ * decoder that attaches it to an existing sample should take it rather than
+ * copy it. A later sample with no newly decoded trace then finds an empty
+ * branch stack instead of the previous window's branches.
+ */
+void thread_stack__br_stack_consume(struct thread *thread, int cpu)
+{
+	struct thread_stack *ts = thread__stack(thread, cpu);
+
+	if (!ts || !ts->br_stack_rb)
+		return;
+
+	ts->br_stack_pos = 0;
+	ts->br_stack_rb->nr = 0;
+}
+
 void thread_stack__br_sample(struct thread *thread, int cpu,
 			     struct branch_stack *dst, unsigned int sz)
 {
