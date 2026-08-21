@@ -28,6 +28,15 @@
 		} \
 	}
 
+struct etm4_cfg_afdo {
+	u32 window;
+	u32 period;
+	u32 prev_vinst_event;
+	u8 window_cntr;
+	u8 period_cntr;
+	u8 rselector;
+};
+
 /**
  * etm4_cfg_map_reg_offset - validate and map the register offset into a
  *			     location in the driver config struct.
@@ -128,6 +137,132 @@ static int etm4_cfg_map_reg_offset(struct etmv4_drvdata *drvdata,
 	return err;
 }
 
+static void etm4_cfg_clear_counter(struct etmv4_config *config, int counter)
+{
+	config->cntr_val[counter] = 0;
+	config->cntrldvr[counter] = 0;
+	config->cntr_ctrl[counter] = 0;
+}
+
+static int etm4_cfg_set_afdo(struct cscfg_feature_csdev *feat_csdev)
+{
+	struct etmv4_drvdata *drvdata = dev_get_drvdata(feat_csdev->csdev->dev.parent);
+	struct etm4_cfg_afdo *afdo = feat_csdev->priv_data;
+	struct etmv4_config *config = &drvdata->config;
+	u32 window = feat_csdev->regs_csdev[0].reg_desc.val32;
+	u32 period = feat_csdev->regs_csdev[1].reg_desc.val32;
+	u32 pair_event;
+	int window_cntr, period_cntr, rselector;
+	int err;
+
+	if (!window || !period)
+		return -EINVAL;
+
+	guard(raw_spinlock_irqsave)(&drvdata->spinlock);
+
+	/*
+	 * Build the following event path, where RS[n:n+1] is an aligned
+	 * resource selector pair:
+	 *
+	 * always true -> window counter -> RS[n] -> period counter
+	 *                                    |              |
+	 *                                    |              v
+	 *                                    |          RS[n + 1] -> ViewInst
+	 *                                    |              |
+	 *                                    +---- AND -----+
+	 *                                           |
+	 *                                           +-> period counter reload
+	 *
+	 * The window counter decrements every cycle and self-reloads every
+	 * @window cycles. RS[n] selects the window counter zero event, so the
+	 * period counter decrements once per window. RS[n + 1] selects the
+	 * period counter zero event and drives ViewInst, enabling trace for one
+	 * window. At the next window boundary both selectors are true; their
+	 * paired AND event reloads the period counter.
+	 */
+
+	/* Allocate and program the cycle-counting window counter first. */
+	window_cntr = etm4_find_counter(drvdata);
+	if (window_cntr < 0)
+		return window_cntr;
+
+	config->cntr_val[window_cntr] = afdo->window;
+	config->cntrldvr[window_cntr] = window;
+	config->cntr_ctrl[window_cntr] = TRCCNTCTLRn_RLDSELF |
+					 FIELD_PREP(TRCCNTCTLRn_CNTEVENT_MASK,
+						    etm4_res_sel_single(ETM4_RES_SEL_TRUE));
+
+	/* The programmed window counter is no longer seen as free. */
+	period_cntr = etm4_find_counter(drvdata);
+	if (period_cntr < 0) {
+		err = period_cntr;
+		goto err_clear_window_cntr;
+	}
+
+	/* RS[n] and RS[n + 1] must be available as an aligned pair. */
+	rselector = etm4_find_resource_selector(drvdata, true);
+	if (rselector < 0) {
+		err = rselector;
+		goto err_clear_period_cntr;
+	}
+
+	pair_event = etm4_res_sel_pair(rselector / 2);
+	afdo->prev_vinst_event = config->vinst_ctrl & TRCVICTLR_EVENT_MASK;
+
+	/* Count RS[n] events and reload on the paired RS[n] AND RS[n + 1]. */
+	config->cntr_val[period_cntr] = afdo->period;
+	config->cntrldvr[period_cntr] = period;
+	config->cntr_ctrl[period_cntr] = FIELD_PREP(TRCCNTCTLRn_RLDEVENT_MASK, pair_event) |
+					 FIELD_PREP(TRCCNTCTLRn_CNTEVENT_MASK,
+						    etm4_res_sel_single(rselector));
+
+	/* Connect each counter zero event to one half of the selector pair. */
+	config->res_ctrl[rselector] =
+		FIELD_PREP(TRCRSCTLRn_GROUP_MASK, 2) |
+		FIELD_PREP(TRCRSCTLRn_SELECT_MASK, BIT(window_cntr));
+	config->res_ctrl[rselector + 1] =
+		FIELD_PREP(TRCRSCTLRn_GROUP_MASK, 2) |
+		FIELD_PREP(TRCRSCTLRn_SELECT_MASK, BIT(period_cntr));
+
+	/* Connect the period counter zero event to the ViewInst event input. */
+	config->vinst_ctrl &= ~TRCVICTLR_EVENT_MASK;
+	config->vinst_ctrl |= FIELD_PREP(TRCVICTLR_EVENT_MASK,
+					 etm4_res_sel_single(rselector + 1));
+
+	afdo->window_cntr = window_cntr;
+	afdo->period_cntr = period_cntr;
+	afdo->rselector = rselector;
+	return 0;
+
+err_clear_period_cntr:
+	etm4_cfg_clear_counter(config, period_cntr);
+err_clear_window_cntr:
+	etm4_cfg_clear_counter(config, window_cntr);
+	return err;
+}
+
+static void etm4_cfg_save_afdo(struct cscfg_feature_csdev *feat_csdev)
+{
+	struct etmv4_drvdata *drvdata = dev_get_drvdata(feat_csdev->csdev->dev.parent);
+	struct etm4_cfg_afdo *afdo = feat_csdev->priv_data;
+	struct etmv4_config *config = &drvdata->config;
+
+	guard(raw_spinlock_irqsave)(&drvdata->spinlock);
+
+	afdo->window = config->cntr_val[afdo->window_cntr];
+	afdo->period = config->cntr_val[afdo->period_cntr];
+
+	/* Restore vinst_ctrl */
+	config->vinst_ctrl &= ~TRCVICTLR_EVENT_MASK;
+	config->vinst_ctrl |= afdo->prev_vinst_event;
+}
+
+static bool etm4_cfg_is_afdo_feature(const struct cscfg_feature_desc *feat_desc)
+{
+	return !strcmp(feat_desc->name, "strobing") &&
+	       feat_desc->match_flags == CS_CFG_MATCH_CLASS_SRC_ETM4;
+}
+
 /**
  * etm4_cfg_load_feature - load a feature into a device instance.
  *
@@ -150,6 +285,7 @@ static int etm4_cfg_load_feature(struct coresight_device *csdev,
 	struct device *dev = csdev->dev.parent;
 	struct etmv4_drvdata *drvdata = dev_get_drvdata(dev);
 	const struct cscfg_feature_desc *feat_desc = feat_csdev->feat_desc;
+	struct etm4_cfg_afdo *afdo;
 	u32 offset;
 	int i = 0, err = 0;
 
@@ -159,6 +295,16 @@ static int etm4_cfg_load_feature(struct coresight_device *csdev,
 	 * via the pointers setup in etm4_cfg_map_reg_offset().
 	 */
 	feat_csdev->drv_spinlock = &drvdata->spinlock;
+
+	if (etm4_cfg_is_afdo_feature(feat_desc)) {
+		afdo = devm_kzalloc(dev, sizeof(*afdo), GFP_KERNEL);
+		if (!afdo)
+			return -ENOMEM;
+		feat_csdev->priv_data = afdo;
+		feat_csdev->set_on_enable = etm4_cfg_set_afdo;
+		feat_csdev->save_on_disable = etm4_cfg_save_afdo;
+		return 0;
+	}
 
 	/* process the register descriptions */
 	for (i = 0; i < feat_csdev->nr_regs && !err; i++) {

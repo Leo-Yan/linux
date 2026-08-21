@@ -75,6 +75,12 @@ static int cscfg_set_on_enable(struct cscfg_feature_csdev *feat_csdev)
 {
 	unsigned long flags;
 	int i;
+	int err;
+
+	if (feat_csdev->set_on_enable) {
+		err = feat_csdev->set_on_enable(feat_csdev);
+		return err;
+	}
 
 	raw_spin_lock_irqsave(feat_csdev->drv_spinlock, flags);
 	for (i = 0; i < feat_csdev->nr_regs; i++)
@@ -90,6 +96,11 @@ static void cscfg_save_on_disable(struct cscfg_feature_csdev *feat_csdev)
 {
 	unsigned long flags;
 	int i;
+
+	if (feat_csdev->save_on_disable) {
+		feat_csdev->save_on_disable(feat_csdev);
+		return;
+	}
 
 	raw_spin_lock_irqsave(feat_csdev->drv_spinlock, flags);
 	for (i = 0; i < feat_csdev->nr_regs; i++)

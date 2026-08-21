@@ -210,6 +210,9 @@ struct cscfg_parameter_csdev {
  * @params_csdev:	current parameter values on this device
  * @nr_regs:		number of registers to be programmed.
  * @regs_csdev:		Programming details for the registers
+ * @set_on_enable:	Optional device callback replacing generic programming.
+ * @save_on_disable:	Optional device callback replacing generic save.
+ * @priv_data:		Feature-specific private runtime data.
  */
 struct cscfg_feature_csdev {
 	const struct cscfg_feature_desc *feat_desc;
@@ -220,6 +223,9 @@ struct cscfg_feature_csdev {
 	struct cscfg_parameter_csdev *params_csdev;
 	int nr_regs;
 	struct cscfg_regval_csdev *regs_csdev;
+	int (*set_on_enable)(struct cscfg_feature_csdev *feat_csdev);
+	void (*save_on_disable)(struct cscfg_feature_csdev *feat_csdev);
+	void *priv_data;
 };
 
 /**

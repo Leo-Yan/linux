@@ -22,6 +22,7 @@
 #define ETM4_CFG_RES_SEL_PAIR1	0x007
 #define ETM4_CFG_RES_SEQ	0x008
 #define ETM4_CFG_RES_TS		0x009
+#define ETM4_CFG_RES_AFDO	0x00A
 #define ETM4_CFG_RES_MASK	0x00F
 
 /* ETMv4 specific config functions */

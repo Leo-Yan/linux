@@ -1071,7 +1071,6 @@ int cscfg_csdev_enable_active_config(struct coresight_device *csdev,
 {
 	struct cscfg_config_csdev *config_csdev_active = NULL, *config_csdev_item;
 	struct cscfg_config_desc *config_desc;
-	unsigned long flags;
 	int err = 0;
 
 	/* quickly check global count */
@@ -1082,49 +1081,61 @@ int cscfg_csdev_enable_active_config(struct coresight_device *csdev,
 	 * Look for matching configuration - set the active configuration
 	 * context if found.
 	 */
-	raw_spin_lock_irqsave(&csdev->cscfg_csdev_lock, flags);
-	list_for_each_entry(config_csdev_item, &csdev->config_csdev_list, node) {
-		config_desc = config_csdev_item->config_desc;
-		if (((unsigned long)config_desc->event_ea->var == cfg_hash) &&
-				cscfg_config_desc_get(config_desc)) {
-			config_csdev_active = config_csdev_item;
-			csdev->active_cscfg_ctxt = (void *)config_csdev_active;
-			break;
+	scoped_guard(raw_spinlock_irqsave, &csdev->cscfg_csdev_lock) {
+		list_for_each_entry(config_csdev_item, &csdev->config_csdev_list, node) {
+			config_desc = config_csdev_item->config_desc;
+			if (((unsigned long)config_desc->event_ea->var == cfg_hash) &&
+			    cscfg_config_desc_get(config_desc)) {
+				config_csdev_active = config_csdev_item;
+				csdev->active_cscfg_ctxt = (void *)config_csdev_active;
+				break;
+			}
 		}
 	}
-	raw_spin_unlock_irqrestore(&csdev->cscfg_csdev_lock, flags);
 
 	/*
 	 * If found, attempt to enable
 	 */
-	if (config_csdev_active) {
-		/*
-		 * Call the generic routine that will program up the internal
-		 * driver structures prior to programming up the hardware.
-		 * This routine takes the driver spinlock saved in the configs.
-		 */
-		err = cscfg_csdev_enable_config(config_csdev_active, preset);
-		if (!err) {
-			/*
-			 * Successful programming. Check the active_cscfg_ctxt
-			 * pointer to ensure no pre-emption disabled it via
-			 * cscfg_csdev_disable_active_config() before
-			 * we could start.
-			 *
-			 * Set enabled if OK, err if not.
-			 */
-			raw_spin_lock_irqsave(&csdev->cscfg_csdev_lock, flags);
-			if (csdev->active_cscfg_ctxt)
-				config_csdev_active->enabled = true;
-			else
-				err = -EBUSY;
-			raw_spin_unlock_irqrestore(&csdev->cscfg_csdev_lock, flags);
-		}
+	if (!config_csdev_active)
+		goto out;
 
-		if (err)
-			cscfg_config_desc_put(config_desc);
+	/*
+	 * Call the generic routine that will program up the internal
+	 * driver structures prior to programming up the hardware.
+	 * This routine takes the driver spinlock saved in the configs.
+	 */
+	err = cscfg_csdev_enable_config(config_csdev_active, preset);
+	if (err)
+		goto err_enable_config;
+
+	/*
+	 * Successful programming. Check the active_cscfg_ctxt
+	 * pointer to ensure no pre-emption disabled it via
+	 * cscfg_csdev_disable_active_config() before
+	 * we could start.
+	 *
+	 * Set enabled if OK, err if not.
+	 */
+	scoped_guard(raw_spinlock_irqsave, &csdev->cscfg_csdev_lock) {
+		if (csdev->active_cscfg_ctxt == config_csdev_active)
+			config_csdev_active->enabled = true;
+		else
+			err = -EBUSY;
 	}
+	if (err)
+		goto err_cscfg_ctxt;
 
+	return 0;
+
+err_cscfg_ctxt:
+	cscfg_csdev_disable_config(config_csdev_active);
+err_enable_config:
+	scoped_guard(raw_spinlock_irqsave, &csdev->cscfg_csdev_lock) {
+		if (csdev->active_cscfg_ctxt == config_csdev_active)
+			csdev->active_cscfg_ctxt = NULL;
+	}
+	cscfg_config_desc_put(config_desc);
+out:
 	return err;
 }
 EXPORT_SYMBOL_GPL(cscfg_csdev_enable_active_config);

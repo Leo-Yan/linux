@@ -37,63 +37,15 @@ static struct cscfg_parameter_desc strobe_params[] = {
 };
 
 static struct cscfg_regval_desc strobe_regs[] = {
-	/* resource selectors */
+	/* Parameter carriers; ETM register values are generated at enable time. */
 	{
-		.type = CS_CFG_REG_TYPE_RESOURCE,
-		.offset = TRCRSCTLRn(2),
-		.hw_info = ETM4_CFG_RES_SEL,
-		.val32 = 0x20001,
-	},
-	{
-		.type = CS_CFG_REG_TYPE_RESOURCE,
-		.offset = TRCRSCTLRn(3),
-		.hw_info = ETM4_CFG_RES_SEQ,
-		.val32 = 0x20002,
-	},
-	/* strobe window counter 0 - reload from param 0 */
-	{
-		.type = CS_CFG_REG_TYPE_RESOURCE | CS_CFG_REG_TYPE_VAL_SAVE,
-		.offset = TRCCNTVRn(0),
-		.hw_info = ETM4_CFG_RES_CTR,
+		.type = CS_CFG_REG_TYPE_RESOURCE | CS_CFG_REG_TYPE_VAL_PARAM,
+		.param_idx = 0,
 	},
 	{
 		.type = CS_CFG_REG_TYPE_RESOURCE | CS_CFG_REG_TYPE_VAL_PARAM,
-		.offset = TRCCNTRLDVRn(0),
-		.hw_info = ETM4_CFG_RES_CTR,
-		.val32 = 0,
+		.param_idx = 1,
 	},
-	{
-		.type = CS_CFG_REG_TYPE_RESOURCE,
-		.offset = TRCCNTCTLRn(0),
-		.hw_info = ETM4_CFG_RES_CTR,
-		.val32 = 0x10001,
-	},
-	/* strobe period counter 1 - reload from param 1 */
-	{
-		.type = CS_CFG_REG_TYPE_RESOURCE | CS_CFG_REG_TYPE_VAL_SAVE,
-		.offset = TRCCNTVRn(1),
-		.hw_info = ETM4_CFG_RES_CTR,
-	},
-	{
-		.type = CS_CFG_REG_TYPE_RESOURCE | CS_CFG_REG_TYPE_VAL_PARAM,
-		.offset = TRCCNTRLDVRn(1),
-		.hw_info = ETM4_CFG_RES_CTR,
-		.val32 = 1,
-	},
-	{
-		.type = CS_CFG_REG_TYPE_RESOURCE,
-		.offset = TRCCNTCTLRn(1),
-		.hw_info = ETM4_CFG_RES_CTR,
-		.val32 = 0x8102,
-	},
-	/* view-inst */
-	{
-		.type = CS_CFG_REG_TYPE_STD | CS_CFG_REG_TYPE_VAL_MASK,
-		.offset = TRCVICTLR,
-		.val32 = 0x0003,
-		.mask32 = 0x0003,
-	},
-	/* end of regs */
 };
 
 struct cscfg_feature_desc strobe_etm4x = {

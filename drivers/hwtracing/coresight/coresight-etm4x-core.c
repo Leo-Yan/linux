@@ -238,10 +238,11 @@ void etm4_release_trace_id(struct etmv4_drvdata *drvdata)
 
 static bool etm4_counter_is_free(struct etmv4_config *config, int idx)
 {
-	return !config->cntr_val[idx];
+	return !config->cntr_val[idx] && !config->cntrldvr[idx] &&
+	       !config->cntr_ctrl[idx];
 }
 
-static int etm4_find_counter(struct etmv4_drvdata *drvdata)
+int etm4_find_counter(struct etmv4_drvdata *drvdata)
 {
 	int i;
 
@@ -260,14 +261,18 @@ static int etm4_find_counter(struct etmv4_drvdata *drvdata)
  * TRCRSCTLRn, Resource Selection Control Registers, n=2-31'.
  *
  * ETMIDR4 gives the number of resource selector _pairs_, hence multiply
- * by 2.
+ * by 2. If @paired is true, only return an even selector when both
+ * selectors in its pair are free.
  */
-static int etm4_find_resource_selector(struct etmv4_drvdata *drvdata)
+int etm4_find_resource_selector(struct etmv4_drvdata *drvdata, bool paired)
 {
-	int i;
+	int i, nr_selectors = drvdata->nr_resource * 2;
 
-	for (i = 2; i < drvdata->nr_resource * 2; i++) {
-		if (!drvdata->config.res_ctrl[i])
+	for (i = 2; i < nr_selectors; i += paired ? 2 : 1) {
+		if (drvdata->config.res_ctrl[i])
+			continue;
+		if (!paired ||
+		    (i + 1 < nr_selectors && !drvdata->config.res_ctrl[i + 1]))
 			return i;
 	}
 
@@ -720,7 +725,7 @@ static int etm4_config_timestamp_event(struct etmv4_drvdata *drvdata,
 		return ctridx;
 	}
 
-	rselector = etm4_find_resource_selector(drvdata);
+	rselector = etm4_find_resource_selector(drvdata, false);
 	if (rselector < 0) {
 		pr_debug("%s: no available resource selector found\n",
 			 __func__);

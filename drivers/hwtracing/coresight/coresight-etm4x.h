@@ -1110,4 +1110,6 @@ static inline bool etm4x_is_ete(struct etmv4_drvdata *drvdata)
 }
 
 void etm4_release_trace_id(struct etmv4_drvdata *drvdata);
+int etm4_find_counter(struct etmv4_drvdata *drvdata);
+int etm4_find_resource_selector(struct etmv4_drvdata *drvdata, bool paired);
 #endif
