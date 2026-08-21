@@ -236,6 +236,44 @@ void etm4_release_trace_id(struct etmv4_drvdata *drvdata)
 	coresight_trace_id_put_cpu_id(drvdata->cpu);
 }
 
+static bool etm4_counter_is_free(struct etmv4_config *config, int idx)
+{
+	return !config->cntr_val[idx];
+}
+
+static int etm4_find_counter(struct etmv4_drvdata *drvdata)
+{
+	int i;
+
+	for (i = 0; i < drvdata->nr_cntr; i++) {
+		if (etm4_counter_is_free(&drvdata->config, i))
+			return i;
+	}
+
+	return -ENOSPC;
+}
+
+/*
+ * Searching for an available resource selector to use, starting at '2'
+ * since resource 0 is the fixed 'always returns false' resource and 1
+ * is the fixed 'always returns true' resource. See IHI0064H_b '7.3.64
+ * TRCRSCTLRn, Resource Selection Control Registers, n=2-31'.
+ *
+ * ETMIDR4 gives the number of resource selector _pairs_, hence multiply
+ * by 2.
+ */
+static int etm4_find_resource_selector(struct etmv4_drvdata *drvdata)
+{
+	int i;
+
+	for (i = 2; i < drvdata->nr_resource * 2; i++) {
+		if (!drvdata->config.res_ctrl[i])
+			return i;
+	}
+
+	return -ENOSPC;
+}
+
 struct etm4_enable_arg {
 	struct etmv4_drvdata *drvdata;
 	struct coresight_path *path;
@@ -676,35 +714,17 @@ static int etm4_config_timestamp_event(struct etmv4_drvdata *drvdata,
 		return -EINVAL;
 
 	/* Find a counter that hasn't been initialised */
-	for (ctridx = 0; ctridx < drvdata->nr_cntr; ctridx++)
-		if (config->cntr_val[ctridx] == 0)
-			break;
-
-	/* All the counters have been configured already, bail out */
-	if (ctridx == drvdata->nr_cntr) {
+	ctridx = etm4_find_counter(drvdata);
+	if (ctridx < 0) {
 		pr_debug("%s: no available counter found\n", __func__);
-		return -ENOSPC;
+		return ctridx;
 	}
 
-	/*
-	 * Searching for an available resource selector to use, starting at '2'
-	 * since resource 0 is the fixed 'always returns false' resource and 1
-	 * is the fixed 'always returns true' resource. See IHI0064H_b '7.3.64
-	 * TRCRSCTLRn, Resource Selection Control Registers, n=2-31'. If there
-	 * are no resources, there would also be no counters so wouldn't get
-	 * here.
-	 *
-	 * ETMIDR4 gives the number of resource selector _pairs_, hence multiply
-	 * by 2.
-	 */
-	for (rselector = 2; rselector < drvdata->nr_resource * 2; rselector++)
-		if (!config->res_ctrl[rselector])
-			break;
-
-	if (rselector == drvdata->nr_resource * 2) {
+	rselector = etm4_find_resource_selector(drvdata);
+	if (rselector < 0) {
 		pr_debug("%s: no available resource selector found\n",
 			 __func__);
-		return -ENOSPC;
+		return rselector;
 	}
 
 	/* Initialise original and reload counter value. */
