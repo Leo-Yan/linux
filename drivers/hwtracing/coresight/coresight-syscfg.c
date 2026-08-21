@@ -338,6 +338,7 @@ int cscfg_update_feat_param_val(struct cscfg_feature_desc *feat_desc,
 				int param_idx, u64 value)
 {
 	int err = 0;
+	struct cscfg_parameter_desc *param_desc;
 	struct cscfg_feature_csdev *feat_csdev;
 	struct cscfg_registered_csdev *csdev_item;
 
@@ -354,7 +355,13 @@ int cscfg_update_feat_param_val(struct cscfg_feature_desc *feat_desc,
 		err = -EINVAL;
 		goto unlock_exit;
 	}
-	feat_desc->params_desc[param_idx].value = value;
+
+	param_desc = &feat_desc->params_desc[param_idx];
+	if (!cscfg_param_value_valid(param_desc, value)) {
+		err = -ERANGE;
+		goto unlock_exit;
+	}
+	param_desc->value = value;
 
 	/* update loaded instances.*/
 	list_for_each_entry(csdev_item, &cscfg_mgr->csdev_desc_list, item) {

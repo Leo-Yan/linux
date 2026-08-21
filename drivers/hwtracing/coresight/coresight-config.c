@@ -140,6 +140,7 @@ static int cscfg_update_presets(struct cscfg_config_csdev *config_csdev, int pre
 	int i, j, val_idx = 0, nr_cfg_params;
 	struct cscfg_parameter_csdev *param_csdev;
 	struct cscfg_feature_csdev *feat_csdev;
+	const struct cscfg_parameter_desc *param_desc;
 	const struct cscfg_config_desc *config_desc = config_csdev->config_desc;
 	const char *name;
 	const u64 *preset_base;
@@ -164,8 +165,17 @@ static int cscfg_update_presets(struct cscfg_config_csdev *config_csdev, int pre
 
 		for (j = 0; j < feat_csdev->nr_params; j++) {
 			param_csdev = &feat_csdev->params_csdev[j];
-			name = feat_csdev->feat_desc->params_desc[j].name;
+			param_desc = &feat_csdev->feat_desc->params_desc[j];
+			name = param_desc->name;
 			val = preset_base[val_idx++];
+
+			if (!cscfg_param_value_valid(param_desc, val)) {
+				dev_err(&config_csdev->csdev->dev,
+					"param %s preset value 0x%llx exceeds mask 0x%llx\n",
+					name, val, param_desc->value_mask);
+				return -ERANGE;
+			}
+
 			if (param_csdev->val64) {
 				dev_dbg(&config_csdev->csdev->dev,
 					"set param %s (%lld)", name, val);
@@ -194,6 +204,7 @@ static int cscfg_update_curr_params(struct cscfg_config_csdev *config_csdev)
 	int i, j;
 	struct cscfg_feature_csdev *feat_csdev;
 	struct cscfg_parameter_csdev *param_csdev;
+	const struct cscfg_parameter_desc *param_desc;
 	const char *name;
 	u64 val;
 
@@ -203,8 +214,17 @@ static int cscfg_update_curr_params(struct cscfg_config_csdev *config_csdev)
 			continue;
 		for (j = 0; j < feat_csdev->nr_params; j++) {
 			param_csdev = &feat_csdev->params_csdev[j];
-			name = feat_csdev->feat_desc->params_desc[j].name;
+			param_desc = &feat_csdev->feat_desc->params_desc[j];
+			name = param_desc->name;
 			val = param_csdev->current_value;
+
+			if (!cscfg_param_value_valid(param_desc, val)) {
+				dev_err(&config_csdev->csdev->dev,
+					"param %s value 0x%llx exceeds mask 0x%llx\n",
+					name, val, param_desc->value_mask);
+				return -ERANGE;
+			}
+
 			if (param_csdev->val64) {
 				dev_dbg(&config_csdev->csdev->dev,
 					"set param %s (%lld)", name, val);

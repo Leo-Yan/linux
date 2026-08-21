@@ -16,14 +16,23 @@
 /* preload in features for ETMv4 */
 
 /* strobe feature */
+
+/*
+ * Arm ARM (ARM DDI 0487 M.c), section D24.4.23: TRCCNTRLDVR<n>.VALUE is a
+ * 16-bit reload value.
+ */
+#define STROBE_PARAM_MASK	GENMASK_ULL(15, 0)
+
 static struct cscfg_parameter_desc strobe_params[] = {
 	{
 		.name = "window",
 		.value = 5000,
+		.value_mask = STROBE_PARAM_MASK,
 	},
 	{
 		.name = "period",
 		.value = 10000,
+		.value_mask = STROBE_PARAM_MASK,
 	},
 };
 
@@ -103,8 +112,8 @@ static struct cscfg_regval_desc strobe_regs[] = {
 struct cscfg_feature_desc strobe_etm4x = {
 	.name = "strobing",
 	.description = "Generate periodic trace capture windows.\n"
-		       "parameter \'window\': a number of CPU cycles (W)\n"
-		       "parameter \'period\': trace enabled for W cycles every period x W cycles\n",
+		       "parameter \'window\': CPU cycles (W), maximum 65535\n"
+		       "parameter \'period\': trace enabled for W cycles every period x W cycles, maximum 65535\n",
 	.match_flags = CS_CFG_MATCH_CLASS_SRC_ETM4,
 	.nr_params = ARRAY_SIZE(strobe_params),
 	.params_desc = strobe_params,

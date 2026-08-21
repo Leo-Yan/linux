@@ -44,13 +44,22 @@
 /**
  * Parameter descriptor for a device feature.
  *
- * @name:  Name of parameter.
- * @value: Initial or default value.
+ * @name:       Name of parameter.
+ * @value:      Initial or default value.
+ * @value_mask: Mask of valid value bits, or 0 if unrestricted.
  */
 struct cscfg_parameter_desc {
 	const char *name;
 	u64 value;
+	u64 value_mask;
 };
+
+static inline bool
+cscfg_param_value_valid(const struct cscfg_parameter_desc *param_desc,
+			u64 value)
+{
+	return !param_desc->value_mask || !(value & ~param_desc->value_mask);
+}
 
 /**
  * Representation of register value and a descriptor of register usage.
