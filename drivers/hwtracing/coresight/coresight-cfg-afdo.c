@@ -86,19 +86,6 @@ static struct cscfg_regval_desc strobe_regs[] = {
 		.hw_info = ETM4_CFG_RES_CTR,
 		.val32 = 0x8102,
 	},
-	/* sequencer */
-	{
-		.type = CS_CFG_REG_TYPE_RESOURCE,
-		.offset = TRCSEQEVRn(0),
-		.hw_info = ETM4_CFG_RES_SEQ,
-		.val32 = 0x0081,
-	},
-	{
-		.type = CS_CFG_REG_TYPE_RESOURCE,
-		.offset = TRCSEQEVRn(1),
-		.hw_info = ETM4_CFG_RES_SEQ,
-		.val32 = 0x0000,
-	},
 	/* view-inst */
 	{
 		.type = CS_CFG_REG_TYPE_STD | CS_CFG_REG_TYPE_VAL_MASK,
