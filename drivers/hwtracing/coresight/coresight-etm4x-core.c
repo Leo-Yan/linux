@@ -1712,7 +1712,7 @@ static void etm4_set_default(struct etmv4_config *config)
 	etm4_set_default_filter(config);
 }
 
-static int etm4_get_next_comparator(struct etmv4_drvdata *drvdata, u32 type)
+int etm4_find_comparator(struct etmv4_drvdata *drvdata, u32 type)
 {
 	int nr_comparator, index = 0;
 	struct etmv4_config *config = &drvdata->config;
@@ -1734,12 +1734,13 @@ static int etm4_get_next_comparator(struct etmv4_drvdata *drvdata, u32 type)
 			/* Address range comparators go in pairs */
 			index += 2;
 			break;
+		case ETM_ADDR_TYPE_SINGLE:
 		case ETM_ADDR_TYPE_START:
 		case ETM_ADDR_TYPE_STOP:
 			if (config->addr_type[index] == ETM_ADDR_TYPE_NONE)
 				return index;
 
-			/* Start/stop address can have odd indexes */
+			/* Single and start/stop addresses can have odd indexes */
 			index += 1;
 			break;
 		default:
@@ -1777,7 +1778,7 @@ static int etm4_set_event_filters(struct etmv4_drvdata *drvdata,
 		enum etm_addr_type type = filter->type;
 
 		/* See if a comparator is free. */
-		comparator = etm4_get_next_comparator(drvdata, type);
+		comparator = etm4_find_comparator(drvdata, type);
 		if (comparator < 0) {
 			ret = comparator;
 			goto out;
