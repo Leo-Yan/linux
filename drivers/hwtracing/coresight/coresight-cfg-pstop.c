@@ -23,32 +23,12 @@ static struct cscfg_parameter_desc gen_etrig_params[] = {
 };
 
 static struct cscfg_regval_desc gen_etrig_regs[] = {
-	/* resource selector */
-	{
-		.type = CS_CFG_REG_TYPE_RESOURCE,
-		.offset = TRCRSCTLRn(2),
-		.hw_info = ETM4_CFG_RES_SEL,
-		.val32 = 0x40001,
-	},
-	/* single address comparator */
+	/* Parameter carrier; ETM register values are generated at enable time. */
 	{
 		.type = CS_CFG_REG_TYPE_RESOURCE | CS_CFG_REG_TYPE_VAL_64BIT |
 			CS_CFG_REG_TYPE_VAL_PARAM,
-		.offset =  TRCACVRn(0),
-		.val32 = 0x0,
+		.param_idx = 0,
 	},
-	{
-		.type = CS_CFG_REG_TYPE_RESOURCE,
-		.offset = TRCACATRn(0),
-		.val64 = 0xf00,
-	},
-	/* Driver external output[0] with comparator out */
-	{
-		.type = CS_CFG_REG_TYPE_RESOURCE,
-		.offset = TRCEVENTCTL0R,
-		.val32 = 0x2,
-	},
-	/* end of regs */
 };
 
 struct cscfg_feature_desc gen_etrig_etm4x = {

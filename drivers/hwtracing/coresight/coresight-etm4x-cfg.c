@@ -37,6 +37,13 @@ struct etm4_cfg_afdo {
 	u8 rselector;
 };
 
+struct etm4_cfg_etrig {
+	u8 rselector;
+};
+
+#define ETM4_CFG_ETRIG_ADDR_CMP		0
+#define ETM4_CFG_EVENT0_MASK		GENMASK(7, 0)
+
 /**
  * etm4_cfg_map_reg_offset - validate and map the register offset into a
  *			     location in the driver config struct.
@@ -142,6 +149,38 @@ static void etm4_cfg_clear_counter(struct etmv4_config *config, int counter)
 	config->cntr_val[counter] = 0;
 	config->cntrldvr[counter] = 0;
 	config->cntr_ctrl[counter] = 0;
+}
+
+static int etm4_cfg_set_etrig(struct cscfg_feature_csdev *feat_csdev)
+{
+	struct etmv4_drvdata *drvdata = dev_get_drvdata(feat_csdev->csdev->dev.parent);
+	struct etm4_cfg_etrig *etrig = feat_csdev->priv_data;
+	struct etmv4_config *config = &drvdata->config;
+	u64 address = feat_csdev->regs_csdev[0].reg_desc.val64;
+	int rselector;
+
+	if (!drvdata->nr_addr_cmp)
+		return -ENODEV;
+
+	guard(raw_spinlock_irqsave)(&drvdata->spinlock);
+
+	rselector = etm4_find_resource_selector(drvdata, false);
+	if (rselector < 0)
+		return rselector;
+
+	/* Address comparator 0 -> RS[n] -> external event output 0. */
+	config->addr_val[ETM4_CFG_ETRIG_ADDR_CMP] = address;
+	config->addr_acc[ETM4_CFG_ETRIG_ADDR_CMP] = 0xf00;
+	config->res_ctrl[rselector] =
+		FIELD_PREP(TRCRSCTLRn_GROUP_MASK, 4) |
+		FIELD_PREP(TRCRSCTLRn_SELECT_MASK,
+			   BIT(ETM4_CFG_ETRIG_ADDR_CMP));
+	config->eventctrl0 &= ~ETM4_CFG_EVENT0_MASK;
+	config->eventctrl0 |= FIELD_PREP(ETM4_CFG_EVENT0_MASK,
+					 etm4_res_sel_single(rselector));
+
+	etrig->rselector = rselector;
+	return 0;
 }
 
 static int etm4_cfg_set_afdo(struct cscfg_feature_csdev *feat_csdev)
@@ -263,6 +302,12 @@ static bool etm4_cfg_is_afdo_feature(const struct cscfg_feature_desc *feat_desc)
 	       feat_desc->match_flags == CS_CFG_MATCH_CLASS_SRC_ETM4;
 }
 
+static bool etm4_cfg_is_etrig_feature(const struct cscfg_feature_desc *feat_desc)
+{
+	return !strcmp(feat_desc->name, "gen_etrig") &&
+	       feat_desc->match_flags == CS_CFG_MATCH_CLASS_SRC_ETM4;
+}
+
 /**
  * etm4_cfg_load_feature - load a feature into a device instance.
  *
@@ -286,6 +331,7 @@ static int etm4_cfg_load_feature(struct coresight_device *csdev,
 	struct etmv4_drvdata *drvdata = dev_get_drvdata(dev);
 	const struct cscfg_feature_desc *feat_desc = feat_csdev->feat_desc;
 	struct etm4_cfg_afdo *afdo;
+	struct etm4_cfg_etrig *etrig;
 	u32 offset;
 	int i = 0, err = 0;
 
@@ -303,6 +349,14 @@ static int etm4_cfg_load_feature(struct coresight_device *csdev,
 		feat_csdev->priv_data = afdo;
 		feat_csdev->set_on_enable = etm4_cfg_set_afdo;
 		feat_csdev->save_on_disable = etm4_cfg_save_afdo;
+		return 0;
+	}
+	if (etm4_cfg_is_etrig_feature(feat_desc)) {
+		etrig = devm_kzalloc(dev, sizeof(*etrig), GFP_KERNEL);
+		if (!etrig)
+			return -ENOMEM;
+		feat_csdev->priv_data = etrig;
+		feat_csdev->set_on_enable = etm4_cfg_set_etrig;
 		return 0;
 	}
 
