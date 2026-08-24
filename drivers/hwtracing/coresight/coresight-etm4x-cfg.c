@@ -38,10 +38,10 @@ struct etm4_cfg_afdo {
 };
 
 struct etm4_cfg_etrig {
+	u8 comparator;
 	u8 rselector;
 };
 
-#define ETM4_CFG_ETRIG_ADDR_CMP		0
 #define ETM4_CFG_EVENT0_MASK		GENMASK(7, 0)
 
 /**
@@ -157,28 +157,30 @@ static int etm4_cfg_set_etrig(struct cscfg_feature_csdev *feat_csdev)
 	struct etm4_cfg_etrig *etrig = feat_csdev->priv_data;
 	struct etmv4_config *config = &drvdata->config;
 	u64 address = feat_csdev->regs_csdev[0].reg_desc.val64;
-	int rselector;
-
-	if (!drvdata->nr_addr_cmp)
-		return -ENODEV;
+	int comparator, rselector;
 
 	guard(raw_spinlock_irqsave)(&drvdata->spinlock);
+
+	comparator = etm4_find_comparator(drvdata, ETM_ADDR_TYPE_SINGLE);
+	if (comparator < 0)
+		return comparator;
 
 	rselector = etm4_find_resource_selector(drvdata, false);
 	if (rselector < 0)
 		return rselector;
 
-	/* Address comparator 0 -> RS[n] -> external event output 0. */
-	config->addr_val[ETM4_CFG_ETRIG_ADDR_CMP] = address;
-	config->addr_acc[ETM4_CFG_ETRIG_ADDR_CMP] = 0xf00;
+	/* Address comparator[n] -> RS[m] -> external event output 0. */
+	config->addr_val[comparator] = address;
+	config->addr_acc[comparator] = 0xf00;
+	config->addr_type[comparator] = ETM_ADDR_TYPE_SINGLE;
 	config->res_ctrl[rselector] =
 		FIELD_PREP(TRCRSCTLRn_GROUP_MASK, 4) |
-		FIELD_PREP(TRCRSCTLRn_SELECT_MASK,
-			   BIT(ETM4_CFG_ETRIG_ADDR_CMP));
+		FIELD_PREP(TRCRSCTLRn_SELECT_MASK, BIT(comparator));
 	config->eventctrl0 &= ~ETM4_CFG_EVENT0_MASK;
 	config->eventctrl0 |= FIELD_PREP(ETM4_CFG_EVENT0_MASK,
 					 etm4_res_sel_single(rselector));
 
+	etrig->comparator = comparator;
 	etrig->rselector = rselector;
 	return 0;
 }
