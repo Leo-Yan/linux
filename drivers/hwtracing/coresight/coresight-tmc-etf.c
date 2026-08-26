@@ -574,6 +574,8 @@ static unsigned long tmc_update_etf_buffer(struct coresight_device *csdev,
 			cur &= buf->nr_pages - 1;
 		}
 	}
+	buf->cur = cur;
+	buf->offset = offset;
 
 	/*
 	 * In snapshot mode we simply increment the head by the number of byte

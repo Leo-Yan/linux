@@ -391,15 +391,20 @@ static unsigned long smb_update_buffer(struct coresight_device *csdev,
 	 * perf ring buffer (handle->size). If so advance the offset so
 	 * that we get the latest trace data.
 	 */
-	if (sdb->data_size > handle->size) {
+	if (!buf->snapshot && sdb->data_size > handle->size) {
 		smb_update_read_ptr(drvdata, sdb->data_size - handle->size);
 		lost = true;
 	}
 
 	data_size = sdb->data_size;
 	smb_sync_perf_buffer(drvdata, buf, handle->head);
+	if (buf->snapshot)
+		handle->head += data_size;
 	if (!buf->snapshot && lost)
 		perf_aux_output_flag(handle, PERF_AUX_FLAG_TRUNCATED);
+
+	/* Keep the sink ready for an AUX resume after synchronizing it. */
+	smb_enable_hw(drvdata);
 
 	return data_size;
 }

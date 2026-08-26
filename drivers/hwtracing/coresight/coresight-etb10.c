@@ -552,6 +552,8 @@ static unsigned long etb_update_buffer(struct coresight_device *csdev,
 	/* reset ETB buffer for next run */
 	writel_relaxed(0x0, drvdata->base + ETB_RAM_READ_POINTER);
 	writel_relaxed(0x0, drvdata->base + ETB_RAM_WRITE_POINTER);
+	buf->cur = cur;
+	buf->offset = offset;
 
 	/*
 	 * In snapshot mode we simply increment the head by the number of byte

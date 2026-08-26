@@ -69,6 +69,7 @@ struct trbe_buf {
 	int nr_pages;
 	void **pages;
 	bool snapshot;
+	bool cbuf;
 	struct trbe_cpudata *cpudata;
 };
 
@@ -625,16 +626,9 @@ static void set_trbe_limit_pointer_enabled(struct trbe_buf *buf)
 	trblimitr &= ~TRBLIMITR_EL1_TM_MASK;
 	trblimitr &= ~TRBLIMITR_EL1_LIMIT_MASK;
 
-	/*
-	 * Fill trace buffer mode is used here while configuring the
-	 * TRBE for trace capture. In this particular mode, the trace
-	 * collection is stopped and a maintenance interrupt is raised
-	 * when the current write pointer wraps. This pause in trace
-	 * collection gives the software an opportunity to capture the
-	 * trace data in the interrupt handler, before reconfiguring
-	 * the TRBE.
-	 */
-	trblimitr |= (TRBLIMITR_EL1_FM_FILL << TRBLIMITR_EL1_FM_SHIFT) &
+	/* Use CBUF for snapshots where it is safe to overwrite old trace. */
+	trblimitr |= ((buf->cbuf ? TRBLIMITR_EL1_FM_CBUF :
+			TRBLIMITR_EL1_FM_FILL) << TRBLIMITR_EL1_FM_SHIFT) &
 		     TRBLIMITR_EL1_FM_MASK;
 
 	/*
@@ -745,13 +739,47 @@ static unsigned long trbe_get_trace_size(struct perf_output_handle *handle,
 	return size;
 }
 
+static unsigned long trbe_get_cbuf_size(struct perf_output_handle *handle,
+					struct trbe_buf *buf, u64 status)
+{
+	unsigned long buf_size = (unsigned long)buf->nr_pages << PAGE_SHIFT;
+	unsigned long start, write;
+
+	start = PERF_IDX2OFF(handle->head, buf);
+	write = get_trbe_write_pointer() - buf->trbe_base;
+	if (WARN_ON_ONCE(write > buf_size))
+		return 0;
+
+	/* Treat LIMIT as BASE when CBUF has just wrapped. */
+	if (write == buf_size && is_trbe_wrap(status))
+		write = 0;
+
+	/* Accounting for one wrap preserves the position; older laps are lost. */
+	if (is_trbe_wrap(status))
+		return buf_size - start + write;
+
+	if (WARN_ON_ONCE(write < start))
+		return 0;
+
+	return write - start;
+}
+
 static void *arm_trbe_alloc_buffer(struct coresight_device *csdev,
 				   struct perf_event *event, void **pages,
 				   int nr_pages, bool snapshot)
 {
+	struct trbe_cpudata *cpudata = dev_get_drvdata(&csdev->dev);
 	struct trbe_buf *buf;
 	struct page **pglist;
+	bool cbuf;
 	int i;
+
+	cbuf = snapshot && !trbe_may_write_out_of_range(cpudata);
+	if (event->attr.aux_sample_size && !cbuf) {
+		dev_warn_once(&csdev->dev,
+			      "AUX sampling is not supported with the TRBE write-out-of-range workaround\n");
+		return NULL;
+	}
 
 	/*
 	 * TRBE LIMIT and TRBE WRITE pointers must be page aligned. But with
@@ -784,6 +812,7 @@ static void *arm_trbe_alloc_buffer(struct coresight_device *csdev,
 	buf->trbe_limit = buf->trbe_base + nr_pages * PAGE_SIZE;
 	buf->trbe_write = buf->trbe_base;
 	buf->snapshot = snapshot;
+	buf->cbuf = cbuf;
 	buf->nr_pages = nr_pages;
 	buf->pages = pages;
 	kfree(pglist);
@@ -798,6 +827,9 @@ static void arm_trbe_free_buffer(void *config)
 	kfree(buf);
 }
 
+static int __arm_trbe_enable(struct trbe_buf *buf,
+			     struct perf_output_handle *handle);
+
 static unsigned long arm_trbe_update_buffer(struct coresight_device *csdev,
 					    struct perf_output_handle *handle,
 					    void *config)
@@ -805,10 +837,12 @@ static unsigned long arm_trbe_update_buffer(struct coresight_device *csdev,
 	struct trbe_drvdata *drvdata = dev_get_drvdata(csdev->dev.parent);
 	struct trbe_cpudata *cpudata = dev_get_drvdata(&csdev->dev);
 	struct trbe_buf *buf = config;
+	struct perf_event *event;
 	enum trbe_fault_action act;
 	unsigned long size, status;
 	unsigned long flags;
 	bool wrap = false;
+	bool restart = false;
 
 	WARN_ON(buf->cpudata != cpudata);
 	WARN_ON(cpudata->cpu != smp_processor_id());
@@ -817,22 +851,17 @@ static unsigned long arm_trbe_update_buffer(struct coresight_device *csdev,
 		return 0;
 
 	/*
-	 * We are about to disable the TRBE. And this could in turn
-	 * fill up the buffer triggering, an IRQ. This could be consumed
-	 * by the PE asynchronously, causing a race here against
-	 * the IRQ handler in closing out the handle. So, let us
-	 * make sure the IRQ can't trigger while we are collecting
-	 * the buffer. We also make sure that a WRAP event is handled
-	 * accordingly.
+	 * FILL mode can trigger a maintenance IRQ while TRBE is disabled.
+	 * Serialize that IRQ with buffer collection. CBUF snapshot mode does
+	 * not raise a wrap IRQ, but can still report faults through the IRQ.
 	 */
 	local_irq_save(flags);
+	event = READ_ONCE(handle->event);
+	restart = buf->snapshot && event && !READ_ONCE(event->hw.state);
 
 	/*
-	 * If the TRBE was disabled due to lack of space in the AUX buffer or a
-	 * spurious fault, the driver leaves it disabled, truncating the buffer.
-	 * Since the etm_perf driver expects to close out the AUX buffer, the
-	 * driver skips it. Thus, just pass in 0 size here to indicate that the
-	 * buffer was truncated.
+	 * If TRBE is already disabled there is no new data to account. Leave it
+	 * disabled for the final stop; an active snapshot is restarted below.
 	 */
 	if (!is_trbe_enabled()) {
 		size = 0;
@@ -867,6 +896,10 @@ static unsigned long arm_trbe_update_buffer(struct coresight_device *csdev,
 		 * errors and as such buffer is empty.
 		 */
 		if (act != TRBE_FAULT_ACT_WRAP) {
+			if (act == TRBE_FAULT_ACT_FATAL && restart) {
+				restart = false;
+				trbe_stop_and_truncate_event(handle);
+			}
 			size = 0;
 			goto done;
 		}
@@ -875,13 +908,23 @@ static unsigned long arm_trbe_update_buffer(struct coresight_device *csdev,
 		wrap = true;
 	}
 
-	size = trbe_get_trace_size(handle, buf, wrap);
+	if (buf->cbuf)
+		size = trbe_get_cbuf_size(handle, buf, status);
+	else
+		size = trbe_get_trace_size(handle, buf, wrap);
 
 done:
-	local_irq_restore(flags);
-
 	if (buf->snapshot)
 		handle->head += size;
+	/*
+	 * A snapshot sample only pauses the source. Restart TRBE at the new
+	 * head before the source is resumed by the CoreSight perf driver.
+	 * Leave it disabled when update_buffer() is called for the final stop.
+	 */
+	if (restart)
+		__arm_trbe_enable(buf, handle);
+
+	local_irq_restore(flags);
 	return size;
 }
 
@@ -961,7 +1004,8 @@ static int trbe_apply_work_around_before_enable(struct trbe_buf *buf)
 	 *  - At trace collection:
 	 *     - Pad the 256bytes skipped above again with IGNORE packets.
 	 */
-	if (trbe_has_erratum(buf->cpudata, TRBE_WORKAROUND_OVERWRITE_FILL_MODE)) {
+	if (!buf->cbuf &&
+	    trbe_has_erratum(buf->cpudata, TRBE_WORKAROUND_OVERWRITE_FILL_MODE)) {
 		if (WARN_ON(!IS_ALIGNED(buf->trbe_write, PAGE_SIZE)))
 			return -EINVAL;
 		buf->trbe_hw_base = buf->trbe_write;

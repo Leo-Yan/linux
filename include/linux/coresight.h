@@ -364,7 +364,8 @@ enum cs_mode {
  * @disable:		disables the sink.
  * @alloc_buffer:	initialises perf's ring buffer for trace collection.
  * @free_buffer:	release memory allocated in @get_config.
- * @update_buffer:	update buffer pointers after a trace session.
+ * @update_buffer:	update buffer pointers after a trace session. In snapshot
+ *			mode, advance handle->head by the amount of data copied.
  */
 struct coresight_ops_sink {
 	int (*enable)(struct coresight_device *csdev, enum cs_mode mode,

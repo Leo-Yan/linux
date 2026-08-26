@@ -362,13 +362,14 @@ etm_event_build_path(struct perf_event *event, int cpu,
 		return NULL;
 
 	/*
-	 * If AUX pause feature is enabled but the ETM driver does not
-	 * support the operations, skip for this source.
+	 * If AUX pause or sampling is requested but the ETM driver does not
+	 * support the pause/resume operations, skip this source.
 	 */
-	if (event->attr.aux_start_paused &&
+	if ((event->attr.aux_start_paused || event->attr.aux_sample_size) &&
 	    (!source_ops(source)->pause_perf ||
 	     !source_ops(source)->resume_perf)) {
-		dev_err_once(&source->dev, "AUX pause is not supported.\n");
+		dev_err_once(&source->dev,
+			     "AUX pause or snapshot sampling is not supported.\n");
 		goto out;
 	}
 
@@ -433,6 +434,10 @@ static void *etm_setup_aux(struct perf_event *event, void **pages,
 	struct coresight_device *user_sink = NULL;
 	struct etm_event_data *event_data = NULL;
 
+	/* AUX sampling requires a circular snapshot buffer. */
+	if (event->attr.aux_sample_size && !overwrite)
+		return NULL;
+
 	event_data = alloc_event_data(cpu);
 	if (!event_data)
 		return NULL;
@@ -494,6 +499,10 @@ static void *etm_setup_aux(struct perf_event *event, void **pages,
 		goto err;
 
 	if (!sink_ops(sink)->alloc_buffer || !sink_ops(sink)->free_buffer)
+		goto err;
+
+	/* AUX sampling needs sink buffer update support. */
+	if (event->attr.aux_sample_size && !sink_ops(sink)->update_buffer)
 		goto err;
 
 	/*
@@ -684,6 +693,62 @@ static void etm_event_pause(struct coresight_path *path,
 	} else {
 		WARN_ON_ONCE(size);
 	}
+}
+
+static long etm_event_snapshot_aux(struct perf_event *event,
+				   struct perf_output_handle *handle,
+				   unsigned long size)
+{
+	struct etm_ctxt *ctxt = this_cpu_ptr(&etm_ctxt);
+	struct perf_output_handle *aux_handle = &ctxt->handle;
+	struct etm_event_data *event_data;
+	struct coresight_device *source, *sink;
+	struct coresight_path *path;
+	unsigned long from, to;
+	long ret;
+
+	if (WARN_ON_ONCE(READ_ONCE(aux_handle->event) != event))
+		return 0;
+
+	event_data = READ_ONCE(ctxt->event_data);
+	if (WARN_ON_ONCE(!event_data))
+		return 0;
+
+	path = etm_event_get_ctxt_path(ctxt);
+	if (!path)
+		return 0;
+
+	source = coresight_get_source(path);
+	sink = coresight_get_sink(path);
+	if (WARN_ON_ONCE(!source || !sink))
+		return 0;
+
+	if (WARN_ON_ONCE(!sink_ops(sink)->update_buffer))
+		return 0;
+
+	/* Stop the source before synchronizing the sink's AUX buffer. */
+	coresight_pause_source(source);
+	ret = (long)sink_ops(sink)->update_buffer(sink, aux_handle,
+						  event_data->snk_config);
+	if (ret <= 0)
+		goto out;
+
+	size = min_t(unsigned long, size, ret);
+
+	/*
+	 * Keep the AUX transaction open. update_buffer() advances the live AUX
+	 * handle and the eventual perf_aux_output_end() publishes that head to
+	 * the perf ring buffer. The callback handle is only the sample output.
+	 */
+	to = aux_handle->head;
+	from = to - size;
+	size = perf_output_copy_aux(aux_handle, handle, from, to);
+
+out:
+	if (coresight_resume_source(source) < 0)
+		dev_err(&source->dev, "Failed to resume ETM event.\n");
+
+	return size;
 }
 
 static void etm_event_stop(struct perf_event *event, int mode)
@@ -1046,6 +1111,7 @@ int __init etm_perf_init(void)
 	etm_pmu.free_aux		= etm_free_aux;
 	etm_pmu.start			= etm_event_start;
 	etm_pmu.stop			= etm_event_stop;
+	etm_pmu.snapshot_aux		= etm_event_snapshot_aux;
 	etm_pmu.add			= etm_event_add;
 	etm_pmu.del			= etm_event_del;
 	etm_pmu.addr_filters_sync	= etm_addr_filters_sync;
