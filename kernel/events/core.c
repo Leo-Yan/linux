@@ -8060,6 +8060,8 @@ static void perf_aux_sample_output(struct perf_event *event,
 	size = perf_pmu_snapshot_aux(rb, sampler, handle, data->aux_size);
 	ring_buffer_put(rb);
 
+	trace_printk("%s: aux_size=%llx size=%lx\n", __func__, data->aux_size, size);
+
 	/*
 	 * An error here means that perf_output_copy() failed (returned a
 	 * non-zero surplus that it didn't copy), which in its current
