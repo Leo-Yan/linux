@@ -651,7 +651,7 @@ int trace_vbprintk(unsigned long ip, const char *fmt, va_list args)
 
 		memcpy(entry->buf, tbuffer, sizeof(u32) * len);
 		__buffer_unlock_commit(buffer, event);
-		ftrace_trace_stack(tr, buffer, trace_ctx, 6, NULL);
+		ftrace_trace_stack(tr, buffer, trace_ctx, 2, NULL);
 	}
 out_put:
 	put_trace_buf();

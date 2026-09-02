@@ -617,6 +617,7 @@ static void set_trbe_limit_pointer_enabled(struct trbe_buf *buf)
 {
 	u64 trblimitr = read_sysreg_s(SYS_TRBLIMITR_EL1);
 	unsigned long addr = buf->trbe_limit;
+	//int i;
 
 	WARN_ON(!IS_ALIGNED(addr, (1UL << TRBLIMITR_EL1_LIMIT_SHIFT)));
 	WARN_ON(!IS_ALIGNED(addr, PAGE_SIZE));
@@ -630,6 +631,8 @@ static void set_trbe_limit_pointer_enabled(struct trbe_buf *buf)
 	trblimitr |= ((buf->cbuf ? TRBLIMITR_EL1_FM_CBUF :
 			TRBLIMITR_EL1_FM_FILL) << TRBLIMITR_EL1_FM_SHIFT) &
 		     TRBLIMITR_EL1_FM_MASK;
+	//trblimitr |= ((TRBLIMITR_EL1_FM_FILL) << TRBLIMITR_EL1_FM_SHIFT) &
+	//	      TRBLIMITR_EL1_FM_MASK;
 
 	/*
 	 * Trigger mode is not used here while configuring the TRBE for
@@ -638,7 +641,25 @@ static void set_trbe_limit_pointer_enabled(struct trbe_buf *buf)
 	trblimitr |= (TRBLIMITR_EL1_TM_IGNR << TRBLIMITR_EL1_TM_SHIFT) &
 		     TRBLIMITR_EL1_TM_MASK;
 	trblimitr |= (addr & PAGE_MASK);
+
+	trace_printk("[Hardware]: TRBBASER=%llx TRBLIMITR=%llx(->%llx) TRBPTR=%llx TRBTRG=%llx TRBSR=%llx\n",
+		     read_sysreg_s(SYS_TRBBASER_EL1),
+		     read_sysreg_s(SYS_TRBLIMITR_EL1), trblimitr,
+		     read_sysreg_s(SYS_TRBPTR_EL1),
+		     read_sysreg_s(SYS_TRBTRG_EL1),
+		     read_sysreg_s(SYS_TRBSR_EL1));
+
 	set_trbe_enabled(buf->cpudata, trblimitr);
+
+	//for (i = 0; i < 10000; i++)
+	//	barrier();
+
+	trace_printk("[Verify HW]: TRBBASER=%llx TRBLIMITR=%llx TRBPTR=%llx TRBTRG=%llx TRBSR=%llx\n",
+		     read_sysreg_s(SYS_TRBBASER_EL1),
+		     read_sysreg_s(SYS_TRBLIMITR_EL1),
+		     read_sysreg_s(SYS_TRBPTR_EL1),
+		     read_sysreg_s(SYS_TRBTRG_EL1),
+		     read_sysreg_s(SYS_TRBSR_EL1));
 }
 
 static void trbe_enable_hw(struct trbe_buf *buf)
@@ -753,6 +774,9 @@ static unsigned long trbe_get_cbuf_size(struct perf_output_handle *handle,
 	/* Treat LIMIT as BASE when CBUF has just wrapped. */
 	if (write == buf_size && is_trbe_wrap(status))
 		write = 0;
+
+	trace_printk("[CBUF]: status=%llx start=%lx write=%lx\n",
+		     status, start, write);
 
 	/* Accounting for one wrap preserves the position; older laps are lost. */
 	if (is_trbe_wrap(status))
@@ -913,6 +937,8 @@ static unsigned long arm_trbe_update_buffer(struct coresight_device *csdev,
 	else
 		size = trbe_get_trace_size(handle, buf, wrap);
 
+	trace_printk("[Update_buffer]: size=%lx\n", size);
+
 done:
 	if (buf->snapshot)
 		handle->head += size;
@@ -1049,6 +1075,9 @@ static int __arm_trbe_enable(struct trbe_buf *buf,
 {
 	int ret = 0;
 
+	trace_printk("%s: head=0x%lx size=0x%lx\n", __func__,
+		     handle->head, handle->size);
+
 	perf_aux_output_flag(handle, PERF_AUX_FLAG_CORESIGHT_FORMAT_RAW);
 	buf->trbe_limit = compute_trbe_buffer_limit(handle);
 	buf->trbe_write = buf->trbe_base + PERF_IDX2OFF(handle->head, buf);
@@ -1062,6 +1091,10 @@ static int __arm_trbe_enable(struct trbe_buf *buf,
 	ret = trbe_apply_work_around_before_enable(buf);
 	if (ret)
 		goto err;
+
+	trace_printk("%s: hw_base=0x%lx base=0x%lx write=0x%lx limit=0x%lx\n",
+		     __func__, buf->trbe_hw_base, buf->trbe_base,
+		     buf->trbe_write, buf->trbe_limit);
 
 	*this_cpu_ptr(buf->cpudata->drvdata->handle) = handle;
 	trbe_enable_hw(buf);
@@ -1104,6 +1137,14 @@ static int arm_trbe_disable(struct coresight_device *csdev)
 		return -EINVAL;
 
 	trbe_drain_and_disable_local(cpudata);
+
+	trace_printk("[DISABLE]: TRBBASER=%llx TRBLIMITR=%llx TRBPTR=%llx TRBTRG=%llx TRBSR=%llx\n",
+		     read_sysreg_s(SYS_TRBBASER_EL1),
+		     read_sysreg_s(SYS_TRBLIMITR_EL1),
+		     read_sysreg_s(SYS_TRBPTR_EL1),
+		     read_sysreg_s(SYS_TRBTRG_EL1),
+		     read_sysreg_s(SYS_TRBSR_EL1));
+
 	buf->cpudata = NULL;
 	cpudata->buf = NULL;
 	cpudata->mode = CS_MODE_DISABLED;
@@ -1196,6 +1237,9 @@ static irqreturn_t arm_trbe_irq_handler(int irq, void *dev)
 
 	/* Reads to TRBSR_EL1 is fine when TRBE is active */
 	status = read_sysreg_s(SYS_TRBSR_EL1);
+
+	trace_printk("TRBSR: %llx\n", status);
+
 	/*
 	 * If the pending IRQ was handled by update_buffer callback
 	 * we have nothing to do here.
@@ -1212,6 +1256,13 @@ static irqreturn_t arm_trbe_irq_handler(int irq, void *dev)
 	trbe_drain_and_disable_local(buf->cpudata);
 	clr_trbe_irq();
 	isb();
+
+	trace_printk("[IRQ]: TRBBASER=%llx TRBLIMITR=%llx TRBPTR=%llx TRBTRG=%llx TRBSR=%llx\n",
+		     read_sysreg_s(SYS_TRBBASER_EL1),
+		     read_sysreg_s(SYS_TRBLIMITR_EL1),
+		     read_sysreg_s(SYS_TRBPTR_EL1),
+		     read_sysreg_s(SYS_TRBTRG_EL1),
+		     read_sysreg_s(SYS_TRBSR_EL1));
 
 	if (WARN_ON_ONCE(!handle) || !perf_get_aux(handle))
 		return IRQ_NONE;

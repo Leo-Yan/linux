@@ -8024,6 +8024,8 @@ static void perf_aux_sample_output(struct perf_event *event,
 
 	size = perf_pmu_snapshot_aux(rb, sampler, handle, data->aux_size);
 
+	trace_printk("%s: aux_size=%llx size=%lx\n", __func__, data->aux_size, size);
+
 	/*
 	 * An error here means that perf_output_copy() failed (returned a
 	 * non-zero surplus that it didn't copy), which in its current
@@ -10610,6 +10612,8 @@ __perf_event_account_interrupt(struct perf_event *event, int throttle)
 	}
 
 	if (unlikely(throttle && hwc->interrupts >= max_samples_per_tick)) {
+		//trace_printk("%s: interrupts=%lld max_samples_per_tick=%d\n",
+		//	     __func__, hwc->interrupts, max_samples_per_tick);
 		__this_cpu_inc(perf_throttled_count);
 		tick_dep_set_cpu(smp_processor_id(), TICK_DEP_BIT_PERF_EVENTS);
 		perf_event_throttle_group(event);
@@ -10622,8 +10626,10 @@ __perf_event_account_interrupt(struct perf_event *event, int throttle)
 
 		hwc->freq_time_stamp = now;
 
-		if (delta > 0 && delta < 2*TICK_NSEC)
+		if (delta > 0 && delta < 2*TICK_NSEC) {
+			//trace_printk("%s: delta=%lld\n", __func__, delta);
 			perf_adjust_period(event, delta, hwc->last_period, true);
+		}
 	}
 
 	return ret;
