@@ -597,6 +597,8 @@ long perf_output_copy_aux(struct perf_output_handle *aux_handle,
 	from &= (rb->aux_nr_pages << PAGE_SHIFT) - 1;
 	to &= (rb->aux_nr_pages << PAGE_SHIFT) - 1;
 
+	trace_printk("%s: from=0x%lx to=0x%lx\n", __func__, from, to);
+
 	do {
 		tocopy = PAGE_SIZE - offset_in_page(from);
 		if (to > from)
