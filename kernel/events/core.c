@@ -8027,12 +8027,11 @@ static void perf_aux_sample_output(struct perf_event *event,
 	trace_printk("%s: aux_size=%llx size=%lx\n", __func__, data->aux_size, size);
 
 	/*
-	 * An error here means that perf_output_copy() failed (returned a
-	 * non-zero surplus that it didn't copy), which in its current
-	 * enlightened implementation is not possible. If that changes, we'd
-	 * like to know.
+	 * A negative return means that perf_output_copy() failed, while zero
+	 * means that no AUX data was copied despite a non-zero request. Neither
+	 * can be treated as alignment padding below.
 	 */
-	if (WARN_ON_ONCE(size < 0))
+	if (WARN_ON_ONCE(size <= 0))
 		goto out_put;
 
 	/*
