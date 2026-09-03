@@ -90,6 +90,8 @@ struct etm_filters {
  * @snk_config:		The sink configuration.
  * @cfg_hash:		The hash id of any coresight config selected.
  * @path:		An array of path, each slot for one CPU.
+ * @snapshot:		Whether the AUX buffer is in snapshot mode.
+ * @stopping:		Whether the AUX transaction is being finally stopped.
  */
 struct etm_event_data {
 	struct work_struct work;
@@ -98,6 +100,8 @@ struct etm_event_data {
 	void *snk_config;
 	u32 cfg_hash;
 	struct coresight_path * __percpu *path;
+	bool snapshot;
+	bool stopping;
 };
 
 int etm_perf_symlink(struct coresight_device *csdev, bool link);
@@ -110,6 +114,13 @@ static inline void *etm_perf_sink_config(struct perf_output_handle *handle)
 	if (data)
 		return data->snk_config;
 	return NULL;
+}
+
+static inline bool etm_perf_aux_output_open(struct perf_output_handle *handle)
+{
+	struct etm_event_data *data = perf_get_aux(handle);
+
+	return data && !READ_ONCE(data->stopping);
 }
 int etm_perf_add_symlink_cscfg(struct device *dev,
 			       struct cscfg_config_desc *config_desc);

@@ -861,7 +861,6 @@ static unsigned long arm_trbe_update_buffer(struct coresight_device *csdev,
 	struct trbe_drvdata *drvdata = dev_get_drvdata(csdev->dev.parent);
 	struct trbe_cpudata *cpudata = dev_get_drvdata(&csdev->dev);
 	struct trbe_buf *buf = config;
-	struct perf_event *event;
 	enum trbe_fault_action act;
 	unsigned long size, status;
 	unsigned long flags;
@@ -880,8 +879,7 @@ static unsigned long arm_trbe_update_buffer(struct coresight_device *csdev,
 	 * not raise a wrap IRQ, but can still report faults through the IRQ.
 	 */
 	local_irq_save(flags);
-	event = READ_ONCE(handle->event);
-	restart = buf->snapshot && event && !READ_ONCE(event->hw.state);
+	restart = buf->snapshot && etm_perf_aux_output_open(handle);
 
 	/*
 	 * If TRBE is already disabled there is no new data to account. Leave it
@@ -944,8 +942,9 @@ done:
 		handle->head += size;
 	/*
 	 * A snapshot sample only pauses the source. Restart TRBE at the new
-	 * head before the source is resumed by the CoreSight perf driver.
-	 * Leave it disabled when update_buffer() is called for the final stop.
+	 * head before the source is resumed by the CoreSight perf driver. An
+	 * open AUX transaction can also outlive a throttling stop, but not a
+	 * final stop that closes the transaction.
 	 */
 	if (restart)
 		__arm_trbe_enable(buf, handle);

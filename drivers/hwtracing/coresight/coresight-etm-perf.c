@@ -319,10 +319,11 @@ static bool sinks_compatible(struct coresight_device *a,
  *
  * Perf event callbacks run on the same CPU in atomic context, but AUX pause
  * and resume may run in NMI context and preempt other callbacks. Since the
- * event stop callback clears ctxt->event_data before the data is released,
- * AUX pause/resume will either observe a NULL pointer and stop fetching the
- * path pointer, or safely access event_data and the path, as the data has
- * not yet been freed.
+ * final event stop callback clears ctxt->event_data before the data is
+ * released. AUX pause/resume will either observe a NULL pointer and stop
+ * fetching the path pointer, or safely access event_data and the path, as the
+ * data has not yet been freed. A throttled snapshot event retains event_data
+ * until it is restarted or finally stopped.
  */
 static struct coresight_path *etm_event_get_ctxt_path(struct etm_ctxt *ctxt)
 {
@@ -442,6 +443,7 @@ static void *etm_setup_aux(struct perf_event *event, void **pages,
 	if (!event_data)
 		return NULL;
 	INIT_WORK(&event_data->work, free_event_data);
+	event_data->snapshot = overwrite;
 
 	/* First get the selected sink from user space. */
 	sink_hash = ATTR_CFG_GET_FLD(&event->attr, sinkid);
@@ -558,13 +560,30 @@ static void etm_event_start(struct perf_event *event, int flags)
 	if (flags & PERF_EF_RESUME) {
 		path = etm_event_get_ctxt_path(ctxt);
 		if (etm_event_resume(path) < 0)
-			goto fail;
+			goto fail_stopped;
 		return;
 	}
 
-	/* Have we messed up our tracking ? */
-	if (WARN_ON(READ_ONCE(ctxt->event_data)))
-		goto fail;
+	event_data = READ_ONCE(ctxt->event_data);
+	/*
+	 * Restart after stop() was called without PERF_EF_UPDATE for a
+	 * snapshot event. The AUX transaction and path are still active, so
+	 * only the trace source needs to be resumed.
+	 */
+	if (event_data) {
+		if (WARN_ON_ONCE(!event_data->snapshot ||
+				 !(event->hw.state & PERF_HES_STOPPED) ||
+				 (event->hw.state & PERF_HES_UPTODATE) ||
+				 READ_ONCE(handle->event) != event))
+			goto fail_stopped;
+
+		path = etm_event_get_ctxt_path(ctxt);
+		if (etm_event_resume(path) < 0)
+			goto fail_stopped;
+
+		event->hw.state &= ~PERF_HES_STOPPED;
+		return;
+	}
 
 	/*
 	 * Deal with the ring buffer API and get a handle on the
@@ -573,6 +592,7 @@ static void etm_event_start(struct perf_event *event, int flags)
 	event_data = perf_aux_output_begin(handle, event);
 	if (!event_data)
 		goto fail;
+	WRITE_ONCE(event_data->stopping, false);
 
 	/*
 	 * Check if this ETM is allowed to trace, as decided
@@ -624,7 +644,7 @@ static void etm_event_start(struct perf_event *event, int flags)
 
 out:
 	/* Tell the perf core the event is alive */
-	event->hw.state = 0;
+	event->hw.state &= ~(PERF_HES_STOPPED | PERF_HES_UPTODATE);
 	/* Save the event_data for this ETM */
 	WRITE_ONCE(ctxt->event_data, event_data);
 	return;
@@ -642,7 +662,11 @@ fail_end_stop:
 		perf_aux_output_end(handle, 0);
 	}
 fail:
-	event->hw.state = PERF_HES_STOPPED;
+	event->hw.state |= PERF_HES_STOPPED | PERF_HES_UPTODATE;
+	return;
+
+fail_stopped:
+	event->hw.state |= PERF_HES_STOPPED;
 	return;
 }
 
@@ -705,6 +729,7 @@ static long etm_event_snapshot_aux(struct perf_event *event,
 	struct coresight_device *source, *sink;
 	struct coresight_path *path;
 	unsigned long from, to;
+	bool resume;
 	long ret;
 
 	if (WARN_ON_ONCE(READ_ONCE(aux_handle->event) != event))
@@ -712,7 +737,6 @@ static long etm_event_snapshot_aux(struct perf_event *event,
 
 	event_data = READ_ONCE(ctxt->event_data);
 
-	/* The event has been disabled (e.g., throttling) */
 	if (!event_data)
 		return 0;
 
@@ -727,6 +751,8 @@ static long etm_event_snapshot_aux(struct perf_event *event,
 
 	if (WARN_ON_ONCE(!sink_ops(sink)->update_buffer))
 		return 0;
+
+	resume = !(READ_ONCE(event->hw.state) & PERF_HES_STOPPED);
 
 	/* Stop the source before synchronizing the sink's AUX buffer. */
 	coresight_pause_source(source);
@@ -744,13 +770,13 @@ static long etm_event_snapshot_aux(struct perf_event *event,
 	 */
 	to = aux_handle->head;
 	from = to - size;
-	size = perf_output_copy_aux(aux_handle, handle, from, to);
+	ret = perf_output_copy_aux(aux_handle, handle, from, to);
 
 out:
-	if (coresight_resume_source(source) < 0)
+	if (resume && coresight_resume_source(source) < 0)
 		dev_err(&source->dev, "Failed to resume ETM event.\n");
 
-	return size;
+	return ret;
 }
 
 static void etm_event_stop(struct perf_event *event, int mode)
@@ -775,10 +801,8 @@ static void etm_event_stop(struct perf_event *event, int mode)
 		return;
 
 	event_data = READ_ONCE(ctxt->event_data);
-	/* Clear the event_data as this ETM is stopping the trace. */
-	WRITE_ONCE(ctxt->event_data, NULL);
-
-	if (event->hw.state == PERF_HES_STOPPED)
+	event->hw.state |= PERF_HES_STOPPED;
+	if (event->hw.state & PERF_HES_UPTODATE)
 		return;
 
 	/* We must have a valid event_data for a running event */
@@ -786,28 +810,50 @@ static void etm_event_stop(struct perf_event *event, int mode)
 		return;
 
 	/*
+	 * Group throttling calls stop() without PERF_EF_UPDATE. Keep an open
+	 * snapshot AUX transaction and its path alive so snapshot_aux() can
+	 * copy the trace that was captured before the source was stopped.
+	 */
+	if (!mode && event_data->snapshot && READ_ONCE(handle->event)) {
+		if (path) {
+			source = coresight_get_source(path);
+			if (WARN_ON_ONCE(!source))
+				return;
+			coresight_pause_source(source);
+		}
+		return;
+	}
+
+	/* The AUX transaction will be closed below. */
+	WRITE_ONCE(event_data->stopping, true);
+	WRITE_ONCE(ctxt->event_data, NULL);
+
+	/*
 	 * Check if this ETM was allowed to trace, as decided at
 	 * etm_setup_aux(). If it wasn't allowed to trace, then
 	 * nothing needs to be torn down other than outputting a
 	 * zero sized record.
 	 */
-	if (handle->event && (mode & PERF_EF_UPDATE) &&
-	    !cpumask_test_cpu(cpu, &event_data->mask)) {
-		event->hw.state = PERF_HES_STOPPED;
-		perf_aux_output_end(handle, 0);
+	if (!cpumask_test_cpu(cpu, &event_data->mask)) {
+		if (READ_ONCE(handle->event))
+			perf_aux_output_end(handle, 0);
+		event->hw.state |= PERF_HES_UPTODATE;
 		return;
 	}
 
 	source = coresight_get_source(path);
 	sink = coresight_get_sink(path);
-	if (!source || !sink)
+	if (!source || !sink) {
+		if (READ_ONCE(handle->event))
+			perf_aux_output_end(handle, 0);
+		if (path)
+			coresight_disable_path(path);
+		event->hw.state |= PERF_HES_UPTODATE;
 		return;
+	}
 
 	/* stop tracer */
 	coresight_disable_source(source, event);
-
-	/* tell the core */
-	event->hw.state = PERF_HES_STOPPED;
 
 	/*
 	 * If the handle is not bound to an event anymore
@@ -818,14 +864,16 @@ static void etm_event_stop(struct perf_event *event, int mode)
 	if (!handle->event)
 		goto out;
 
-	/* Event core layer may call with mode == 0 for throttling */
+	/* Non-snapshot events are also updated when throttling stops them. */
 	if (mode & PERF_EF_UPDATE || !mode) {
 		if (WARN_ON_ONCE(handle->event != event))
 			goto out;
 
 		/* update trace information */
-		if (!sink_ops(sink)->update_buffer)
+		if (!sink_ops(sink)->update_buffer) {
+			perf_aux_output_end(handle, 0);
 			goto out;
+		}
 
 		size = sink_ops(sink)->update_buffer(sink, handle,
 					      event_data->snk_config);
@@ -851,6 +899,7 @@ static void etm_event_stop(struct perf_event *event, int mode)
 out:
 	/* Disabling the path make its elements available to other sessions */
 	coresight_disable_path(path);
+	event->hw.state |= PERF_HES_UPTODATE;
 }
 
 static int etm_event_add(struct perf_event *event, int mode)
@@ -858,12 +907,14 @@ static int etm_event_add(struct perf_event *event, int mode)
 	int ret = 0;
 	struct hw_perf_event *hwc = &event->hw;
 
+	hwc->state |= PERF_HES_UPTODATE;
+
 	if (mode & PERF_EF_START) {
 		etm_event_start(event, 0);
 		if (hwc->state & PERF_HES_STOPPED)
 			ret = -EINVAL;
 	} else {
-		hwc->state = PERF_HES_STOPPED;
+		hwc->state |= PERF_HES_STOPPED;
 	}
 
 	return ret;

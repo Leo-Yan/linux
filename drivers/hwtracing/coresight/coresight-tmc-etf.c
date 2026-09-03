@@ -484,7 +484,6 @@ static unsigned long tmc_update_etf_buffer(struct coresight_device *csdev,
 	unsigned long offset, to_read = 0, flags;
 	struct cs_buffers *buf = sink_config;
 	struct tmc_drvdata *drvdata = dev_get_drvdata(csdev->dev.parent);
-	struct perf_event *event = handle->event;
 
 	if (!buf)
 		return 0;
@@ -593,10 +592,10 @@ static unsigned long tmc_update_etf_buffer(struct coresight_device *csdev,
 	CS_LOCK(drvdata->base);
 
 	/*
-	 * If the event is active, it is triggered during an AUX pause.
-	 * Re-enable the sink so that it is ready when AUX resume is invoked.
+	 * Keep the sink ready while the AUX transaction is open. This includes
+	 * an AUX pause and a snapshot event stopped temporarily by throttling.
 	 */
-	if (!event->hw.state)
+	if (etm_perf_aux_output_open(handle))
 		__tmc_etb_enable_hw(drvdata);
 
 out:
