@@ -8056,6 +8056,7 @@ static void perf_aux_sample_output(struct perf_event *event,
 		return;
 
 	size = perf_pmu_snapshot_aux(rb, sampler, handle, data->aux_size);
+	ring_buffer_put(rb);
 
 	/*
 	 * An error here means that perf_output_copy() failed (returned a
@@ -8064,23 +8065,20 @@ static void perf_aux_sample_output(struct perf_event *event,
 	 * like to know.
 	 */
 	if (WARN_ON_ONCE(size < 0))
-		goto out_put;
+		return;
 
 	/*
-	 * The pad comes from ALIGN()ing data->aux_size up to u64 in
-	 * perf_prepare_sample_aux(), so should not be more than that.
+	 * The sample reserves data->aux_size bytes, but a snapshot may copy
+	 * fewer bytes. Clear the remainder to ensure no stale trace data.
 	 */
 	pad = data->aux_size - size;
-	if (WARN_ON_ONCE(pad >= sizeof(u64)))
-		pad = 8;
 
-	if (pad) {
-		u64 zero = 0;
-		perf_output_copy(handle, &zero, pad);
+	while (pad) {
+		unsigned long chunk = min(pad, PAGE_SIZE);
+
+		perf_output_copy(handle, page_address(ZERO_PAGE(0)), chunk);
+		pad -= chunk;
 	}
-
-out_put:
-	ring_buffer_put(rb);
 }
 
 /*
