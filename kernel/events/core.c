@@ -7957,10 +7957,12 @@ static unsigned long perf_prepare_sample_aux(struct perf_event *event,
 		goto out;
 
 	/*
-	 * If this is an NMI hit inside sampling code, don't take
-	 * the sample. See also perf_aux_sample_output().
+	 * If this is an NMI hit inside AUX sampling or pause/resume code,
+	 * don't include AUX data in the sample. See also
+	 * perf_aux_sample_output() and perf_event_aux_pause().
 	 */
-	if (READ_ONCE(rb->aux_in_sampling)) {
+	if (READ_ONCE(rb->aux_in_sampling) ||
+	    READ_ONCE(rb->aux_in_pause_resume)) {
 		data->aux_size = 0;
 	} else {
 		size = min_t(size_t, size, perf_aux_size(rb));
@@ -8837,10 +8839,12 @@ static void perf_event_aux_pause(struct perf_event *event, bool pause)
 
 	scoped_guard (irqsave) {
 		/*
-		 * Guard against self-recursion here. Another event could trip
-		 * this same from NMI context.
+		 * Guard against recursion and AUX sampling. Another event could
+		 * trigger either path from NMI context, in which case the AUX
+		 * action is dropped instead of waiting for the preempted context.
 		 */
-		if (READ_ONCE(rb->aux_in_pause_resume))
+		if (READ_ONCE(rb->aux_in_pause_resume) ||
+		    READ_ONCE(rb->aux_in_sampling))
 			break;
 
 		WRITE_ONCE(rb->aux_in_pause_resume, 1);

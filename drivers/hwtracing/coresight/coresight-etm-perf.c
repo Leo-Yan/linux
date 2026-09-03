@@ -752,7 +752,8 @@ static long etm_event_snapshot_aux(struct perf_event *event,
 	if (WARN_ON_ONCE(!sink_ops(sink)->update_buffer))
 		return 0;
 
-	resume = !(READ_ONCE(event->hw.state) & PERF_HES_STOPPED);
+	resume = !(READ_ONCE(event->hw.state) & PERF_HES_STOPPED) &&
+		 !READ_ONCE(event->hw.aux_paused);
 
 	/* Stop the source before synchronizing the sink's AUX buffer. */
 	coresight_pause_source(source);
@@ -773,7 +774,15 @@ static long etm_event_snapshot_aux(struct perf_event *event,
 	ret = perf_output_copy_aux(aux_handle, handle, from, to);
 
 out:
-	if (resume && coresight_resume_source(source) < 0)
+	/*
+	 * Only restore tracing if it was running on entry and the event is
+	 * still active, unpaused and associated with this AUX transaction.
+	 */
+	if (resume &&
+	    READ_ONCE(aux_handle->event) == event &&
+	    !(READ_ONCE(event->hw.state) & PERF_HES_STOPPED) &&
+	    !READ_ONCE(event->hw.aux_paused) &&
+	    coresight_resume_source(source) < 0)
 		dev_err(&source->dev, "Failed to resume ETM event.\n");
 
 	return ret;
