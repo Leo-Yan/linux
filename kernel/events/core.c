@@ -8066,6 +8066,10 @@ static void perf_aux_sample_output(struct perf_event *event,
 	if (WARN_ON_ONCE(size < 0))
 		goto out_put;
 
+	/* A throttled AUX event may return no data */
+	if (!size)
+		goto out_put;
+
 	/*
 	 * The pad comes from ALIGN()ing data->aux_size up to u64 in
 	 * perf_prepare_sample_aux(), so should not be more than that.
