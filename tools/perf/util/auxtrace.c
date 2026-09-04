@@ -1150,10 +1150,12 @@ struct auxtrace_queue *auxtrace_queues__sample_queue(struct auxtrace_queues *que
 	return &queues->queue_array[idx];
 }
 
-int auxtrace_queues__add_sample(struct auxtrace_queues *queues,
-				struct perf_session *session,
-				struct perf_sample *sample, u64 data_offset,
-				u64 reference)
+static int __auxtrace_queues__add_sample(struct auxtrace_queues *queues,
+					 struct perf_session *session,
+					 struct perf_sample *sample,
+					 struct perf_sample_id *sid,
+					 u64 data_offset, u64 reference,
+					 unsigned int idx)
 {
 	struct auxtrace_buffer buffer = {
 		.pid = -1,
@@ -1161,22 +1163,46 @@ int auxtrace_queues__add_sample(struct auxtrace_queues *queues,
 		.reference = reference,
 		.size = sample->aux_sample.size,
 	};
-	struct perf_sample_id *sid;
-	u64 id = sample->id;
-	unsigned int idx;
-
-	if (!id)
-		return -EINVAL;
-
-	sid = evlist__id2sid(session->evlist, id);
-	if (!sid)
-		return -ENOENT;
-
-	idx = sid->idx;
 	buffer.tid = sid->tid;
 	buffer.cpu = sid->cpu;
 
 	return auxtrace_queues__add_buffer(queues, session, idx, &buffer, NULL);
+}
+
+int auxtrace_queues__add_sample(struct auxtrace_queues *queues,
+				struct perf_session *session,
+				struct perf_sample *sample, u64 data_offset,
+				u64 reference)
+{
+	struct perf_sample_id *sid;
+
+	if (!sample->id)
+		return -EINVAL;
+
+	sid = evlist__id2sid(session->evlist, sample->id);
+	if (!sid)
+		return -ENOENT;
+
+	return __auxtrace_queues__add_sample(queues, session, sample, sid,
+					     data_offset, reference, sid->idx);
+}
+
+int auxtrace_queues__add_sample_idx(struct auxtrace_queues *queues,
+				    struct perf_session *session,
+				    struct perf_sample *sample, u64 data_offset,
+				    u64 reference, unsigned int idx)
+{
+	struct perf_sample_id *sid;
+
+	if (!sample->id)
+		return -EINVAL;
+
+	sid = evlist__id2sid(session->evlist, sample->id);
+	if (!sid)
+		return -ENOENT;
+
+	return __auxtrace_queues__add_sample(queues, session, sample, sid,
+					     data_offset, reference, idx);
 }
 
 struct queue_data {

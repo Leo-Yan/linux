@@ -18,6 +18,7 @@
 #include <stdlib.h>
 
 #include "auxtrace.h"
+#include "callchain.h"
 #include "color.h"
 #include "cs-etm.h"
 #include "cs-etm-decoder/cs-etm-decoder.h"
@@ -65,8 +66,11 @@ struct cs_etm_auxtrace {
 	 */
 	bool per_thread_decoding;
 	bool snapshot_mode;
+	bool sampling_mode;
 	bool data_queued;
 	bool has_virtual_ts; /* Virtual/Kernel timestamps in the trace. */
+	bool use_thread_stack;
+	bool callstack;
 
 	int num_cpu;
 	u64 latest_kernel_timestamp;
@@ -76,6 +80,10 @@ struct cs_etm_auxtrace {
 	u64 instructions_sample_type;
 	u64 instructions_sample_period;
 	u64 instructions_id;
+	unsigned int br_stack_sz;
+	unsigned int br_stack_sz_plus;
+	struct ip_callchain *chain;
+	struct branch_stack *br_stack;
 	u64 **metadata;
 	unsigned int pmu_type;
 	enum cs_etm_pid_fmt pid_fmt;
@@ -297,6 +305,24 @@ static struct cs_etm_queue *cs_etm__get_queue(struct cs_etm_auxtrace *etm, int c
 		return NULL;
 
 	return etm->queues.queue_array[cpu].priv;
+}
+
+static struct cs_etm_queue *
+cs_etm__get_sample_queue(struct cs_etm_auxtrace *etm, struct perf_sample *sample)
+{
+	struct perf_sample_id *sid;
+
+	if (!sample->id)
+		return NULL;
+
+	sid = evlist__id2sid(etm->session->evlist, sample->id);
+	if (!sid)
+		return NULL;
+
+	if (sid->cpu.cpu == -1)
+		etm->per_thread_decoding = true;
+
+	return cs_etm__get_queue(etm, sid->cpu.cpu);
 }
 
 static int cs_etm__map_trace_id_v0(struct cs_etm_auxtrace *etm, u8 trace_chan_id,
@@ -773,7 +799,7 @@ static void cs_etm__packet_swap(struct cs_etm_auxtrace *etm,
 	struct cs_etm_packet *tmp;
 
 	if (etm->synth_opts.branches || etm->synth_opts.last_branch ||
-	    etm->synth_opts.instructions) {
+	    etm->synth_opts.instructions || etm->use_thread_stack) {
 		/*
 		 * Swap PACKET with PREV_PACKET: PACKET becomes PREV_PACKET for
 		 * the next incoming packet.
@@ -1029,6 +1055,8 @@ static void cs_etm__free(struct perf_session *session)
 		zfree(&aux->metadata[i]);
 
 	zfree(&aux->metadata);
+	zfree(&aux->chain);
+	zfree(&aux->br_stack);
 	zfree(&aux);
 }
 
@@ -1040,6 +1068,92 @@ static bool cs_etm__evsel_is_auxtrace(struct perf_session *session,
 						   auxtrace);
 
 	return evsel->core.attr.type == aux->pmu_type;
+}
+
+static bool cs_etm__sampling_mode(struct cs_etm_auxtrace *etm)
+{
+	struct evsel *evsel;
+
+	evlist__for_each_entry(etm->session->evlist, evsel) {
+		if ((evsel->core.attr.sample_type & PERF_SAMPLE_AUX) &&
+		    evsel->core.attr.aux_sample_size)
+			return true;
+	}
+
+	return false;
+}
+
+static bool cs_etm__tracing_kernel(struct cs_etm_auxtrace *etm)
+{
+	struct evsel *evsel;
+
+	evlist__for_each_entry(etm->session->evlist, evsel) {
+		if (evsel->core.attr.type == etm->pmu_type)
+			return !evsel->core.attr.exclude_kernel;
+	}
+
+	return false;
+}
+
+static int cs_etm__init_augmented_samples(struct cs_etm_auxtrace *etm)
+{
+	struct evsel *evsel;
+	size_t sz;
+
+	if (!etm->sampling_mode)
+		return 0;
+
+	if (etm->synth_opts.add_callchain && !symbol_conf.use_callchain) {
+		symbol_conf.use_callchain = true;
+		if (callchain_register_param(&callchain_param) < 0) {
+			symbol_conf.use_callchain = false;
+			etm->synth_opts.add_callchain = false;
+		}
+	}
+
+	if (etm->synth_opts.add_callchain) {
+		evlist__for_each_entry(etm->session->evlist, evsel) {
+			if (evsel->core.attr.aux_sample_size &&
+			    !(evsel->core.attr.sample_type & PERF_SAMPLE_CALLCHAIN))
+				evsel->synth_sample_type |= PERF_SAMPLE_CALLCHAIN;
+		}
+
+		sz = struct_size(etm->chain, ips,
+				 etm->synth_opts.callchain_sz + 1);
+		etm->chain = zalloc(sz);
+		if (!etm->chain)
+			return -ENOMEM;
+	}
+
+	if (etm->synth_opts.add_last_branch) {
+		evlist__for_each_entry(etm->session->evlist, evsel) {
+			if (evsel->core.attr.aux_sample_size &&
+			    !(evsel->core.attr.sample_type & PERF_SAMPLE_BRANCH_STACK))
+				evsel->synth_sample_type |= PERF_SAMPLE_BRANCH_STACK;
+		}
+
+		etm->br_stack_sz = etm->synth_opts.last_branch_sz;
+		etm->br_stack_sz_plus = etm->br_stack_sz;
+		/*
+		 * Keep enough branches to discard execution between the PMU
+		 * overflow and the point where the trace source was paused.
+		 */
+		if (cs_etm__tracing_kernel(etm))
+			etm->br_stack_sz_plus += 1024;
+		else
+			etm->br_stack_sz_plus += 1;
+
+		sz = struct_size(etm->br_stack, entries, etm->br_stack_sz);
+		etm->br_stack = zalloc(sz);
+		if (!etm->br_stack)
+			return -ENOMEM;
+	}
+
+	etm->use_thread_stack = etm->synth_opts.add_callchain ||
+				etm->synth_opts.add_last_branch;
+	etm->callstack = etm->synth_opts.add_callchain;
+
+	return 0;
 }
 
 static struct machine *cs_etm__get_machine(struct cs_etm_queue *etmq,
@@ -1837,12 +1951,51 @@ static int cs_etm__synth_events(struct cs_etm_auxtrace *etm,
 	return 0;
 }
 
+static int cs_etm__add_thread_stack_event(struct cs_etm_queue *etmq,
+					  struct cs_etm_traceid_queue *tidq)
+{
+	struct cs_etm_packet *packet = tidq->packet;
+	struct cs_etm_packet *prev_packet = tidq->prev_packet;
+	u64 from, to;
+	int cpu;
+	bool branch = false;
+
+	if (!etmq->etm->use_thread_stack)
+		return 0;
+
+	if (packet->sample_type == CS_ETM_RANGE) {
+		branch = prev_packet->sample_type == CS_ETM_DISCONTINUITY ||
+			 (prev_packet->sample_type == CS_ETM_RANGE &&
+			  prev_packet->last_instr_taken_branch);
+	} else if (packet->sample_type == CS_ETM_DISCONTINUITY) {
+		branch = prev_packet->sample_type == CS_ETM_RANGE;
+	}
+
+	if (!branch)
+		return 0;
+
+	from = cs_etm__last_executed_instr(prev_packet);
+	to = cs_etm__first_executed_instr(packet);
+	cpu = prev_packet->cpu >= 0 ? prev_packet->cpu : packet->cpu;
+
+	return thread_stack__event(tidq->frontend_thread, cpu,
+				   prev_packet->flags, from, to,
+				   prev_packet->last_instr_size,
+				   etmq->buffer->buffer_nr + 1,
+				   etmq->etm->callstack,
+				   etmq->etm->br_stack_sz_plus, false);
+}
+
 static int cs_etm__sample(struct cs_etm_queue *etmq,
 			  struct cs_etm_traceid_queue *tidq)
 {
 	struct cs_etm_auxtrace *etm = etmq->etm;
 	int ret;
 	u64 instrs_prev;
+
+	ret = cs_etm__add_thread_stack_event(etmq, tidq);
+	if (ret)
+		return ret;
 
 	/* Get instructions remainder from previous packet */
 	instrs_prev = tidq->period_instructions;
@@ -2094,7 +2247,9 @@ static int cs_etm__get_data_block(struct cs_etm_queue *etmq)
 			return ret;
 		/*
 		 * We cannot assume consecutive blocks in the data file
-		 * are contiguous, reset the decoder to force re-sync.
+		 * are contiguous, reset the decoder to force re-sync. Each
+		 * PERF_SAMPLE_AUX payload is queued as a separate block, so
+		 * AUX samples always start with a fresh decoder state.
 		 */
 		ret = cs_etm_decoder__reset(etmq->decoder);
 		if (ret)
@@ -2518,7 +2673,9 @@ static int cs_etm__process_traceid_queue(struct cs_etm_queue *etmq,
 			 * range, generate instruction sequence
 			 * events.
 			 */
-			cs_etm__sample(etmq, tidq);
+			ret = cs_etm__sample(etmq, tidq);
+			if (ret)
+				goto out;
 			break;
 		case CS_ETM_CONTEXT:
 			/*
@@ -2547,7 +2704,12 @@ static int cs_etm__process_traceid_queue(struct cs_etm_queue *etmq,
 			 * Discontinuity in trace, flush
 			 * previous branch stack
 			 */
-			cs_etm__flush(etmq, tidq);
+			ret = cs_etm__add_thread_stack_event(etmq, tidq);
+			if (ret)
+				goto out;
+			ret = cs_etm__flush(etmq, tidq);
+			if (ret)
+				goto out;
 			break;
 		case CS_ETM_EMPTY:
 			/*
@@ -2824,6 +2986,223 @@ out:
 	return ret;
 }
 
+static int cs_etm__set_aux_sample_thread(struct cs_etm_queue *etmq,
+					 struct perf_sample *sample)
+{
+	struct cs_etm_traceid_queue *tidq;
+	struct machine *machine = &etmq->etm->session->machines.host;
+	struct thread *frontend_thread, *decode_thread;
+
+	if (!etmq->etm->per_thread_decoding)
+		return 0;
+
+	frontend_thread = machine__findnew_thread(machine, sample->pid,
+						  sample->tid);
+	if (!frontend_thread)
+		return -ENOMEM;
+
+	decode_thread = machine__findnew_thread(machine, sample->pid,
+						sample->tid);
+	if (!decode_thread) {
+		thread__put(frontend_thread);
+		return -ENOMEM;
+	}
+
+	tidq = cs_etm__etmq_get_traceid_queue(etmq,
+					      CS_ETM_PER_THREAD_TRACEID);
+	if (!tidq) {
+		thread__put(frontend_thread);
+		thread__put(decode_thread);
+		return -ENOMEM;
+	}
+
+	thread__put(tidq->frontend_thread);
+	thread__put(tidq->decode_thread);
+	tidq->frontend_thread = frontend_thread;
+	tidq->decode_thread = decode_thread;
+
+	return 0;
+}
+
+static void
+cs_etm__reset_aux_sample_traceid_queue(struct cs_etm_traceid_queue *tidq)
+{
+	cs_etm__clear_packet_queue(&tidq->packet_queue);
+	memset(tidq->packet, 0, sizeof(*tidq->packet));
+	memset(tidq->prev_packet, 0, sizeof(*tidq->prev_packet));
+	tidq->period_instructions = 0;
+	tidq->decode_el = ocsd_EL_unknown;
+
+	if (tidq->last_branch_rb)
+		cs_etm__reset_last_branch_rb(tidq);
+}
+
+static int cs_etm__process_aux_sample_block(struct cs_etm_queue *etmq,
+					    struct auxtrace_buffer *buffer,
+					    struct perf_sample *sample)
+{
+	struct int_node *inode;
+	struct cs_etm_traceid_queue *tidq;
+	struct thread *thread;
+	int idx, ret;
+
+	if (etmq->buf_len)
+		return -EINVAL;
+
+	ret = cs_etm__set_aux_sample_thread(etmq, sample);
+	if (ret)
+		return ret;
+
+	if (etmq->etm->use_thread_stack) {
+		thread = machine__findnew_thread(&etmq->etm->session->machines.host,
+						 sample->pid, sample->tid);
+		if (!thread)
+			return -ENOMEM;
+		thread_stack__set_trace_nr(thread, sample->cpu,
+					   buffer->buffer_nr + 1);
+		thread__put(thread);
+	}
+
+	ret = cs_etm__get_data_block(etmq);
+	if (ret <= 0)
+		return ret ? ret : -EINVAL;
+	if (etmq->buffer != buffer)
+		return -EINVAL;
+
+	do {
+		ret = cs_etm__decode_data_block(etmq);
+		if (ret)
+			return ret;
+
+		if (etmq->etm->per_thread_decoding) {
+			tidq = cs_etm__etmq_get_traceid_queue(etmq,
+							      CS_ETM_PER_THREAD_TRACEID);
+			if (!tidq)
+				return -EINVAL;
+
+			ret = cs_etm__process_traceid_queue(etmq, tidq);
+			if (ret < 0)
+				return ret;
+		} else {
+			intlist__for_each_entry(inode,
+						etmq->traceid_queues_list) {
+				idx = (int)(intptr_t)inode->priv;
+				tidq = etmq->traceid_queues[idx];
+				ret = cs_etm__process_traceid_queue(etmq, tidq);
+				if (ret < 0)
+					return ret;
+			}
+		}
+
+		/*
+		 * The decoder stops at a timestamp until the front end
+		 * acknowledges it. AUX samples are decoded independently, so
+		 * there is no need to put the timestamp on the global heap, but
+		 * it still has to be acknowledged before decoding can continue.
+		 */
+		(void)cs_etm__etmq_get_timestamp(etmq, NULL);
+	} while (etmq->buf_len);
+
+	intlist__for_each_entry(inode, etmq->traceid_queues_list) {
+		idx = (int)(intptr_t)inode->priv;
+		tidq = etmq->traceid_queues[idx];
+		ret = cs_etm__end_block(etmq, tidq);
+		if (ret)
+			return ret;
+
+		/* The next AUX sample is an independent decoder input. */
+		cs_etm__reset_aux_sample_traceid_queue(tidq);
+	}
+	etmq->pending_timestamp_chan_id = 0;
+
+	return 0;
+}
+
+static void cs_etm__add_callchain(struct cs_etm_auxtrace *etm,
+				  struct perf_sample *sample)
+{
+	struct machine *machine = &etm->session->machines.host;
+	struct thread *thread;
+
+	thread = machine__findnew_thread(machine, sample->pid, sample->tid);
+	if (!thread)
+		return;
+
+	thread_stack__sample_late(thread, sample->cpu, etm->chain,
+				  etm->synth_opts.callchain_sz + 1,
+				  sample->ip, machine__kernel_start(machine));
+	sample->callchain = etm->chain;
+	thread__put(thread);
+}
+
+static void cs_etm__add_branch_stack(struct cs_etm_auxtrace *etm,
+				     struct perf_sample *sample)
+{
+	struct machine *machine = &etm->session->machines.host;
+	struct thread *thread;
+
+	thread = machine__findnew_thread(machine, sample->pid, sample->tid);
+	if (!thread)
+		return;
+
+	thread_stack__br_sample_late(thread, sample->cpu, etm->br_stack,
+				     etm->br_stack_sz, sample->ip,
+				     machine__kernel_start(machine));
+	sample->branch_stack = etm->br_stack;
+	thread__put(thread);
+}
+
+static int cs_etm__process_aux_sample(struct cs_etm_auxtrace *etm,
+				      union perf_event *event,
+				      struct perf_sample *sample)
+{
+	struct cs_etm_queue *etmq;
+	struct auxtrace_queue *queue;
+	struct auxtrace_buffer *buffer;
+	const char *event_start = (const void *)event;
+	const char *aux_data = sample->aux_sample.data;
+	u64 data_offset, offset_in_event;
+	int ret;
+
+	if (aux_data < event_start ||
+	    aux_data > event_start + event->header.size ||
+	    sample->aux_sample.size >
+		(u64)(event_start + event->header.size - aux_data))
+		return -EINVAL;
+
+	offset_in_event = aux_data - event_start;
+	if (sample->file_offset > UINT64_MAX - offset_in_event)
+		return -EINVAL;
+	data_offset = sample->file_offset + offset_in_event;
+
+	etmq = cs_etm__get_sample_queue(etm, sample);
+	if (!etmq)
+		return -EINVAL;
+
+	queue = &etm->queues.queue_array[etmq->queue_nr];
+	buffer = auxtrace_buffer__next(queue, etmq->buffer);
+	if (!buffer || buffer->data_offset < 0 ||
+	    (u64)buffer->data_offset != data_offset ||
+	    buffer->size != sample->aux_sample.size) {
+		pr_err("CS ETM: AUX sample does not match the next trace buffer\n");
+		return -EINVAL;
+	}
+
+	if (sample->time && sample->time != (u64)-1)
+		etm->latest_kernel_timestamp = sample->time;
+
+	ret = cs_etm__process_aux_sample_block(etmq, buffer, sample);
+	if (ret)
+		return ret;
+
+	if (etm->synth_opts.add_callchain && !sample->callchain)
+		cs_etm__add_callchain(etm, sample);
+	if (etm->synth_opts.add_last_branch && !sample->branch_stack)
+		cs_etm__add_branch_stack(etm, sample);
+
+	return 0;
+}
+
 static int cs_etm__process_itrace_start(struct cs_etm_auxtrace *etm,
 					union perf_event *event)
 {
@@ -2904,6 +3283,10 @@ static int cs_etm__process_event(struct perf_session *session,
 		return -EINVAL;
 	}
 
+	if (etm->sampling_mode && event->header.type == PERF_RECORD_SAMPLE &&
+	    sample->aux_sample.size)
+		return cs_etm__process_aux_sample(etm, event, sample);
+
 	switch (event->header.type) {
 	case PERF_RECORD_EXIT:
 		/*
@@ -2914,7 +3297,8 @@ static int cs_etm__process_event(struct perf_session *session,
 		 * for flush so that events from different threads are interleaved
 		 * properly.
 		 */
-		if (etm->per_thread_decoding && etm->timeless_decoding)
+		if (!etm->sampling_mode && etm->per_thread_decoding &&
+		    etm->timeless_decoding)
 			return cs_etm__process_timeless_queues(etm,
 							       event->fork.tid);
 		break;
@@ -2940,6 +3324,36 @@ static int cs_etm__process_event(struct perf_session *session,
 	}
 
 	return 0;
+}
+
+static int cs_etm__queue_data(struct perf_session *session,
+			      struct perf_sample *sample,
+			      union perf_event *event, u64 data_offset)
+{
+	struct cs_etm_auxtrace *etm = container_of(session->auxtrace,
+						   struct cs_etm_auxtrace,
+						   auxtrace);
+	struct cs_etm_queue *etmq;
+	u64 reference;
+
+	/* CoreSight queues PERF_RECORD_AUXTRACE data through its AUX handler. */
+	if (!sample || event)
+		return -EINVAL;
+
+	etmq = cs_etm__get_sample_queue(etm, sample);
+	if (!etmq)
+		return -EINVAL;
+
+	reference = sample->time == (u64)-1 ? 0 : sample->time;
+
+	pr_debug3("CS ETM: Queue AUX sample size: %#" PRIx64
+		  " tid: %d cpu: %d queue: %u\n",
+		  sample->aux_sample.size, sample->tid, sample->cpu,
+		  etmq->queue_nr);
+
+	return auxtrace_queues__add_sample_idx(&etm->queues, session, sample,
+					       data_offset, reference,
+					       etmq->queue_nr);
 }
 
 static void dump_queued_data(struct cs_etm_auxtrace *etm,
@@ -3075,6 +3489,79 @@ static u64 *cs_etm__create_meta_blk(u64 *buff_in, int *buff_in_offset,
 	return metadata;
 }
 
+static int cs_etm__set_queue_format(struct cs_etm_queue *etmq, u64 aux_flags)
+{
+	enum cs_etm_format format;
+
+	format = (aux_flags & PERF_AUX_FLAG_CORESIGHT_FORMAT_RAW) ?
+		 UNFORMATTED : FORMATTED;
+	if (etmq->format != UNSET && format != etmq->format) {
+		pr_err("CS_ETM: mixed formatted and unformatted trace not supported\n");
+		return -EINVAL;
+	}
+
+	etmq->format = format;
+	return 0;
+}
+
+static int
+cs_etm__set_queue_formats_cb(struct perf_session *session,
+			     union perf_event *event,
+			     u64 offset __maybe_unused,
+			     void *data __maybe_unused)
+{
+	struct cs_etm_auxtrace *etm = container_of(session->auxtrace,
+						   struct cs_etm_auxtrace,
+						   auxtrace);
+	struct cs_etm_queue *etmq;
+	struct perf_sample sample;
+	struct evsel *evsel;
+	int ret;
+
+	if (event->header.type != PERF_RECORD_AUX)
+		return 0;
+
+	if (event->header.size < sizeof(struct perf_record_aux))
+		return -EINVAL;
+
+	evsel = evlist__event2evsel(session->evlist, event);
+	if (!evsel)
+		return -EINVAL;
+	if (!cs_etm__evsel_is_auxtrace(session, evsel))
+		return 0;
+
+	perf_sample__init(&sample, /*all=*/false);
+	ret = evsel__parse_sample(evsel, event, &sample);
+	if (ret)
+		goto out;
+
+	etmq = cs_etm__get_sample_queue(etm, &sample);
+	if (!etmq) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	ret = cs_etm__set_queue_format(etmq, event->aux.flags);
+out:
+	perf_sample__exit(&sample);
+	return ret;
+}
+
+static int cs_etm__set_queue_formats(struct perf_session *session)
+{
+	if (perf_data__is_pipe(session->data))
+		return 0;
+
+	/*
+	 * PERF_SAMPLE_AUX contains the trace bytes but not the CoreSight format
+	 * flag. Discover each queue's format independently from AUX records
+	 * before queuing AUXTRACE fragments or embedded AUX samples.
+	 */
+	return perf_session__peek_events(session, session->header.data_offset,
+					 session->header.data_size,
+					 cs_etm__set_queue_formats_cb, NULL);
+}
+
 /**
  * Puts a fragment of an auxtrace buffer into the auxtrace queues based
  * on the bounds of aux_event, if it matches with the buffer that's at
@@ -3094,7 +3581,6 @@ static int cs_etm__queue_aux_fragment(struct perf_session *session, off_t file_o
 	struct perf_record_auxtrace *auxtrace_event;
 	union perf_event auxtrace_fragment;
 	__u64 aux_offset, aux_size;
-	enum cs_etm_format format;
 
 	struct cs_etm_auxtrace *etm = container_of(session->auxtrace,
 						   struct cs_etm_auxtrace,
@@ -3182,13 +3668,6 @@ static int cs_etm__queue_aux_fragment(struct perf_session *session, off_t file_o
 		if (err)
 			return err;
 
-		format = (aux_event->flags & PERF_AUX_FLAG_CORESIGHT_FORMAT_RAW) ?
-				UNFORMATTED : FORMATTED;
-		if (etmq->format != UNSET && format != etmq->format) {
-			pr_err("CS_ETM: mixed formatted and unformatted trace not supported\n");
-			return -EINVAL;
-		}
-		etmq->format = format;
 		return 0;
 	}
 
@@ -3224,10 +3703,6 @@ static int cs_etm__queue_aux_records_cb(struct perf_session *session, union perf
 	if (event->header.size < sizeof(struct perf_record_aux))
 		return -EINVAL;
 
-	/* Truncated Aux records can have 0 size and shouldn't result in anything being queued. */
-	if (!event->aux.aux_size)
-		return 0;
-
 	/*
 	 * Parse the sample, we need the sample_id_all data that comes after the event so that the
 	 * CPU or PID can be matched to an AUXTRACE buffer's CPU or PID.
@@ -3235,6 +3710,13 @@ static int cs_etm__queue_aux_records_cb(struct perf_session *session, union perf
 	evsel = evlist__event2evsel(session->evlist, event);
 	if (!evsel)
 		return -EINVAL;
+	if (!cs_etm__evsel_is_auxtrace(session, evsel))
+		return 0;
+
+	/* A zero-sized AUX record has no fragment to queue. */
+	if (!event->aux.aux_size)
+		return 0;
+
 	perf_sample__init(&sample, /*all=*/false);
 	ret = evsel__parse_sample(evsel, event, &sample);
 	if (ret)
@@ -3273,20 +3755,17 @@ static int cs_etm__queue_aux_records(struct perf_session *session)
 {
 	struct auxtrace_index *index = list_first_entry_or_null(&session->auxtrace_index,
 								struct auxtrace_index, list);
-	if (index && index->nr > 0)
-		return perf_session__peek_events(session, session->header.data_offset,
-						 session->header.data_size,
-						 cs_etm__queue_aux_records_cb, NULL);
+
+	if (!index || !index->nr)
+		return 0;
 
 	/*
-	 * We would get here if there are no entries in the index (either no auxtrace
-	 * buffers or no index at all). Fail silently as there is the possibility of
-	 * queueing them in cs_etm__process_auxtrace_event() if etm->data_queued is still
-	 * false.
-	 *
-	 * In that scenario, buffers will not be split by AUX records.
+	 * Split AUXTRACE buffers at AUX record boundaries so that the decoder
+	 * is reset for every AUX record.
 	 */
-	return 0;
+	return perf_session__peek_events(session, session->header.data_offset,
+					 session->header.data_size,
+					 cs_etm__queue_aux_records_cb, NULL);
 }
 
 #define HAS_PARAM(j, type, param) (metadata[(j)][CS_ETM_NR_TRC_PARAMS] <= \
@@ -3422,9 +3901,12 @@ static int cs_etm__create_decoders(struct cs_etm_auxtrace *etm)
 		 * Don't create decoders for empty queues, mainly because
 		 * etmq->format is unknown for empty queues.
 		 */
-		assert(empty || etmq->format != UNSET);
 		if (empty)
 			continue;
+		if (etmq->format == UNSET) {
+			pr_err("CS ETM: trace format is unknown for queue %u\n", i);
+			return -EINVAL;
+		}
 
 		ret = cs_etm__create_queue_decoders(etmq);
 		if (ret)
@@ -3564,6 +4046,7 @@ int cs_etm__process_auxtrace_info_full(union perf_event *event,
 	etm->snapshot_mode = (ptr[CS_ETM_SNAPSHOT] != 0);
 	etm->metadata = metadata;
 	etm->auxtrace_type = auxtrace_info->type;
+	etm->sampling_mode = cs_etm__sampling_mode(etm);
 
 	if (etm->synth_opts.use_timestamp)
 		/*
@@ -3592,6 +4075,7 @@ int cs_etm__process_auxtrace_info_full(union perf_event *event,
 	etm->auxtrace.flush_events = cs_etm__flush_events;
 	etm->auxtrace.free_events = cs_etm__free_events;
 	etm->auxtrace.free = cs_etm__free;
+	etm->auxtrace.queue_data = cs_etm__queue_data;
 	etm->auxtrace.evsel_is_auxtrace = cs_etm__evsel_is_auxtrace;
 	session->auxtrace = &etm->auxtrace;
 
@@ -3606,13 +4090,28 @@ int cs_etm__process_auxtrace_info_full(union perf_event *event,
 		etm->tc.cap_user_time_zero = tc->cap_user_time_zero;
 		etm->tc.cap_user_time_short = tc->cap_user_time_short;
 	}
+
+	err = cs_etm__init_augmented_samples(etm);
+	if (err)
+		goto err_free_queues;
+
 	err = cs_etm__synth_events(etm, session);
 	if (err)
 		goto err_free_queues;
 
-	err = cs_etm__queue_aux_records(session);
+	err = cs_etm__set_queue_formats(session);
 	if (err)
 		goto err_free_queues;
+
+	if (etm->sampling_mode) {
+		err = auxtrace_queue_data(session, true, false);
+		if (err)
+			goto err_free_queues;
+	} else {
+		err = cs_etm__queue_aux_records(session);
+		if (err)
+			goto err_free_queues;
+	}
 
 	/*
 	 * Map Trace ID values to CPU metadata.
@@ -3661,6 +4160,8 @@ err_free_queues:
 	auxtrace_queues__free(&etm->queues);
 	session->auxtrace = NULL;
 err_free_etm:
+	zfree(&etm->chain);
+	zfree(&etm->br_stack);
 	zfree(&etm);
 err_free_metadata:
 	/* No need to check @metadata[j], free(NULL) is supported */

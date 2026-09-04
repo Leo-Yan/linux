@@ -529,6 +529,10 @@ int auxtrace_queues__add_sample(struct auxtrace_queues *queues,
 				struct perf_session *session,
 				struct perf_sample *sample, u64 data_offset,
 				u64 reference);
+int auxtrace_queues__add_sample_idx(struct auxtrace_queues *queues,
+				    struct perf_session *session,
+				    struct perf_sample *sample, u64 data_offset,
+				    u64 reference, unsigned int idx);
 void auxtrace_queues__free(struct auxtrace_queues *queues);
 int auxtrace_queues__process_index(struct auxtrace_queues *queues,
 				   struct perf_session *session);
