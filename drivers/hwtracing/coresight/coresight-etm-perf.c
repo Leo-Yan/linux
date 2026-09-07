@@ -698,9 +698,6 @@ static void etm_event_pause(struct coresight_path *path,
 	if (coresight_is_percpu_sink(sink))
 		return;
 
-	if (WARN_ON_ONCE(handle->event != event))
-		return;
-
 	event_data = READ_ONCE(ctxt->event_data);
 	etm_event_update_buffer(handle, event_data, sink, PERF_EF_UPDATE);
 
@@ -728,23 +725,11 @@ static void etm_event_stop(struct perf_event *event, int mode)
 		return;
 	}
 
-	/*
-	 * If we still have access to the event_data via handle,
-	 * confirm that we haven't messed up the tracking.
-	 */
-	if (handle->event &&
-	    WARN_ON(perf_get_aux(handle) != ctxt->event_data))
-		return;
-
 	event_data = READ_ONCE(ctxt->event_data);
 	/* Clear the event_data as this ETM is stopping the trace. */
 	WRITE_ONCE(ctxt->event_data, NULL);
 
 	if (event->hw.state == PERF_HES_STOPPED)
-		return;
-
-	/* We must have a valid event_data for a running event */
-	if (WARN_ON(!event_data))
 		return;
 
 	source = coresight_get_source(path);
