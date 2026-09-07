@@ -572,13 +572,15 @@ static void etm_event_start(struct perf_event *event, int flags)
 	 * the sink was specified or hinted to the driver. For
 	 * now, simply don't record anything on this ETM.
 	 *
-	 * As such we pretend that everything is fine, and let
-	 * it continue without actually tracing. The event could
-	 * continue tracing when it moves to a CPU where it is
-	 * reachable to a sink.
+	 * In that case, leave the event logically active but stop AUX
+	 * output on this CPU. The event could continue tracing when
+	 * it moves to a CPU where it is reachable to a sink.
 	 */
-	if (!cpumask_test_cpu(cpu, &event_data->mask))
-		goto out;
+	if (!cpumask_test_cpu(cpu, &event_data->mask)) {
+		perf_aux_output_end(handle, 0);
+		event->hw.state = 0;
+		return;
+	}
 
 	path = etm_event_cpu_path(event_data, cpu);
 	path->handle = handle;
@@ -613,7 +615,6 @@ static void etm_event_start(struct perf_event *event, int flags)
 		perf_report_aux_output_id(event, hw_id);
 	}
 
-out:
 	/* Tell the perf core the event is alive */
 	event->hw.state = 0;
 	/* Save the event_data for this ETM */
@@ -709,7 +710,6 @@ static void etm_event_pause(struct coresight_path *path,
 
 static void etm_event_stop(struct perf_event *event, int mode)
 {
-	int cpu = smp_processor_id();
 	struct coresight_device *source, *sink;
 	struct etm_ctxt *ctxt = this_cpu_ptr(&etm_ctxt);
 	struct perf_output_handle *handle = &ctxt->handle;
@@ -718,6 +718,15 @@ static void etm_event_stop(struct perf_event *event, int mode)
 
 	if (mode & PERF_EF_PAUSE)
 		return etm_event_pause(path, event, ctxt);
+
+	/*
+	 * No path is enabled, therefore no need to disable hardware or
+	 * update the buffers.
+	 */
+	if (!path) {
+		event->hw.state = PERF_HES_STOPPED;
+		return;
+	}
 
 	/*
 	 * If we still have access to the event_data via handle,
@@ -737,19 +746,6 @@ static void etm_event_stop(struct perf_event *event, int mode)
 	/* We must have a valid event_data for a running event */
 	if (WARN_ON(!event_data))
 		return;
-
-	/*
-	 * Check if this ETM was allowed to trace, as decided at
-	 * etm_setup_aux(). If it wasn't allowed to trace, then
-	 * nothing needs to be torn down other than outputting a
-	 * zero sized record.
-	 */
-	if (handle->event && (mode & PERF_EF_UPDATE) &&
-	    !cpumask_test_cpu(cpu, &event_data->mask)) {
-		event->hw.state = PERF_HES_STOPPED;
-		perf_aux_output_end(handle, 0);
-		return;
-	}
 
 	source = coresight_get_source(path);
 	sink = coresight_get_sink(path);
