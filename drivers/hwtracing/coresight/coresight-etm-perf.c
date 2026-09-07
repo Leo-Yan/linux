@@ -637,6 +637,38 @@ fail:
 	return;
 }
 
+static void etm_event_update_buffer(struct perf_output_handle *handle,
+				    struct etm_event_data *event_data,
+				    struct coresight_device *sink,
+				    int mode)
+{
+	unsigned long size;
+
+	/*
+	 * Make sure the handle is still valid, as the sink may close it from
+	 * the IRQ handler. E.g., the sink driver may fail to restart the
+	 * handle during interrupt handling due to insufficient buffer space.
+	 * The sink driver must serialize update_buffer() with IRQ handling,
+	 * so this should return either a valid handle with a valid size
+	 * (which may be 0), or no handle at all.
+	 */
+	if (!perf_get_aux(handle))
+		return;
+
+	if (!sink_ops(sink)->update_buffer)
+		goto out;
+
+	if (mode & PERF_EF_UPDATE) {
+		size = sink_ops(sink)->update_buffer(sink, handle,
+						     event_data->snk_config);
+		perf_aux_output_end(handle, size);
+		return;
+	}
+
+out:
+	perf_aux_output_end(handle, 0);
+}
+
 static void etm_event_pause(struct coresight_path *path,
 			    struct perf_event *event,
 			    struct etm_ctxt *ctxt)
@@ -644,7 +676,6 @@ static void etm_event_pause(struct coresight_path *path,
 	struct perf_output_handle *handle = &ctxt->handle;
 	struct coresight_device *source, *sink;
 	struct etm_event_data *event_data;
-	unsigned long size;
 
 	if (!path)
 		return;
@@ -669,27 +700,16 @@ static void etm_event_pause(struct coresight_path *path,
 	if (WARN_ON_ONCE(handle->event != event))
 		return;
 
-	if (!sink_ops(sink)->update_buffer)
-		return;
-
 	event_data = READ_ONCE(ctxt->event_data);
-	size = sink_ops(sink)->update_buffer(sink, handle,
-					     event_data->snk_config);
-	if (READ_ONCE(handle->event)) {
-		if (!size)
-			return;
+	etm_event_update_buffer(handle, event_data, sink, PERF_EF_UPDATE);
 
-		perf_aux_output_end(handle, size);
-		perf_aux_output_begin(handle, event);
-	} else {
-		WARN_ON_ONCE(size);
-	}
+	/* Prepare the handle for resuming trace */
+	perf_aux_output_begin(handle, event);
 }
 
 static void etm_event_stop(struct perf_event *event, int mode)
 {
 	int cpu = smp_processor_id();
-	unsigned long size;
 	struct coresight_device *source, *sink;
 	struct etm_ctxt *ctxt = this_cpu_ptr(&etm_ctxt);
 	struct perf_output_handle *handle = &ctxt->handle;
@@ -742,45 +762,8 @@ static void etm_event_stop(struct perf_event *event, int mode)
 	/* tell the core */
 	event->hw.state = PERF_HES_STOPPED;
 
-	/*
-	 * If the handle is not bound to an event anymore
-	 * (e.g, the sink driver was unable to restart the
-	 * handle due to lack of buffer space), we don't
-	 * have to do anything here.
-	 */
-	if (!handle->event)
-		goto out;
+	etm_event_update_buffer(handle, event_data, sink, mode);
 
-	if (mode & PERF_EF_UPDATE) {
-		if (WARN_ON_ONCE(handle->event != event))
-			goto out;
-
-		/* update trace information */
-		if (!sink_ops(sink)->update_buffer)
-			goto out;
-
-		size = sink_ops(sink)->update_buffer(sink, handle,
-					      event_data->snk_config);
-		/*
-		 * Make sure the handle is still valid as the
-		 * sink could have closed it from an IRQ.
-		 * The sink driver must handle the race with
-		 * update_buffer() and IRQ. Thus either we
-		 * should get a valid handle and valid size
-		 * (which may be 0).
-		 *
-		 * But we should never get a non-zero size with
-		 * an invalid handle.
-		 */
-		if (READ_ONCE(handle->event))
-			perf_aux_output_end(handle, size);
-		else
-			WARN_ON(size);
-	} else {
-		perf_aux_output_end(handle, 0);
-	}
-
-out:
 	/* Disabling the path make its elements available to other sessions */
 	coresight_disable_path(path);
 }
