@@ -517,11 +517,17 @@ err:
 	goto out;
 }
 
-static int etm_event_resume(struct coresight_path *path)
+static int etm_event_resume(struct etm_ctxt *ctxt)
 {
+	struct perf_output_handle *handle = &ctxt->handle;
 	struct coresight_device *source;
+	struct coresight_path *path;
 	int ret;
 
+	if (!perf_get_aux(handle))
+		return 0;
+
+	path = etm_event_get_ctxt_path(ctxt);
 	if (!path)
 		return 0;
 
@@ -547,8 +553,7 @@ static void etm_event_start(struct perf_event *event, int flags)
 	u64 hw_id;
 
 	if (flags & PERF_EF_RESUME) {
-		path = etm_event_get_ctxt_path(ctxt);
-		if (etm_event_resume(path) < 0)
+		if (etm_event_resume(ctxt) < 0)
 			goto fail;
 		return;
 	}
