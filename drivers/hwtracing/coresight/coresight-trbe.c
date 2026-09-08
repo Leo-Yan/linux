@@ -374,18 +374,6 @@ static void trbe_pad_buf(struct perf_output_handle *handle, int len)
 		perf_aux_output_skip(handle, len);
 }
 
-static unsigned long trbe_snapshot_offset(struct perf_output_handle *handle)
-{
-	struct trbe_buf *buf = etm_perf_sink_config(handle);
-
-	/*
-	 * The ETE trace has alignment synchronization packets allowing
-	 * the decoder to reset in case of an overflow or corruption.
-	 * So we can use the entire buffer for the snapshot mode.
-	 */
-	return buf->nr_pages * PAGE_SIZE;
-}
-
 static u64 trbe_min_trace_buf_size(struct perf_output_handle *handle)
 {
 	u64 size = TRBE_TRACE_MIN_BUF_SIZE;
@@ -403,6 +391,30 @@ static u64 trbe_min_trace_buf_size(struct perf_output_handle *handle)
 	if (trbe_may_write_out_of_range(cpudata))
 		size += PAGE_SIZE;
 	return size;
+}
+
+static unsigned long trbe_snapshot_offset(struct perf_output_handle *handle)
+{
+	struct trbe_buf *buf = etm_perf_sink_config(handle);
+	struct trbe_cpudata *cpudata = buf->cpudata;
+	u64 buf_size = buf->nr_pages << PAGE_SHIFT;
+	u64 head = PERF_IDX2OFF(handle->head, buf);
+	u64 next = round_up(head, cpudata->trbe_align);
+
+	/*
+	 * A task event may migrate to a CPU with a different alignment or
+	 * errata. Make sure it has enough space, pad up to the alignment
+	 * required by the current TRBE.
+	 */
+	if (buf_size - next < trbe_min_trace_buf_size(handle))
+		next = buf_size;
+
+	if (next != head) {
+		__trbe_pad_buf(buf, head, next - head);
+		handle->head += next - head;
+	}
+
+	return buf_size;
 }
 
 /*
