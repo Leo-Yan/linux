@@ -520,6 +520,7 @@ err:
 static int etm_event_resume(struct etm_ctxt *ctxt)
 {
 	struct perf_output_handle *handle = &ctxt->handle;
+	struct perf_event *event = handle->event;
 	struct coresight_device *source;
 	struct coresight_path *path;
 	int ret;
@@ -536,10 +537,13 @@ static int etm_event_resume(struct etm_ctxt *ctxt)
 		return 0;
 
 	ret = coresight_resume_source(source);
-	if (ret < 0)
+	if (ret < 0) {
 		dev_err(&source->dev, "Failed to resume ETM event.\n");
+		return ret;
+	}
 
-	return ret;
+	event->hw.state &= ~PERF_HES_UPTODATE;
+	return 0;
 }
 
 static void etm_event_start(struct perf_event *event, int flags)
@@ -553,8 +557,7 @@ static void etm_event_start(struct perf_event *event, int flags)
 	u64 hw_id;
 
 	if (flags & PERF_EF_RESUME) {
-		if (etm_event_resume(ctxt) < 0)
-			goto fail;
+		WARN_ON_ONCE(etm_event_resume(ctxt));
 		return;
 	}
 
@@ -583,7 +586,7 @@ static void etm_event_start(struct perf_event *event, int flags)
 	 */
 	if (!cpumask_test_cpu(cpu, &event_data->mask)) {
 		perf_aux_output_end(handle, 0);
-		event->hw.state = 0;
+		event->hw.state &= ~PERF_HES_STOPPED;
 		return;
 	}
 
@@ -621,7 +624,7 @@ static void etm_event_start(struct perf_event *event, int flags)
 	}
 
 	/* Tell the perf core the event is alive */
-	event->hw.state = 0;
+	event->hw.state &= ~(PERF_HES_STOPPED | PERF_HES_UPTODATE);
 	/* Save the event_data for this ETM */
 	WRITE_ONCE(ctxt->event_data, event_data);
 	return;
@@ -639,11 +642,12 @@ fail_end_stop:
 		perf_aux_output_end(handle, 0);
 	}
 fail:
-	event->hw.state = PERF_HES_STOPPED;
+	event->hw.state |= PERF_HES_STOPPED;
 	return;
 }
 
-static void etm_event_update_buffer(struct perf_output_handle *handle,
+static void etm_event_update_buffer(struct perf_event *event,
+				    struct perf_output_handle *handle,
 				    struct etm_event_data *event_data,
 				    struct coresight_device *sink,
 				    int mode)
@@ -668,6 +672,7 @@ static void etm_event_update_buffer(struct perf_output_handle *handle,
 		size = sink_ops(sink)->update_buffer(sink, handle,
 						     event_data->snk_config);
 		perf_aux_output_end(handle, size);
+		event->hw.state |= PERF_HES_UPTODATE;
 		return;
 	}
 
@@ -704,7 +709,8 @@ static void etm_event_pause(struct coresight_path *path,
 		return;
 
 	event_data = READ_ONCE(ctxt->event_data);
-	etm_event_update_buffer(handle, event_data, sink, PERF_EF_UPDATE);
+	etm_event_update_buffer(event, handle, event_data, sink,
+				PERF_EF_UPDATE);
 
 	/* Prepare the handle for resuming trace */
 	perf_aux_output_begin(handle, event);
@@ -716,7 +722,12 @@ static void etm_event_stop(struct perf_event *event, int mode)
 	struct etm_ctxt *ctxt = this_cpu_ptr(&etm_ctxt);
 	struct perf_output_handle *handle = &ctxt->handle;
 	struct coresight_path *path = etm_event_get_ctxt_path(ctxt);
+	struct hw_perf_event *hwc = &event->hw;
 	struct etm_event_data *event_data;
+
+	/* If we're already stopped, then nothing to do */
+	if (hwc->state & PERF_HES_STOPPED)
+		return;
 
 	if (mode & PERF_EF_PAUSE)
 		return etm_event_pause(path, event, ctxt);
@@ -726,7 +737,7 @@ static void etm_event_stop(struct perf_event *event, int mode)
 	 * update the buffers.
 	 */
 	if (!path) {
-		event->hw.state = PERF_HES_STOPPED;
+		hwc->state = PERF_HES_STOPPED | PERF_HES_UPTODATE;
 		return;
 	}
 
@@ -734,8 +745,8 @@ static void etm_event_stop(struct perf_event *event, int mode)
 	/* Clear the event_data as this ETM is stopping the trace. */
 	WRITE_ONCE(ctxt->event_data, NULL);
 
-	if (event->hw.state == PERF_HES_STOPPED)
-		return;
+	/* Tell the core the event is stopped. */
+	hwc->state = PERF_HES_STOPPED;
 
 	source = coresight_get_source(path);
 	sink = coresight_get_sink(path);
@@ -745,10 +756,7 @@ static void etm_event_stop(struct perf_event *event, int mode)
 	/* stop tracer */
 	coresight_disable_source(source, event);
 
-	/* tell the core */
-	event->hw.state = PERF_HES_STOPPED;
-
-	etm_event_update_buffer(handle, event_data, sink, mode);
+	etm_event_update_buffer(event, handle, event_data, sink, mode);
 
 	/* Disabling the path make its elements available to other sessions */
 	coresight_disable_path(path);
@@ -759,12 +767,12 @@ static int etm_event_add(struct perf_event *event, int mode)
 	int ret = 0;
 	struct hw_perf_event *hwc = &event->hw;
 
+	hwc->state = PERF_HES_STOPPED | PERF_HES_UPTODATE;
+
 	if (mode & PERF_EF_START) {
 		etm_event_start(event, 0);
 		if (hwc->state & PERF_HES_STOPPED)
 			ret = -EINVAL;
-	} else {
-		hwc->state = PERF_HES_STOPPED;
 	}
 
 	return ret;
