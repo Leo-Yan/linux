@@ -275,6 +275,7 @@ struct coresight_trace_id_map {
  *		when a source has been selected and a path is enabled from
  *		source to that sink. A sink can also become enabled but not
  *		activated if it's used via Perf.
+ * @in_interrupt: Per-CPU sink interrupt handler is running.
  * @ea:		Device attribute for sink representation under PMU directory.
  * @def_sink:	cached reference to default sink found for this device.
  * @nr_links:   number of sysfs links created to other components from this
@@ -299,6 +300,7 @@ struct coresight_device {
 	bool orphan;
 	/* sink specific fields */
 	bool sysfs_sink_activated;
+	bool in_interrupt;
 	struct dev_ext_attribute *ea;
 	struct coresight_device *def_sink;
 	struct coresight_trace_id_map perf_sink_id_map;

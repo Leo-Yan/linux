@@ -1185,7 +1185,7 @@ static u64 cpu_prohibit_trace(void)
 	return trfcr;
 }
 
-static irqreturn_t arm_trbe_irq_handler(int irq, void *dev)
+static irqreturn_t __arm_trbe_irq_handler(int irq, void *dev)
 {
 	struct perf_output_handle **handle_ptr = dev;
 	struct perf_output_handle *handle = *handle_ptr;
@@ -1247,6 +1247,21 @@ static irqreturn_t arm_trbe_irq_handler(int irq, void *dev)
 		write_trfcr(trfcr);
 
 	return IRQ_HANDLED;
+}
+
+static irqreturn_t arm_trbe_irq_handler(int irq, void *dev)
+{
+	struct coresight_device *csdev = coresight_get_percpu_sink(smp_processor_id());
+	irqreturn_t ret;
+
+	/* Circular Buffer mode can still interrupt on a fault. */
+	WRITE_ONCE(csdev->in_interrupt, true);
+	barrier();
+	ret = __arm_trbe_irq_handler(irq, dev);
+	barrier();
+	WRITE_ONCE(csdev->in_interrupt, false);
+
+	return ret;
 }
 
 static int arm_trbe_save(struct coresight_device *csdev)
