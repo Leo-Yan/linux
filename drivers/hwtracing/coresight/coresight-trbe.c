@@ -69,6 +69,7 @@ struct trbe_buf {
 	int nr_pages;
 	void **pages;
 	bool snapshot;
+	bool circular;
 	struct trbe_cpudata *cpudata;
 };
 
@@ -324,9 +325,11 @@ static void trbe_stop_and_truncate_event(struct perf_output_handle *handle)
  * When the write pointer reaches the address just before the limit pointer, it gets
  * wrapped around again to the base pointer. This is called a TRBE wrap event, which
  * generates a maintenance interrupt when operated in WRAP or FILL mode. This driver
- * uses FILL mode, where the TRBE stops the trace collection at wrap event. The IRQ
- * handler updates the AUX buffer and re-enables the TRBE with updated WRITE and
- * LIMIT pointers.
+ * uses FILL mode for non-overwrite buffers, where the TRBE stops trace collection
+ * at a wrap event. The IRQ handler updates the AUX buffer and re-enables the TRBE
+ * with updated WRITE and LIMIT pointers. Snapshot buffers use Circular Buffer
+ * mode where possible, overwriting old trace without stopping or interrupting
+ * the CPU when the write pointer wraps.
  *
  *	Wrap around with an IRQ
  *	------ < ------ < ------- < ----- < -----
@@ -628,6 +631,7 @@ static void set_trbe_limit_pointer_enabled(struct trbe_buf *buf)
 {
 	u64 trblimitr = read_sysreg_s(SYS_TRBLIMITR_EL1);
 	unsigned long addr = buf->trbe_limit;
+	u64 mode = buf->circular ? TRBLIMITR_EL1_FM_CBUF : TRBLIMITR_EL1_FM_FILL;
 
 	WARN_ON(!IS_ALIGNED(addr, (1UL << TRBLIMITR_EL1_LIMIT_SHIFT)));
 	WARN_ON(!IS_ALIGNED(addr, PAGE_SIZE));
@@ -638,15 +642,11 @@ static void set_trbe_limit_pointer_enabled(struct trbe_buf *buf)
 	trblimitr &= ~TRBLIMITR_EL1_LIMIT_MASK;
 
 	/*
-	 * Fill trace buffer mode is used here while configuring the
-	 * TRBE for trace capture. In this particular mode, the trace
-	 * collection is stopped and a maintenance interrupt is raised
-	 * when the current write pointer wraps. This pause in trace
-	 * collection gives the software an opportunity to capture the
-	 * trace data in the interrupt handler, before reconfiguring
-	 * the TRBE.
+	 * Circular mode keeps the most recent trace in a snapshot buffer
+	 * without generating wrap interrupts. Use Fill mode otherwise so
+	 * the IRQ handler can collect the trace before it is overwritten.
 	 */
-	trblimitr |= (TRBLIMITR_EL1_FM_FILL << TRBLIMITR_EL1_FM_SHIFT) &
+	trblimitr |= (mode << TRBLIMITR_EL1_FM_SHIFT) &
 		     TRBLIMITR_EL1_FM_MASK;
 
 	/*
@@ -755,6 +755,26 @@ static unsigned long trbe_get_trace_size(struct perf_output_handle *handle,
 		__trbe_pad_buf(buf, start_off, overwrite_skip);
 
 	return size;
+}
+
+static unsigned long trbe_get_circular_size(struct perf_output_handle *handle,
+					    struct trbe_buf *buf, u64 status)
+{
+	u64 start = PERF_IDX2OFF(handle->head, buf);
+	u64 write = get_trbe_write_pointer() - buf->trbe_base;
+
+	/*
+	 * WRAP indicates at least one crossing of the limit. Any additional
+	 * full laps cannot be determined, so account only for the trace
+	 * known to have been collected. This also preserves the write offset
+	 * when updating the head.
+	 */
+	if (is_trbe_wrap(status))
+		write += buf->nr_pages << PAGE_SHIFT;
+	else if (WARN_ON_ONCE(write < start))
+		return 0;
+
+	return write - start;
 }
 
 static void *arm_trbe_alloc_buffer(struct coresight_device *csdev,
@@ -887,14 +907,19 @@ static unsigned long arm_trbe_update_buffer(struct coresight_device *csdev,
 		wrap = true;
 	}
 
-	size = trbe_get_trace_size(handle, buf, wrap);
+	if (buf->circular)
+		size = trbe_get_circular_size(handle, buf, status);
+	else
+		size = trbe_get_trace_size(handle, buf, wrap);
 
 done:
 	local_irq_restore(flags);
 
 	if (buf->snapshot)
 		handle->head += size;
-	return size;
+
+	/* At most one full buffer of trace is available */
+	return min(size, (unsigned long)buf->nr_pages << PAGE_SHIFT);
 }
 
 
@@ -973,7 +998,8 @@ static int trbe_apply_work_around_before_enable(struct trbe_buf *buf)
 	 *  - At trace collection:
 	 *     - Pad the 256bytes skipped above again with IGNORE packets.
 	 */
-	if (trbe_has_erratum(buf->cpudata, TRBE_WORKAROUND_OVERWRITE_FILL_MODE)) {
+	if (!buf->circular &&
+	    trbe_has_erratum(buf->cpudata, TRBE_WORKAROUND_OVERWRITE_FILL_MODE)) {
 		if (WARN_ON(!IS_ALIGNED(buf->trbe_write, PAGE_SIZE)))
 			return -EINVAL;
 		buf->trbe_hw_base = buf->trbe_write;
@@ -1055,6 +1081,13 @@ static int arm_trbe_enable(struct coresight_device *csdev, enum cs_mode mode,
 	cpudata->buf = buf;
 	cpudata->mode = mode;
 	buf->cpudata = cpudata;
+
+	/*
+	 * A CPU affected by the write out-of-range erratum cannot use circular
+	 * mode, as the TRBE continues tracing after wrapping and may write out
+	 * of range. Fall back to FILL mode so the IRQ handler can fix this up.
+	 */
+	buf->circular = buf->snapshot && !trbe_may_write_out_of_range(cpudata);
 
 	return __arm_trbe_enable(buf, handle);
 }
