@@ -437,6 +437,7 @@ static void *etm_setup_aux(struct perf_event *event, void **pages,
 	if (!event_data)
 		return NULL;
 	INIT_WORK(&event_data->work, free_event_data);
+	event_data->overwrite = overwrite;
 
 	/* First get the selected sink from user space. */
 	sink_hash = ATTR_CFG_GET_FLD(&event->attr, sinkid);
@@ -714,6 +715,86 @@ static void etm_event_pause(struct coresight_path *path,
 
 	/* Prepare the handle for resuming trace */
 	perf_aux_output_begin(handle, event);
+}
+
+static long etm_event_snapshot_aux(struct perf_event *event,
+				   struct perf_output_handle *handle,
+				   unsigned long size)
+{
+	struct hw_perf_event *hwc = &event->hw;
+	struct etm_ctxt *ctxt = this_cpu_ptr(&etm_ctxt);
+	struct perf_output_handle *aux_handle = &ctxt->handle;
+	struct etm_event_data *event_data = perf_get_aux(aux_handle);
+	struct coresight_device *source, *sink;
+	struct coresight_path *path;
+	unsigned long trace_size, to;
+	long ret = 0;
+
+	if (hwc->state & PERF_HES_STOPPED || READ_ONCE(event->hw.aux_paused))
+		return 0;
+
+	if (!event_data || !event_data->overwrite)
+		return 0;
+
+	path = etm_event_get_ctxt_path(ctxt);
+	if (!path)
+		return 0;
+
+	source = coresight_get_source(path);
+	sink = coresight_get_sink(path);
+	if (WARN_ON_ONCE(!source || !sink))
+		return 0;
+
+	if (!coresight_is_percpu_sink(sink)) {
+		dev_err_once(&sink->dev, "AUX sampling requires a per-CPU sink\n");
+		return 0;
+	}
+
+	/* Skip snapshots that preempt the sink's interrupt handler. */
+	if (READ_ONCE(sink->in_interrupt))
+		return 0;
+
+	coresight_pause_source(source);
+	trace_size = sink_ops(sink)->update_buffer(sink, aux_handle,
+						   event_data->snk_config);
+	coresight_disable_path(path);
+
+	/*
+	 * If the AUX handle was closed or marked truncated, the sink is
+	 * expected to have notified perf core to disable the AUX event.
+	 */
+	if (!perf_get_aux(aux_handle) ||
+	    (aux_handle->aux_flags & PERF_AUX_FLAG_TRUNCATED))
+		return 0;
+
+	/*
+	 * Copy the available trace and leave padding to perf core. Skip empty
+	 * snapshots, since equal offsets tell perf_output_copy_aux() to copy
+	 * the whole AUX ring.
+	 */
+	to = aux_handle->head;
+	size = min(size, trace_size);
+	if (size)
+		ret = perf_output_copy_aux(aux_handle, handle, to - size, to);
+
+	if (coresight_enable_path(path, CS_MODE_PERF))
+		goto fail;
+
+	if (coresight_resume_source(source)) {
+		coresight_disable_path(path);
+		goto fail;
+	}
+
+	return ret;
+
+fail:
+	/* End the truncated AUX transaction so perf core can disable the event. */
+	if (perf_get_aux(aux_handle)) {
+		perf_aux_output_flag(aux_handle, PERF_AUX_FLAG_TRUNCATED);
+		perf_aux_output_end(aux_handle, 0);
+	}
+
+	return ret;
 }
 
 static void etm_event_stop(struct perf_event *event, int mode)
@@ -1029,6 +1110,7 @@ int __init etm_perf_init(void)
 	etm_pmu.free_aux		= etm_free_aux;
 	etm_pmu.start			= etm_event_start;
 	etm_pmu.stop			= etm_event_stop;
+	etm_pmu.snapshot_aux		= etm_event_snapshot_aux;
 	etm_pmu.add			= etm_event_add;
 	etm_pmu.del			= etm_event_del;
 	etm_pmu.addr_filters_sync	= etm_addr_filters_sync;

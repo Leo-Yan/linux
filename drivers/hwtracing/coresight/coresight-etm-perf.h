@@ -89,6 +89,7 @@ struct etm_filters {
  * @aux_hwid_done:	Whether a CPU has emitted the TraceID packet or not.
  * @snk_config:		The sink configuration.
  * @cfg_hash:		The hash id of any coresight config selected.
+ * @overwrite:		Whether the AUX buffer uses overwrite mode.
  * @path:		An array of path, each slot for one CPU.
  */
 struct etm_event_data {
@@ -97,6 +98,7 @@ struct etm_event_data {
 	cpumask_t aux_hwid_done;
 	void *snk_config;
 	u32 cfg_hash;
+	bool overwrite;
 	struct coresight_path * __percpu *path;
 };
 
