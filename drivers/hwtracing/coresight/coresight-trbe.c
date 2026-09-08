@@ -27,16 +27,6 @@
 	((idx) % ((unsigned long)(buf)->nr_pages << PAGE_SHIFT))
 
 /*
- * A padding packet that will help the user space tools
- * in skipping relevant sections in the captured trace
- * data which could not be decoded. TRBE doesn't support
- * formatting the trace data, unlike the legacy CoreSight
- * sinks and thus we use ETE trace packets to pad the
- * sections of the buffer.
- */
-#define ETE_IGNORE_PACKET		0x70
-
-/*
  * Minimum amount of meaningful trace will contain:
  * A-Sync, Trace Info, Trace On, Address, Atom.
  * This is about 44bytes of ETE trace. To be on

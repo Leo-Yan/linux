@@ -82,6 +82,9 @@ ssize_t coresight_simple_show_pair(struct device *_dev, struct device_attribute 
 extern const u32 coresight_barrier_pkt[4];
 #define CORESIGHT_BARRIER_PKT_SIZE (sizeof(coresight_barrier_pkt))
 
+/* ETE IGNORE packets pad unformatted trace without disrupting decoding. */
+#define ETE_IGNORE_PACKET		0x70
+
 enum etm_addr_type {
 	ETM_ADDR_TYPE_NONE,
 	ETM_ADDR_TYPE_SINGLE,
