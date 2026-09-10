@@ -793,6 +793,19 @@ int cs_etm_decoder__process_data_block(struct cs_etm_decoder *decoder,
 	return ret;
 }
 
+int cs_etm_decoder__flush(struct cs_etm_decoder *decoder)
+{
+	if (OCSD_DATA_RESP_IS_WAIT(decoder->prev_return))
+		decoder->prev_return = ocsd_dt_process_data(decoder->dcd_tree,
+							 OCSD_OP_FLUSH, 0, 0,
+							 NULL, NULL);
+
+	if (OCSD_DATA_RESP_IS_WAIT(decoder->prev_return))
+		return 1;
+
+	return OCSD_DATA_RESP_IS_CONT(decoder->prev_return) ? 0 : -EINVAL;
+}
+
 void cs_etm_decoder__free(struct cs_etm_decoder *decoder)
 {
 	if (!decoder)

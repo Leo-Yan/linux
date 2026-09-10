@@ -91,6 +91,12 @@ int cs_etm_decoder__process_data_block(struct cs_etm_decoder *decoder,
 				       u64 indx, const u8 *buf,
 				       size_t len, size_t *consumed);
 
+/*
+ * Drain packet queues before each call. Returns 1 to repeat, 0 when done,
+ * or a negative error code.
+ */
+int cs_etm_decoder__flush(struct cs_etm_decoder *decoder);
+
 struct cs_etm_decoder *
 cs_etm_decoder__new(int num_cpu,
 		    struct cs_etm_decoder_params *d_params,

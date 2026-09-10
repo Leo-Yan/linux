@@ -2681,47 +2681,9 @@ static void cs_etm__clear_all_traceid_queues(struct cs_etm_queue *etmq)
 	}
 }
 
-static int cs_etm__run_per_thread_timeless_decoder(struct cs_etm_queue *etmq)
+static int cs_etm__run_timeless_decoder(struct cs_etm_queue *etmq)
 {
-	int err = 0;
-	struct cs_etm_traceid_queue *tidq;
-
-	tidq = cs_etm__etmq_get_traceid_queue(etmq, CS_ETM_PER_THREAD_TRACEID);
-	if (!tidq)
-		return -EINVAL;
-
-	/* Go through each buffer in the queue and decode them one by one */
-	while (1) {
-		err = cs_etm__get_data_block(etmq);
-		if (err <= 0)
-			return err;
-
-		/* Run trace decoder until buffer consumed or end of trace */
-		do {
-			err = cs_etm__decode_data_block(etmq);
-			if (err)
-				return err;
-
-			/*
-			 * Process each packet in this chunk, nothing to do if
-			 * an error occurs other than hoping the next one will
-			 * be better.
-			 */
-			err = cs_etm__process_traceid_queue(etmq, tidq);
-
-		} while (etmq->buf_len);
-
-		if (err == 0)
-			/* Flush any remaining branch stack entries */
-			err = cs_etm__end_block(etmq, tidq);
-	}
-
-	return err;
-}
-
-static int cs_etm__run_per_cpu_timeless_decoder(struct cs_etm_queue *etmq)
-{
-	int idx, err = 0;
+	int idx, err, pending;
 	struct cs_etm_traceid_queue *tidq;
 	struct int_node *inode;
 
@@ -2731,25 +2693,32 @@ static int cs_etm__run_per_cpu_timeless_decoder(struct cs_etm_queue *etmq)
 		if (err <= 0)
 			return err;
 
-		/* Run trace decoder until buffer consumed or end of trace */
+		/* Consume the buffer, including output pending after its last byte. */
 		do {
-			err = cs_etm__decode_data_block(etmq);
-			if (err)
-				return err;
+			if (etmq->buf_len) {
+				err = cs_etm__decode_data_block(etmq);
+				if (err)
+					return err;
+				pending = 1;
+			} else {
+				pending = cs_etm_decoder__flush(etmq->decoder);
+				if (pending < 0)
+					return pending;
+			}
 
 			/*
-			 * cs_etm__run_per_thread_timeless_decoder() runs on a
-			 * single traceID queue because each TID has a separate
-			 * buffer. But here in per-cpu mode we need to iterate
-			 * over each channel instead.
+			 * Per-thread decoding uses a single traceID queue;
+			 * formatted per-CPU buffers can contain several.
 			 */
 			intlist__for_each_entry(inode,
 						etmq->traceid_queues_list) {
 				idx = (int)(intptr_t)inode->priv;
 				tidq = etmq->traceid_queues[idx];
-				cs_etm__process_traceid_queue(etmq, tidq);
+				err = cs_etm__process_traceid_queue(etmq, tidq);
+				if (err)
+					return err;
 			}
-		} while (etmq->buf_len);
+		} while (pending);
 
 		intlist__for_each_entry(inode, etmq->traceid_queues_list) {
 			idx = (int)(intptr_t)inode->priv;
@@ -2760,8 +2729,6 @@ static int cs_etm__run_per_cpu_timeless_decoder(struct cs_etm_queue *etmq)
 				return err;
 		}
 	}
-
-	return err;
 }
 
 static int cs_etm__process_timeless_queues(struct cs_etm_auxtrace *etm,
@@ -2774,6 +2741,7 @@ static int cs_etm__process_timeless_queues(struct cs_etm_auxtrace *etm,
 		struct auxtrace_queue *queue = &etm->queues.queue_array[i];
 		struct cs_etm_queue *etmq = queue->priv;
 		struct cs_etm_traceid_queue *tidq;
+		int err;
 
 		if (!etmq)
 			continue;
@@ -2785,10 +2753,13 @@ static int cs_etm__process_timeless_queues(struct cs_etm_auxtrace *etm,
 			if (!tidq)
 				continue;
 
-			if (tid == -1 || thread__tid(tidq->frontend_thread) == tid)
-				cs_etm__run_per_thread_timeless_decoder(etmq);
-		} else
-			cs_etm__run_per_cpu_timeless_decoder(etmq);
+			if (tid != -1 && thread__tid(tidq->frontend_thread) != tid)
+				continue;
+		}
+
+		err = cs_etm__run_timeless_decoder(etmq);
+		if (err)
+			return err;
 	}
 
 	return 0;
