@@ -91,6 +91,11 @@ int cs_etm_decoder__process_data_block(struct cs_etm_decoder *decoder,
 				       u64 indx, const u8 *buf,
 				       size_t len, size_t *consumed);
 
+/*
+ * Drain output and submit EOT once after consuming all input.
+ * Consume queued packets between calls. Returns 1 for WAIT, 0 when done,
+ * or a negative error.
+ */
 int cs_etm_decoder__drain_packets(struct cs_etm_decoder *decoder);
 
 struct cs_etm_decoder *

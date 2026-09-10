@@ -46,6 +46,7 @@ struct cs_etm_decoder {
 	void *data;
 	void (*packet_printer)(const char *msg, void *data);
 	bool suppress_printing;
+	bool eot_sent;
 	dcd_tree_handle_t dcd_tree;
 	cs_etm_mem_cb_type mem_access;
 	ocsd_datapath_resp_t prev_return;
@@ -86,6 +87,7 @@ int cs_etm_decoder__reset(struct cs_etm_decoder *decoder)
 	ocsd_datapath_resp_t dp_ret;
 
 	decoder->prev_return = OCSD_RESP_CONT;
+	decoder->eot_sent = false;
 	decoder->suppress_printing = true;
 	dp_ret = ocsd_dt_process_data(decoder->dcd_tree, OCSD_OP_RESET,
 				      0, 0, NULL, NULL);
@@ -592,6 +594,12 @@ static ocsd_datapath_resp_t cs_etm_decoder__gen_trace_elem_printer(
 
 	type = elem->elem_type;
 
+	/* A clean EOT ends an AUX window; its sample still needs the history. */
+	if (type == OCSD_GEN_TRC_ELEM_EO_TRACE &&
+	    elem->unsync_eot_info == UNSYNC_EOT &&
+	    cs_etm__etmq_is_sampling(etmq))
+		return OCSD_RESP_CONT;
+
 	if (type == OCSD_GEN_TRC_ELEM_EO_TRACE ||
 	    type == OCSD_GEN_TRC_ELEM_NO_SYNC ||
 	    type == OCSD_GEN_TRC_ELEM_TRACE_ON)
@@ -803,10 +811,19 @@ int cs_etm_decoder__drain_packets(struct cs_etm_decoder *decoder)
 							    NULL,
 							    NULL);
 
+	if (OCSD_DATA_RESP_IS_CONT(decoder->prev_return) && !decoder->eot_sent) {
+		decoder->prev_return = ocsd_dt_process_data(decoder->dcd_tree,
+							    OCSD_OP_EOT,
+							    0,
+							    0,
+							    NULL,
+							    NULL);
+		decoder->eot_sent = true;
+	}
+
 	if (OCSD_DATA_RESP_IS_WAIT(decoder->prev_return))
 		return 1;
 
-	/* No further WAIT driven flushing is needed */
 	return OCSD_DATA_RESP_IS_CONT(decoder->prev_return) ? 0 : -EINVAL;
 }
 

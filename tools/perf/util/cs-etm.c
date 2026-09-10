@@ -131,6 +131,7 @@ struct cs_etm_queue {
 	u8 pending_timestamp_chan_id;
 	enum cs_etm_format format;
 	u64 offset;
+	/* Cleared once the current block is fully decoded and drained. */
 	const unsigned char *buf;
 	size_t buf_len, buf_used;
 	/* Conversion between traceID and index in traceid_queues array */
@@ -926,6 +927,7 @@ static void cs_etm__dump_event(struct cs_etm_queue *etmq,
 {
 	int ret;
 	const char *color = PERF_COLOR_BLUE;
+	const u8 *buf = buffer->data;
 	size_t buffer_used = 0;
 
 	fprintf(stdout, "\n");
@@ -938,13 +940,19 @@ static void cs_etm__dump_event(struct cs_etm_queue *etmq,
 
 		ret = cs_etm_decoder__process_data_block(
 				etmq->decoder, buffer->offset,
-				&((u8 *)buffer->data)[buffer_used],
+				&buf[buffer_used],
 				buffer->size - buffer_used, &consumed);
 		if (ret)
 			break;
 
 		buffer_used += consumed;
 	} while (buffer_used < buffer->size);
+
+	if (!ret) {
+		do {
+			ret = cs_etm_decoder__drain_packets(etmq->decoder);
+		} while (ret > 0);
+	}
 
 	cs_etm_decoder__reset(etmq->decoder);
 }
@@ -1318,12 +1326,11 @@ static int cs_etm__queue_first_cs_timestamp(struct cs_etm_auxtrace *etm,
 			goto out;
 
 		/*
-		 * Run decoder on the trace block.  The decoder will stop when
-		 * encountering a CS timestamp, a full packet queue or the end of
-		 * trace for that block.
+		 * Decode input or drain pending output. A timestamp or a full
+		 * packet queue can pause either operation.
 		 */
 		ret = cs_etm__decode_data_block(etmq);
-		if (ret)
+		if (ret < 0)
 			goto out;
 
 		/*
@@ -1551,6 +1558,11 @@ int cs_etm__etmq_update_decode_context(struct cs_etm_queue *etmq,
 bool cs_etm__etmq_is_timeless(struct cs_etm_queue *etmq)
 {
 	return !!etmq->etm->timeless_decoding;
+}
+
+bool cs_etm__etmq_is_sampling(struct cs_etm_queue *etmq)
+{
+	return etmq->etm->sampling_mode;
 }
 
 static void cs_etm__copy_insn(struct cs_etm_queue *etmq,
@@ -2045,6 +2057,33 @@ static int cs_etm__exception(struct cs_etm_traceid_queue *tidq)
 	return 0;
 }
 
+static int cs_etm__save_sample_history(struct cs_etm_auxtrace *etm,
+				       const struct perf_sample *sample)
+{
+	struct machine *machine = &etm->session->machines.host;
+	struct thread *thread;
+
+	thread = machine__findnew_thread(machine, sample->pid, sample->tid);
+	if (!thread)
+		return -ENOMEM;
+
+	/* Consume branch history so later samples cannot reuse the same window. */
+	if (etm->synth_opts.add_last_branch && !sample->branch_stack) {
+		thread_stack__br_sample_late(thread, sample->cpu, etm->br_stack,
+					     etm->br_stack_sz, sample->ip,
+					     machine__kernel_start(machine));
+		thread_stack__br_stack_consume(thread, sample->cpu);
+	}
+
+	if (etm->synth_opts.add_callchain && !sample->callchain)
+		thread_stack__sample_late(thread, sample->cpu, etm->chain,
+					  etm->synth_opts.callchain_sz + 1,
+					  sample->ip, machine__kernel_start(machine));
+
+	thread__put(thread);
+	return 0;
+}
+
 static int cs_etm__flush(struct cs_etm_queue *etmq,
 			 struct cs_etm_traceid_queue *tidq)
 {
@@ -2088,7 +2127,7 @@ static int cs_etm__flush(struct cs_etm_queue *etmq,
 swap_packet:
 	cs_etm__packet_swap(etm, tidq);
 
-	/* Reset last branches after flush the trace */
+	/* Flush the live stack at every trace discontinuity. */
 	if (etm->use_thread_stack)
 		thread_stack__flush(tidq->frontend_thread);
 
@@ -2182,14 +2221,14 @@ static void cs_etm__flush_all_stack(struct cs_etm_queue *etmq)
  *			   if need be.
  * Returns:	< 0	if error
  *		= 0	if no more auxtrace_buffer to read
- *		> 0	if the current buffer isn't empty yet
+ *		> 0	if input or decoder output remains in the current block
  */
 static int cs_etm__get_data_block(struct cs_etm_queue *etmq)
 {
 	int ret;
 
-	/* The current block is not finished */
-	if (etmq->buf_len)
+	/* Finish EOT and any pending output before resetting for a new block. */
+	if (etmq->buf)
 		return 1;
 
 	ret = cs_etm__get_trace(etmq);
@@ -2566,10 +2605,21 @@ static int cs_etm__set_sample_flags(struct cs_etm_queue *etmq,
 	return 0;
 }
 
+/*
+ * Return 0 when decoding and draining are complete, 1 if another call is
+ * needed, or a negative error. Process queued packets even on return 0.
+ */
 static int cs_etm__decode_data_block(struct cs_etm_queue *etmq)
 {
-	int ret = 0;
+	int ret;
 	size_t processed = 0;
+
+	if (!etmq->buf_len) {
+		ret = cs_etm_decoder__drain_packets(etmq->decoder);
+		if (!ret)
+			etmq->buf = NULL;
+		return ret;
+	}
 
 	/*
 	 * Packets are decoded and added to the decoder's packet queue
@@ -2584,14 +2634,13 @@ static int cs_etm__decode_data_block(struct cs_etm_queue *etmq)
 						 etmq->buf_len,
 						 &processed);
 	if (ret)
-		goto out;
+		return ret;
 
 	etmq->offset += processed;
 	etmq->buf_used += processed;
 	etmq->buf_len -= processed;
 
-out:
-	return ret;
+	return 1;
 }
 
 static int cs_etm__process_traceid_queue(struct cs_etm_queue *etmq,
@@ -2658,7 +2707,9 @@ static int cs_etm__process_traceid_queue(struct cs_etm_queue *etmq,
 			 * Discontinuity in trace, flush
 			 * previous branch stack
 			 */
-			cs_etm__flush(etmq, tidq);
+			ret = cs_etm__flush(etmq, tidq);
+			if (ret)
+				goto out;
 			break;
 		case CS_ETM_EMPTY:
 			/*
@@ -2704,11 +2755,11 @@ static int cs_etm__run_timeless_decoder(struct cs_etm_queue *etmq)
 		if (err <= 0)
 			return err;
 
-		/* Run trace decoder until the input buffer is consumed. */
+		/* Decode and drain the block, processing packets after each call. */
 		do {
-			err = cs_etm__decode_data_block(etmq);
-			if (err)
-				return err;
+			pending = cs_etm__decode_data_block(etmq);
+			if (pending < 0)
+				return pending;
 
 			/*
 			 * Per-thread decoding uses a single traceID queue;
@@ -2716,21 +2767,6 @@ static int cs_etm__run_timeless_decoder(struct cs_etm_queue *etmq)
 			 */
 			intlist__for_each_entry(inode,
 						etmq->traceid_queues_list) {
-				idx = (int)(intptr_t)inode->priv;
-				tidq = etmq->traceid_queues[idx];
-				err = cs_etm__process_traceid_queue(etmq, tidq);
-				if (err)
-					return err;
-			}
-		} while (etmq->buf_len);
-
-		/* Drain output paused after the last input byte was consumed */
-		do {
-			pending = cs_etm_decoder__drain_packets(etmq->decoder);
-			if (pending < 0)
-				return pending;
-
-			intlist__for_each_entry(inode, etmq->traceid_queues_list) {
 				idx = (int)(intptr_t)inode->priv;
 				tidq = etmq->traceid_queues[idx];
 				err = cs_etm__process_traceid_queue(etmq, tidq);
@@ -2904,24 +2940,19 @@ refetch:
 		}
 
 		ret = cs_etm__decode_data_block(etmq);
-		if (ret)
+		if (ret < 0)
 			goto out;
 
 		cs_timestamp = cs_etm__etmq_get_timestamp(etmq, &trace_chan_id);
 
 		if (!cs_timestamp) {
 			/*
-			 * Function cs_etm__decode_data_block() returns when
-			 * there is no more traces to decode in the current
-			 * auxtrace_buffer OR when a timestamp has been
-			 * encountered on any of the traceID queues.  Since we
-			 * did not get a timestamp, there is no more traces to
-			 * process in this auxtrace_buffer.  As such empty and
-			 * flush all traceID queues.
+			 * No timestamp is available yet. Process the queued packets
+			 * before resuming input or draining the current block.
 			 */
 			cs_etm__clear_all_traceid_queues(etmq);
 
-			/* Fetch another auxtrace_buffer for this etmq */
+			/* Resume this block, or fetch the next one after draining it. */
 			goto refetch;
 		}
 
@@ -3208,7 +3239,7 @@ static int cs_etm__process_aux_sample(struct cs_etm_auxtrace *etm,
 	list_add_tail(&buffer.list, &queue->head);
 	ret = cs_etm__run_timeless_decoder(etmq);
 
-	/* The descriptor and its borrowed data must not outlive this call. */
+	/* The buffer is borrowed for this decode only. */
 	list_del_init(&buffer.list);
 	etmq->buffer = NULL;
 	etmq->buf = NULL;
@@ -3221,11 +3252,8 @@ static int cs_etm__process_aux_sample(struct cs_etm_auxtrace *etm,
  * The sample keeps its IP, event identity and any recorded stacks.
  */
 static int cs_etm__process_sample(struct cs_etm_auxtrace *etm,
-				  struct perf_session *session,
 				  struct perf_sample *sample)
 {
-	struct machine *machine = &session->machines.host;
-	struct thread *thread;
 	int err;
 
 	if (!sample->ip)
@@ -3263,38 +3291,19 @@ static int cs_etm__process_sample(struct cs_etm_auxtrace *etm,
 	if (err)
 		return err;
 
-	thread = machine__findnew_thread(machine, sample->pid, sample->tid);
-	if (!thread)
-		return -ENOMEM;
+	err = cs_etm__save_sample_history(etm, sample);
+	if (err)
+		return err;
 
-	/*
-	 * Take the branch history rather than copying it. The trace window
-	 * belongs to the sample that ends it, so once it has been attached a
-	 * later sample with nothing newly decoded finds an empty stack rather
-	 * than being given an earlier window's branches. That is the common
-	 * case whenever the trace is duty cycled, by AUX pause/resume or by
-	 * ETM strobing.
-	 */
-	if (etm->synth_opts.add_last_branch && !sample->branch_stack) {
-		thread_stack__br_sample_late(thread, sample->cpu, etm->br_stack,
-					     etm->br_stack_sz, sample->ip,
-					     machine__kernel_start(machine));
-		thread_stack__br_stack_consume(thread, sample->cpu);
-		if (etm->br_stack->nr)
-			sample->branch_stack = etm->br_stack;
-	}
+	if (etm->synth_opts.add_last_branch && !sample->branch_stack && etm->br_stack->nr)
+		sample->branch_stack = etm->br_stack;
 
 	if (etm->synth_opts.add_callchain && !sample->callchain) {
-		thread_stack__sample_late(thread, sample->cpu, etm->chain,
-					  etm->synth_opts.callchain_sz + 1,
-					  sample->ip, machine__kernel_start(machine));
 		/* An empty history produces only a context marker and sample IP */
 		if (etm->chain->nr > 2 ||
 		    (etm->chain->nr == 2 && etm->chain->ips[1] != sample->ip))
 			sample->callchain = etm->chain;
 	}
-
-	thread__put(thread);
 
 	return 0;
 }
@@ -3338,7 +3347,7 @@ static int cs_etm__process_event(struct perf_session *session,
 		return cs_etm__process_switch_cpu_wide(etm, event);
 
 	case PERF_RECORD_SAMPLE:
-		return cs_etm__process_sample(etm, session, sample);
+		return cs_etm__process_sample(etm, sample);
 
 	case PERF_RECORD_AUX:
 		/*
