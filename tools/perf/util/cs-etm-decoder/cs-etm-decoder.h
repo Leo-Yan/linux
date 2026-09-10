@@ -92,10 +92,11 @@ int cs_etm_decoder__process_data_block(struct cs_etm_decoder *decoder,
 				       size_t len, size_t *consumed);
 
 /*
- * Drain packet queues before each call. Returns 1 to repeat, 0 when done,
- * or a negative error code.
+ * Drain packet queues before each call. If end_of_trace is set, also finish
+ * the input once per decoder reset. Returns 1 to repeat, 0 when done, or a
+ * negative error code.
  */
-int cs_etm_decoder__flush(struct cs_etm_decoder *decoder);
+int cs_etm_decoder__flush(struct cs_etm_decoder *decoder, bool end_of_trace);
 
 struct cs_etm_decoder *
 cs_etm_decoder__new(int num_cpu,

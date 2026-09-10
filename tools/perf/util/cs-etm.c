@@ -1898,6 +1898,11 @@ static int cs_etm__sample(struct cs_etm_queue *etmq,
 
 	tidq->period_instructions += tidq->packet->instr_count;
 
+	/* Retained AUX sample history must not enter a new trace segment. */
+	if (etm->sampling_mode && etm->use_thread_stack &&
+	    tidq->prev_packet->sample_type == CS_ETM_DISCONTINUITY)
+		thread_stack__flush(tidq->frontend_thread);
+
 	cs_etm__add_stack_event(etmq, tidq);
 
 	if (etm->synth_opts.instructions &&
@@ -2005,9 +2010,15 @@ static int cs_etm__sample(struct cs_etm_queue *etmq,
 static int cs_etm__context(struct cs_etm_queue *etmq,
 			   struct cs_etm_traceid_queue *tidq)
 {
+	struct cs_etm_auxtrace *etm = etmq->etm;
 	ocsd_ex_level el = tidq->packet->el;
 	struct machine *machine;
 	int ret;
+
+	/* Clear retained history before replacing its owning thread. */
+	if (etm->sampling_mode && etm->use_thread_stack &&
+	    tidq->prev_packet->sample_type == CS_ETM_DISCONTINUITY)
+		thread_stack__flush(tidq->frontend_thread);
 
 	machine = cs_etm__get_machine(etmq, el);
 	if (!machine) {
@@ -2092,8 +2103,12 @@ static int cs_etm__flush(struct cs_etm_queue *etmq,
 swap_packet:
 	cs_etm__packet_swap(etm, tidq);
 
-	/* Reset last branches after flush the trace */
-	if (etm->use_thread_stack)
+	/*
+	 * Keep the last decoded segment for the owning AUX sample, even if a
+	 * trailing discontinuity ends it. Clear the history before decoding a
+	 * new segment, context or AUX window so it cannot bridge a trace gap.
+	 */
+	if (etm->use_thread_stack && !etm->sampling_mode)
 		thread_stack__flush(tidq->frontend_thread);
 
 	return err;
@@ -2727,7 +2742,8 @@ static int cs_etm__run_timeless_decoder(struct cs_etm_queue *etmq)
 					return err;
 				pending = 1;
 			} else {
-				pending = cs_etm_decoder__flush(etmq->decoder);
+				pending = cs_etm_decoder__flush(etmq->decoder,
+								etmq->etm->sampling_mode);
 				if (pending < 0)
 					return pending;
 			}

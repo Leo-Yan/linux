@@ -46,6 +46,7 @@ struct cs_etm_decoder {
 	void *data;
 	void (*packet_printer)(const char *msg, void *data);
 	bool suppress_printing;
+	bool end_of_trace;
 	dcd_tree_handle_t dcd_tree;
 	cs_etm_mem_cb_type mem_access;
 	ocsd_datapath_resp_t prev_return;
@@ -86,6 +87,7 @@ int cs_etm_decoder__reset(struct cs_etm_decoder *decoder)
 	ocsd_datapath_resp_t dp_ret;
 
 	decoder->prev_return = OCSD_RESP_CONT;
+	decoder->end_of_trace = false;
 	decoder->suppress_printing = true;
 	dp_ret = ocsd_dt_process_data(decoder->dcd_tree, OCSD_OP_RESET,
 				      0, 0, NULL, NULL);
@@ -793,7 +795,7 @@ int cs_etm_decoder__process_data_block(struct cs_etm_decoder *decoder,
 	return ret;
 }
 
-int cs_etm_decoder__flush(struct cs_etm_decoder *decoder)
+int cs_etm_decoder__flush(struct cs_etm_decoder *decoder, bool end_of_trace)
 {
 	if (OCSD_DATA_RESP_IS_WAIT(decoder->prev_return))
 		decoder->prev_return = ocsd_dt_process_data(decoder->dcd_tree,
@@ -802,6 +804,17 @@ int cs_etm_decoder__flush(struct cs_etm_decoder *decoder)
 
 	if (OCSD_DATA_RESP_IS_WAIT(decoder->prev_return))
 		return 1;
+
+	/* Finish independent AUX windows once all pending output has drained. */
+	if (end_of_trace && !decoder->end_of_trace &&
+	    OCSD_DATA_RESP_IS_CONT(decoder->prev_return)) {
+		decoder->end_of_trace = true;
+		decoder->prev_return = ocsd_dt_process_data(decoder->dcd_tree,
+							    OCSD_OP_EOT, 0, 0,
+							    NULL, NULL);
+		if (OCSD_DATA_RESP_IS_WAIT(decoder->prev_return))
+			return 1;
+	}
 
 	return OCSD_DATA_RESP_IS_CONT(decoder->prev_return) ? 0 : -EINVAL;
 }
