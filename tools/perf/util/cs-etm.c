@@ -2048,6 +2048,26 @@ static int cs_etm__exception(struct cs_etm_traceid_queue *tidq)
 	return 0;
 }
 
+static int cs_etm__save_sample_history(struct cs_etm_auxtrace *etm,
+				       const struct perf_sample *sample)
+{
+	struct machine *machine = &etm->session->machines.host;
+	struct thread *thread;
+
+	thread = machine__findnew_thread(machine, sample->pid, sample->tid);
+	if (!thread)
+		return -ENOMEM;
+
+	/* Consume branch history so later samples cannot reuse the same window. */
+	thread_stack__br_sample_late(thread, sample->cpu, etm->br_stack,
+				     etm->br_stack_sz, sample->ip,
+				     machine__kernel_start(machine));
+	thread_stack__br_stack_consume(thread, sample->cpu);
+
+	thread__put(thread);
+	return 0;
+}
+
 static int cs_etm__flush(struct cs_etm_queue *etmq,
 			 struct cs_etm_traceid_queue *tidq)
 {
@@ -3081,11 +3101,8 @@ static int cs_etm__br_stack_init(struct cs_etm_auxtrace *etm,
  * ip, callchain and event identity; only an absent branch stack is filled in.
  */
 static int cs_etm__process_sample(struct cs_etm_auxtrace *etm,
-				  struct perf_session *session,
 				  struct perf_sample *sample)
 {
-	struct machine *machine = &session->machines.host;
-	struct thread *thread;
 	int err;
 
 	if (!etm->synth_opts.add_last_branch || sample->branch_stack ||
@@ -3110,27 +3127,12 @@ static int cs_etm__process_sample(struct cs_etm_auxtrace *etm,
 	if (err)
 		return err;
 
-	thread = machine__findnew_thread(machine, sample->pid, sample->tid);
-	if (!thread)
-		return -ENOMEM;
-
-	/*
-	 * Take the branch history rather than copying it. The trace window
-	 * belongs to the sample that ends it, so once it has been attached a
-	 * later sample with nothing newly decoded finds an empty stack rather
-	 * than being given an earlier window's branches. That is the common
-	 * case whenever the trace is duty cycled, by AUX pause/resume or by
-	 * ETM strobing.
-	 */
-	thread_stack__br_sample_late(thread, sample->cpu, etm->br_stack,
-				     etm->br_stack_sz, sample->ip,
-				     machine__kernel_start(machine));
-	thread_stack__br_stack_consume(thread, sample->cpu);
+	err = cs_etm__save_sample_history(etm, sample);
+	if (err)
+		return err;
 
 	if (etm->br_stack->nr)
 		sample->branch_stack = etm->br_stack;
-
-	thread__put(thread);
 
 	return 0;
 }
@@ -3174,7 +3176,7 @@ static int cs_etm__process_event(struct perf_session *session,
 		return cs_etm__process_switch_cpu_wide(etm, event);
 
 	case PERF_RECORD_SAMPLE:
-		return cs_etm__process_sample(etm, session, sample);
+		return cs_etm__process_sample(etm, sample);
 
 	case PERF_RECORD_AUX:
 		/*
