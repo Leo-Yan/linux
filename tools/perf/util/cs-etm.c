@@ -129,6 +129,7 @@ struct cs_etm_queue {
 	u8 pending_timestamp_chan_id;
 	enum cs_etm_format format;
 	u64 offset;
+	/* Cleared once the current block is fully decoded and drained */
 	const unsigned char *buf;
 	size_t buf_len, buf_used;
 	/* Conversion between traceID and index in traceid_queues array */
@@ -943,6 +944,12 @@ static void cs_etm__dump_event(struct cs_etm_queue *etmq,
 		buffer_used += consumed;
 	} while (buffer_used < buffer->size);
 
+	if (!ret) {
+		do {
+			ret = cs_etm_decoder__drain_packets(etmq->decoder);
+		} while (ret > 0);
+	}
+
 	cs_etm_decoder__reset(etmq->decoder);
 }
 
@@ -1319,7 +1326,7 @@ static int cs_etm__queue_first_cs_timestamp(struct cs_etm_auxtrace *etm,
 		 * trace for that block.
 		 */
 		ret = cs_etm__decode_data_block(etmq);
-		if (ret)
+		if (ret < 0)
 			goto out;
 
 		/*
@@ -2171,14 +2178,17 @@ static void cs_etm__flush_all_stack(struct cs_etm_queue *etmq)
  *			   if need be.
  * Returns:	< 0	if error
  *		= 0	if no more auxtrace_buffer to read
- *		> 0	if the current buffer isn't empty yet
+ *		> 0	if input or decoder output remains in the current block
  */
 static int cs_etm__get_data_block(struct cs_etm_queue *etmq)
 {
 	int ret;
 
-	/* The current block is not finished */
-	if (etmq->buf_len)
+	/*
+	 * A non-NULL buf indicates that packets are still pending.
+	 * Drain them before resetting for a new block.
+	 */
+	if (etmq->buf)
 		return 1;
 
 	ret = cs_etm__get_trace(etmq);
@@ -2555,10 +2565,21 @@ static int cs_etm__set_sample_flags(struct cs_etm_queue *etmq,
 	return 0;
 }
 
+/*
+ * Return 0 when decoding and draining are complete, 1 if another call is
+ * needed, or a negative error. Process queued packets even on return 0.
+ */
 static int cs_etm__decode_data_block(struct cs_etm_queue *etmq)
 {
-	int ret = 0;
+	int ret;
 	size_t processed = 0;
+
+	if (!etmq->buf_len) {
+		ret = cs_etm_decoder__drain_packets(etmq->decoder);
+		if (!ret)
+			etmq->buf = NULL;
+		return ret;
+	}
 
 	/*
 	 * Packets are decoded and added to the decoder's packet queue
@@ -2573,14 +2594,13 @@ static int cs_etm__decode_data_block(struct cs_etm_queue *etmq)
 						 etmq->buf_len,
 						 &processed);
 	if (ret)
-		goto out;
+		return ret;
 
 	etmq->offset += processed;
 	etmq->buf_used += processed;
 	etmq->buf_len -= processed;
 
-out:
-	return ret;
+	return 1;
 }
 
 static int cs_etm__process_traceid_queue(struct cs_etm_queue *etmq,
@@ -2686,7 +2706,7 @@ static void cs_etm__clear_all_traceid_queues(struct cs_etm_queue *etmq)
 
 static int cs_etm__run_timeless_decoder(struct cs_etm_queue *etmq)
 {
-	int idx, err;
+	int idx, err, pending;
 	struct cs_etm_traceid_queue *tidq;
 	struct int_node *inode;
 
@@ -2698,9 +2718,9 @@ static int cs_etm__run_timeless_decoder(struct cs_etm_queue *etmq)
 
 		/* Run trace decoder until the input buffer is consumed. */
 		do {
-			err = cs_etm__decode_data_block(etmq);
-			if (err)
-				return err;
+			pending = cs_etm__decode_data_block(etmq);
+			if (pending < 0)
+				return pending;
 
 			/*
 			 * Per-thread decoding uses a single traceID queue;
@@ -2714,7 +2734,7 @@ static int cs_etm__run_timeless_decoder(struct cs_etm_queue *etmq)
 				if (err)
 					return err;
 			}
-		} while (etmq->buf_len);
+		} while (pending);
 
 		intlist__for_each_entry(inode, etmq->traceid_queues_list) {
 			idx = (int)(intptr_t)inode->priv;
@@ -2881,24 +2901,19 @@ refetch:
 		}
 
 		ret = cs_etm__decode_data_block(etmq);
-		if (ret)
+		if (ret < 0)
 			goto out;
 
 		cs_timestamp = cs_etm__etmq_get_timestamp(etmq, &trace_chan_id);
 
 		if (!cs_timestamp) {
 			/*
-			 * Function cs_etm__decode_data_block() returns when
-			 * there is no more traces to decode in the current
-			 * auxtrace_buffer OR when a timestamp has been
-			 * encountered on any of the traceID queues.  Since we
-			 * did not get a timestamp, there is no more traces to
-			 * process in this auxtrace_buffer.  As such empty and
-			 * flush all traceID queues.
+			 * No timestamp is available yet. Process the queued packets
+			 * before resuming input or draining the current block.
 			 */
 			cs_etm__clear_all_traceid_queues(etmq);
 
-			/* Fetch another auxtrace_buffer for this etmq */
+			/* Draining and fetch another auxtrace_buffer for this etmq */
 			goto refetch;
 		}
 
