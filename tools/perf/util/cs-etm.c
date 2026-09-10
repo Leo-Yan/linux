@@ -2644,10 +2644,13 @@ static int cs_etm__process_traceid_queue(struct cs_etm_queue *etmq,
 			break;
 		case CS_ETM_DISCONTINUITY:
 			/*
-			 * Discontinuity in trace, flush
-			 * previous branch stack
+			 * Flush the previous branch stack at a discontinuity.
+			 * Propagate sample delivery errors, which can occur before
+			 * the packet swap and thread stack flush are complete.
 			 */
-			cs_etm__flush(etmq, tidq);
+			ret = cs_etm__flush(etmq, tidq);
+			if (ret)
+				goto out;
 			break;
 		case CS_ETM_EMPTY:
 			/*
