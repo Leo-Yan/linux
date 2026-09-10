@@ -450,6 +450,12 @@ static int cs_etm_recording_options(struct auxtrace_record *itr,
 	 */
 	evsel__set_sample_bit(cs_etm_evsel, CPU);
 
+	/* Raw AUX samples need the sampling CPU to select the trace decoder. */
+	evlist__for_each_entry(evlist, evsel) {
+		if (evsel->core.attr.aux_sample_size)
+			evsel__set_sample_bit(evsel, CPU);
+	}
+
 	/*
 	 * Also the case of per-cpu mmaps, need the contextID in order to be notified
 	 * when a context switch happened.
