@@ -171,6 +171,45 @@ no branch history at all, for example samples from a thread that was never
 traced, or samples recorded before the first or after the last trace window.
 It is built and installed with perf's other dlfilters.
 
+Decode branch stack and callchain from AUX samples
+--------------------------------------------------
+
+With a kernel that supports CoreSight AUX sampling, record an AUX trace
+window inside each cycle sample::
+
+  perf record --aux-sample=8192 -e '{cs_etm//u,cycles/period=100003/u}' \
+        -- ./workload
+  perf script --itrace=G16L64 -F comm,pid,tid,cpu,event,ip,brstack
+
+``G16`` adds a reconstructed callchain and ``L64`` adds up to 64 branches.
+Either option can be used alone. Existing callchains and branch stacks are
+preserved. Without an explicit ``--itrace`` option, both are enabled for AUX
+samples. Decoded history is available in ``perf script`` and ``perf report``.
+
+AUX sampling supports unformatted, per-CPU sink (TRBE) trace. Each sample
+selects its CPU's decoder and starts a fresh trace window. The window already
+belongs to the sample, so ETM timestamps are not required for attribution.
+Samples without decodable history receive no reconstructed stack. CPU-wide
+recordings must enable context IDs to distinguish tasks within a window; the
+default recording setup enables them.
+
+Callchains cover only calls visible in the captured window; callers before
+the first synchronization point cannot be recovered.
+
+When kernel tracing is enabled, AUX samples can include PMU interrupt-handler
+execution before the trace source is paused. The late-sample helpers trim
+this using instruction addresses, which may not uniquely identify the sample
+boundary for kernel samples.
+
+Formatted sinks such as ETR are not supported. They can collect trace from
+sources on multiple CPUs in a shared buffer, mixing execution from unrelated
+threads into the AUX sample. Context IDs can distinguish these threads, but
+trace from other CPUs can consume the limited sample window, leaving little
+history for the sampled thread.
+
+Guest samples, synthesizing instruction events, and saving reconstructed
+callchains with ``perf inject`` are also unsupported.
+
 Perf test - Verify kernel and userspace perf CoreSight work
 -----------------------------------------------------------
 
