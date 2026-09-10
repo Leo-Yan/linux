@@ -617,6 +617,7 @@ long perf_output_copy_aux(struct perf_output_handle *aux_handle,
 
 	return len;
 }
+EXPORT_SYMBOL_GPL(perf_output_copy_aux);
 
 #define PERF_AUX_GFP	(GFP_KERNEL | __GFP_ZERO | __GFP_NOWARN | __GFP_NORETRY)
 
