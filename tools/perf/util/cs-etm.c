@@ -2091,7 +2091,7 @@ static int cs_etm__flush(struct cs_etm_queue *etmq,
 swap_packet:
 	cs_etm__packet_swap(etm, tidq);
 
-	/* Reset last branches after flush the trace */
+	/* Flush the live stack at every trace discontinuity. */
 	if (etm->use_thread_stack)
 		thread_stack__flush(tidq->frontend_thread);
 

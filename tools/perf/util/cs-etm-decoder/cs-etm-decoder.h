@@ -92,7 +92,7 @@ int cs_etm_decoder__process_data_block(struct cs_etm_decoder *decoder,
 				       size_t len, size_t *consumed);
 
 /*
- * Drain pending packets after consuming a data block.
+ * Drain pending packets and submit EOT once after consuming a data block.
  * Process queued packets after each call, including the final call.
  * Returns 1 for WAIT, 0 when done, or a negative error.
  */
