@@ -91,6 +91,8 @@ int cs_etm_decoder__process_data_block(struct cs_etm_decoder *decoder,
 				       u64 indx, const u8 *buf,
 				       size_t len, size_t *consumed);
 
+int cs_etm_decoder__drain_packets(struct cs_etm_decoder *decoder);
+
 struct cs_etm_decoder *
 cs_etm_decoder__new(int num_cpu,
 		    struct cs_etm_decoder_params *d_params,

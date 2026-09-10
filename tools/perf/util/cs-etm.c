@@ -2683,7 +2683,7 @@ static void cs_etm__clear_all_traceid_queues(struct cs_etm_queue *etmq)
 
 static int cs_etm__run_timeless_decoder(struct cs_etm_queue *etmq)
 {
-	int idx, err;
+	int idx, err, pending;
 	struct cs_etm_traceid_queue *tidq;
 	struct int_node *inode;
 
@@ -2712,6 +2712,21 @@ static int cs_etm__run_timeless_decoder(struct cs_etm_queue *etmq)
 					return err;
 			}
 		} while (etmq->buf_len);
+
+		/* Drain output paused after the last input byte was consumed */
+		do {
+			pending = cs_etm_decoder__drain_packets(etmq->decoder);
+			if (pending < 0)
+				return pending;
+
+			intlist__for_each_entry(inode, etmq->traceid_queues_list) {
+				idx = (int)(intptr_t)inode->priv;
+				tidq = etmq->traceid_queues[idx];
+				err = cs_etm__process_traceid_queue(etmq, tidq);
+				if (err)
+					return err;
+			}
+		} while (pending);
 
 		intlist__for_each_entry(inode, etmq->traceid_queues_list) {
 			idx = (int)(intptr_t)inode->priv;
