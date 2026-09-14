@@ -4,6 +4,7 @@
  * Author: Mathieu Poirier <mathieu.poirier@linaro.org>
  */
 
+#include <linux/atomic.h>
 #include <linux/bitfield.h>
 #include <linux/coresight.h>
 #include <linux/coresight-pmu.h>
@@ -26,6 +27,9 @@
 #include "coresight-syscfg.h"
 #include "coresight-trace-id.h"
 
+#define ETM_PERF_ACT_STOP		BIT(0)
+#define ETM_PERF_ACT_AUX		BIT(1)
+
 static struct pmu etm_pmu;
 static bool etm_perf_up;
 
@@ -46,6 +50,8 @@ static bool etm_perf_up;
 struct etm_ctxt {
 	struct perf_output_handle handle;
 	struct etm_event_data *event_data;
+	/* Callbacks clear their own bits; AUX operations can defer STOP. */
+	atomic_t action;
 };
 
 static DEFINE_PER_CPU(struct etm_ctxt, etm_ctxt);
@@ -517,33 +523,69 @@ err:
 	goto out;
 }
 
-static int etm_event_resume(struct etm_ctxt *ctxt)
+static void etm_event_stop(struct perf_event *event, int mode);
+
+static bool etm_event_aux_begin(struct perf_event *event, struct etm_ctxt *ctxt)
+{
+	int action;
+
+	/* Claim AUX access before inspecting state that a stop can invalidate. */
+	action = atomic_fetch_or(ETM_PERF_ACT_AUX, &ctxt->action);
+	if (action & ETM_PERF_ACT_AUX)
+		return false;
+
+	if ((action & ETM_PERF_ACT_STOP) ||
+	    (READ_ONCE(event->hw.state) & PERF_HES_STOPPED)) {
+		/* Leave an existing stop to finish its own work. */
+		atomic_fetch_andnot(ETM_PERF_ACT_AUX, &ctxt->action);
+		return false;
+	}
+
+	return true;
+}
+
+static void etm_event_aux_end(struct perf_event *event, struct etm_ctxt *ctxt)
+{
+	int action;
+
+	/* Complete a stop requested while this AUX operation held the context. */
+	action = atomic_fetch_andnot(ETM_PERF_ACT_AUX, &ctxt->action);
+	if (action & ETM_PERF_ACT_STOP)
+		etm_event_stop(event, PERF_EF_UPDATE);
+}
+
+static int etm_event_resume(struct perf_event *event, struct etm_ctxt *ctxt)
 {
 	struct perf_output_handle *handle = &ctxt->handle;
-	struct perf_event *event = handle->event;
 	struct coresight_device *source;
 	struct coresight_path *path;
-	int ret;
+	int ret = 0;
+
+	if (!etm_event_aux_begin(event, ctxt))
+		return 0;
 
 	if (!perf_get_aux(handle))
-		return 0;
+		goto out;
 
 	path = etm_event_get_ctxt_path(ctxt);
 	if (!path)
-		return 0;
+		goto out;
 
 	source = coresight_get_source(path);
 	if (!source)
-		return 0;
+		goto out;
 
 	ret = coresight_resume_source(source);
 	if (ret < 0) {
 		dev_err(&source->dev, "Failed to resume ETM event.\n");
-		return ret;
+		goto out;
 	}
 
 	WRITE_ONCE(event->hw.state, READ_ONCE(event->hw.state) & ~PERF_HES_UPTODATE);
-	return 0;
+
+out:
+	etm_event_aux_end(event, ctxt);
+	return ret;
 }
 
 static void etm_event_start(struct perf_event *event, int flags)
@@ -557,7 +599,7 @@ static void etm_event_start(struct perf_event *event, int flags)
 	u64 hw_id;
 
 	if (flags & PERF_EF_RESUME) {
-		WARN_ON_ONCE(etm_event_resume(ctxt));
+		WARN_ON_ONCE(etm_event_resume(event, ctxt));
 		return;
 	}
 
@@ -684,18 +726,22 @@ out:
 static void etm_event_pause(struct perf_event *event,
 			    struct etm_ctxt *ctxt)
 {
-	struct coresight_path *path = etm_event_get_ctxt_path(ctxt);
+	struct coresight_path *path;
 	struct perf_output_handle *handle = &ctxt->handle;
 	struct coresight_device *source, *sink;
 	struct etm_event_data *event_data;
 
-	if (!path)
+	if (!etm_event_aux_begin(event, ctxt))
 		return;
+
+	path = etm_event_get_ctxt_path(ctxt);
+	if (!path)
+		goto out;
 
 	source = coresight_get_source(path);
 	sink = coresight_get_sink(path);
 	if (WARN_ON_ONCE(!source || !sink))
-		return;
+		goto out;
 
 	/* Stop tracer */
 	coresight_pause_source(source);
@@ -707,7 +753,7 @@ static void etm_event_pause(struct perf_event *event,
 	 * disallows updating buffer for the per CPU sink case.
 	 */
 	if (coresight_is_percpu_sink(sink))
-		return;
+		goto out;
 
 	event_data = READ_ONCE(ctxt->event_data);
 	etm_event_update_buffer(event, handle, event_data, sink,
@@ -715,6 +761,9 @@ static void etm_event_pause(struct perf_event *event,
 
 	/* Prepare the handle for resuming trace */
 	perf_aux_output_begin(handle, event);
+
+out:
+	etm_event_aux_end(event, ctxt);
 }
 
 static void etm_event_stop(struct perf_event *event, int mode)
@@ -725,13 +774,27 @@ static void etm_event_stop(struct perf_event *event, int mode)
 	struct coresight_path *path;
 	struct hw_perf_event *hwc = &event->hw;
 	struct etm_event_data *event_data;
+	int action;
 
-	/* If we're already stopped, then nothing to do */
+	if (mode & PERF_EF_PAUSE) {
+		etm_event_pause(event, ctxt);
+		return;
+	}
+
 	if (READ_ONCE(hwc->state) & PERF_HES_STOPPED)
 		return;
 
-	if (mode & PERF_EF_PAUSE)
-		return etm_event_pause(event, ctxt);
+	/* Leave STOP pending until the AUX operation releases its action bit. */
+	action = atomic_fetch_or(ETM_PERF_ACT_STOP, &ctxt->action);
+	if (action & ETM_PERF_ACT_AUX)
+		return;
+
+	/*
+	 * A repeated throttling stop must not interrupt an active teardown.
+	 * PERF_EF_UPDATE lets the AUX callback complete a deferred stop.
+	 */
+	if ((action & ETM_PERF_ACT_STOP) && !(mode & PERF_EF_UPDATE))
+		return;
 
 	path = etm_event_get_ctxt_path(ctxt);
 
@@ -741,20 +804,17 @@ static void etm_event_stop(struct perf_event *event, int mode)
 	 */
 	if (!path) {
 		WRITE_ONCE(hwc->state, PERF_HES_STOPPED | PERF_HES_UPTODATE);
-		return;
+		goto out;
 	}
 
 	event_data = READ_ONCE(ctxt->event_data);
 	/* Clear the event_data as this ETM is stopping the trace. */
 	WRITE_ONCE(ctxt->event_data, NULL);
 
-	/* Tell the core the event is stopped. */
-	WRITE_ONCE(hwc->state, PERF_HES_STOPPED);
-
 	source = coresight_get_source(path);
 	sink = coresight_get_sink(path);
 	if (!source || !sink)
-		return;
+		goto out;
 
 	/* stop tracer */
 	coresight_disable_source(source, event);
@@ -763,6 +823,10 @@ static void etm_event_stop(struct perf_event *event, int mode)
 
 	/* Disabling the path make its elements available to other sessions */
 	coresight_disable_path(path);
+	WRITE_ONCE(hwc->state, READ_ONCE(hwc->state) | PERF_HES_STOPPED);
+
+out:
+	atomic_fetch_andnot(ETM_PERF_ACT_STOP, &ctxt->action);
 }
 
 static int etm_event_add(struct perf_event *event, int mode)
