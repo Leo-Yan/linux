@@ -681,10 +681,10 @@ out:
 	perf_aux_output_end(handle, 0);
 }
 
-static void etm_event_pause(struct coresight_path *path,
-			    struct perf_event *event,
+static void etm_event_pause(struct perf_event *event,
 			    struct etm_ctxt *ctxt)
 {
+	struct coresight_path *path = etm_event_get_ctxt_path(ctxt);
 	struct perf_output_handle *handle = &ctxt->handle;
 	struct coresight_device *source, *sink;
 	struct etm_event_data *event_data;
@@ -722,7 +722,7 @@ static void etm_event_stop(struct perf_event *event, int mode)
 	struct coresight_device *source, *sink;
 	struct etm_ctxt *ctxt = this_cpu_ptr(&etm_ctxt);
 	struct perf_output_handle *handle = &ctxt->handle;
-	struct coresight_path *path = etm_event_get_ctxt_path(ctxt);
+	struct coresight_path *path;
 	struct hw_perf_event *hwc = &event->hw;
 	struct etm_event_data *event_data;
 
@@ -731,7 +731,9 @@ static void etm_event_stop(struct perf_event *event, int mode)
 		return;
 
 	if (mode & PERF_EF_PAUSE)
-		return etm_event_pause(path, event, ctxt);
+		return etm_event_pause(event, ctxt);
+
+	path = etm_event_get_ctxt_path(ctxt);
 
 	/*
 	 * No path is enabled, therefore no need to disable hardware or
