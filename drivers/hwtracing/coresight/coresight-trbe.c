@@ -1098,11 +1098,15 @@ static int arm_trbe_disable(struct coresight_device *csdev)
 	struct trbe_cpudata *cpudata = dev_get_drvdata(&csdev->dev);
 	struct trbe_buf *buf = cpudata->buf;
 
+	/* A failed AUX snapshot may have already disabled the sink. */
+	if (cpudata->mode == CS_MODE_DISABLED)
+		return 0;
+	if (cpudata->mode != CS_MODE_PERF)
+		return -EINVAL;
+
 	WARN_ON(buf->cpudata != cpudata);
 	WARN_ON(cpudata->cpu != smp_processor_id());
 	WARN_ON(cpudata->drvdata != drvdata);
-	if (cpudata->mode != CS_MODE_PERF)
-		return -EINVAL;
 
 	trbe_drain_and_disable_local(cpudata);
 	buf->cpudata = NULL;
