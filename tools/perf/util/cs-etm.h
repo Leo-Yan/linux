@@ -173,9 +173,15 @@ struct cs_etm_queue;
 struct cs_etm_packet {
 	enum cs_etm_sample_type sample_type;
 	enum cs_etm_isa isa;
+	/* For exceptions: source PC, or CS_ETM_INVAL_ADDR. */
 	u64 start_addr;
 	/* For exceptions: preferred return address, or CS_ETM_INVAL_ADDR. */
 	u64 end_addr;
+	/*
+	 * Target PC for completing control flow before exception entry.
+	 * CS_ETM_INVAL_ADDR when unavailable.
+	 */
+	u64 tgt_pc_before_exception;
 	u32 instr_count;
 	u32 last_instr_type;
 	u32 last_instr_subtype;

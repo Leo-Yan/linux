@@ -422,6 +422,7 @@ cs_etm_decoder__buffer_packet(struct cs_etm_queue *etmq,
 	packet_queue->packet_buffer[et].cpu = cpu;
 	packet_queue->packet_buffer[et].start_addr = CS_ETM_INVAL_ADDR;
 	packet_queue->packet_buffer[et].end_addr = CS_ETM_INVAL_ADDR;
+	packet_queue->packet_buffer[et].tgt_pc_before_exception = CS_ETM_INVAL_ADDR;
 	packet_queue->packet_buffer[et].instr_count = 0;
 	packet_queue->packet_buffer[et].last_instr_taken_branch = false;
 	packet_queue->packet_buffer[et].last_instr_size = 0;
@@ -514,6 +515,8 @@ cs_etm_decoder__buffer_exception(struct cs_etm_queue *etmq,
 {
 	int ret = 0;
 	struct cs_etm_packet *packet;
+	u64 start_addr = CS_ETM_INVAL_ADDR;
+	u8 last_instr_size = 0;
 
 	ret = cs_etm_decoder__buffer_packet(etmq, queue, elem, trace_chan_id,
 					    CS_ETM_EXCEPTION);
@@ -522,6 +525,32 @@ cs_etm_decoder__buffer_exception(struct cs_etm_queue *etmq,
 
 	packet = &queue->packet_buffer[queue->tail];
 	packet->exception_number = elem->exception_number;
+
+	if (packet->isa == CS_ETM_ISA_A64 &&
+	    packet->exception_number != CS_ETMV4_EXC_RESET &&
+	    elem->excep_ret_addr && elem->en_addr != CS_ETM_INVAL_ADDR) {
+		/*
+		 * In AArch64 the preferred exception return address is the
+		 * interrupted or faulting PC. SVC, HVC and SMC save the
+		 * following PC when reported as an exception call. Traps on
+		 * those instructions still use the faulting PC.
+		 */
+		if (elem->exception_number == CS_ETMV4_EXC_CALL)
+			last_instr_size = 4;
+		start_addr = elem->en_addr - last_instr_size;
+
+		/*
+		 * A shared return address supplies the preceding branch's
+		 * target; otherwise the exception source completes the
+		 * preceding flow.
+		 */
+		packet->tgt_pc_before_exception = elem->excep_ret_addr_br_tgt ?
+						  elem->en_addr : start_addr;
+	}
+
+	packet->start_addr = start_addr;
+	packet->last_instr_size = last_instr_size;
+
 	if (elem->context.el_valid)
 		packet->el = elem->context.exception_level;
 	if (elem->excep_ret_addr)
