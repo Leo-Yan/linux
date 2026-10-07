@@ -531,6 +531,9 @@ void perf_aux_output_end(struct perf_output_handle *handle, unsigned long size)
 	if (rb_need_aux_wakeup(rb))
 		wakeup = true;
 
+	trace_printk("old_head=0x%lx new_head=0x%lx size=0x%lx wakeup=%d\n",
+		     aux_head, rb->aux_head, size, wakeup);
+
 	if (wakeup) {
 		if (handle->aux_flags & PERF_AUX_FLAG_TRUNCATED)
 			perf_event_disable_inatomic(handle->event);
