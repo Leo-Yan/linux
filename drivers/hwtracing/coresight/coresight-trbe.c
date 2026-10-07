@@ -328,6 +328,7 @@ static void trbe_reset_local(struct trbe_cpudata *cpudata)
 
 static void trbe_truncate_event(struct perf_output_handle *handle)
 {
+	trace_printk("Set TRUNCATED flag\n");
 	perf_aux_output_flag(handle, PERF_AUX_FLAG_TRUNCATED);
 	perf_aux_output_end(handle, 0);
 }
@@ -719,13 +720,19 @@ static int trbe_compute_next(struct perf_output_handle *handle)
 	else
 		ret = trbe_normal_offset(handle);
 
-	if (ret)
+	if (ret) {
+		trace_printk("Failed to compute next\n");
 		return ret;
+	}
 
 	buf->trbe_write = buf->trbe_base + PERF_IDX2OFF(handle->head, buf);
 
 	/* Set the base of the TRBE to the buffer base */
 	buf->trbe_hw_base = buf->trbe_base;
+
+	trace_printk("Next: hw_base/base=%lx write=%lx limit=%lx count=%lx\n",
+		     buf->trbe_hw_base, buf->trbe_write,
+		     buf->trbe_limit, buf->trbe_count);
 	return 0;
 }
 
@@ -785,6 +792,15 @@ static void set_trbe_limit_pointer_enabled(struct trbe_buf *buf)
 	}
 
 	trblimitr |= (addr & PAGE_MASK);
+
+	trace_printk("Enable: TRFCR=%llx TRBBASER=%llx TRBLIMITR=%llx TRBPTR=%llx TRBTRG=%llx TRBSR=%llx\n",
+		     read_trfcr(),
+		     read_sysreg_s(SYS_TRBBASER_EL1),
+		     trblimitr,
+		     read_sysreg_s(SYS_TRBPTR_EL1),
+		     read_sysreg_s(SYS_TRBTRG_EL1),
+		     read_sysreg_s(SYS_TRBSR_EL1));
+
 	set_trbe_enabled(buf->cpudata, trblimitr);
 }
 
@@ -1202,6 +1218,9 @@ static int __arm_trbe_enable(struct trbe_buf *buf,
 {
 	int ret = 0;
 
+	trace_printk("COMPUTE: head=0x%lx size=0x%lx wakeup=0x%lx\n",
+		     handle->head, handle->size, handle->wakeup);
+
 	ret = trbe_compute_next(handle);
 	if (ret)
 		goto err;
@@ -1231,6 +1250,14 @@ static int arm_trbe_enable(struct coresight_device *csdev, enum cs_mode mode,
 	if (mode != CS_MODE_PERF)
 		return -EINVAL;
 
+	trace_printk("Start: TRFCR=%llx TRBBASER=%llx TRBLIMITR=%llx TRBPTR=%llx TRBTRG=%llx TRBSR=%llx\n",
+		     read_trfcr(),
+		     read_sysreg_s(SYS_TRBBASER_EL1),
+		     read_sysreg_s(SYS_TRBLIMITR_EL1),
+		     read_sysreg_s(SYS_TRBPTR_EL1),
+		     read_sysreg_s(SYS_TRBTRG_EL1),
+		     read_sysreg_s(SYS_TRBSR_EL1));
+
 	/* Buffer helpers need the CPU association while setting up tracing. */
 	buf->cpudata = cpudata;
 	ret = __arm_trbe_enable(buf, handle);
@@ -1259,6 +1286,14 @@ static int arm_trbe_disable(struct coresight_device *csdev)
 
 	trbe_drain_and_disable_local(cpudata);
 	clr_trbe_status();
+
+	trace_printk("Disable: TRFCR=%llx TRBBASER=%llx TRBLIMITR=%llx TRBPTR=%llx TRBTRG=%llx TRBSR=%llx\n",
+		     read_trfcr(),
+		     read_sysreg_s(SYS_TRBBASER_EL1),
+		     read_sysreg_s(SYS_TRBLIMITR_EL1),
+		     read_sysreg_s(SYS_TRBPTR_EL1),
+		     read_sysreg_s(SYS_TRBTRG_EL1),
+		     read_sysreg_s(SYS_TRBSR_EL1));
 
 	buf->cpudata = NULL;
 	cpudata->handle = NULL;
@@ -1521,6 +1556,14 @@ static irqreturn_t arm_trbe_irq_handler(int irq, void *dev)
 	clr_trbe_irq();
 	isb();
 
+	trace_printk("INT (IN): TRFCR=%llx TRBBASER=%llx TRBLIMITR=%llx TRBPTR=%llx TRBTRG=%llx TRBSR=%llx\n",
+		     trfcr,
+		     read_sysreg_s(SYS_TRBBASER_EL1),
+		     read_sysreg_s(SYS_TRBLIMITR_EL1),
+		     read_sysreg_s(SYS_TRBPTR_EL1),
+		     read_sysreg_s(SYS_TRBTRG_EL1),
+		     status);
+
 	act = trbe_get_fault_act(handle, status);
 	switch (act) {
 	case TRBE_FAULT_ACT_TRIG:
@@ -1546,8 +1589,26 @@ static irqreturn_t arm_trbe_irq_handler(int irq, void *dev)
 	 */
 	if (truncated) {
 		irq_work_run();
+
+		trace_printk("INT (TRUNCATED): TRFCR=%llx TRBBASER=%llx TRBLIMITR=%llx TRBPTR=%llx TRBTRG=%llx TRBSR=%llx truncated=%d\n",
+		     read_trfcr(),
+		     read_sysreg_s(SYS_TRBBASER_EL1),
+		     read_sysreg_s(SYS_TRBLIMITR_EL1),
+		     read_sysreg_s(SYS_TRBPTR_EL1),
+		     read_sysreg_s(SYS_TRBTRG_EL1),
+		     read_sysreg_s(SYS_TRBSR_EL1), truncated);
+
+
 		return IRQ_HANDLED;
 	}
+
+	trace_printk("INT (OUT): TRFCR=%llx TRBBASER=%llx TRBLIMITR=%llx TRBPTR=%llx TRBTRG=%llx TRBSR=%llx truncated=%d\n",
+		     read_trfcr(),
+		     read_sysreg_s(SYS_TRBBASER_EL1),
+		     read_sysreg_s(SYS_TRBLIMITR_EL1),
+		     read_sysreg_s(SYS_TRBPTR_EL1),
+		     read_sysreg_s(SYS_TRBTRG_EL1),
+		     read_sysreg_s(SYS_TRBSR_EL1), truncated);
 
 	ret = IRQ_HANDLED;
 out:
