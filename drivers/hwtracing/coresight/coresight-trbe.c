@@ -608,6 +608,7 @@ static void clr_trbe_status(void)
 	trbsr &= ~TRBSR_EL1_IRQ;
 	trbsr &= ~TRBSR_EL1_TRG;
 	trbsr &= ~TRBSR_EL1_WRAP;
+	trbsr &= ~TRBSR_EL1_EA;
 	trbsr &= ~TRBSR_EL1_EC_MASK;
 	trbsr &= ~TRBSR_EL1_BSC_MASK;
 	trbsr &= ~TRBSR_EL1_S;
