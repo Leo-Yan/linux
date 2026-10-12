@@ -720,6 +720,15 @@ static enum trbe_fault_action trbe_get_fault_act(struct perf_output_handle *hand
 	if (is_trbe_wrap(trbsr))
 		return TRBE_FAULT_ACT_WRAP;
 
+	if (is_trbe_irq(trbsr) &&
+	    !is_trbe_running(trbsr) &&
+	    ec == TRBSR_EL1_EC_OTHER &&
+	    bsc == TRBSR_EL1_BSC_NOT_STOPPED &&
+	    !is_trbe_trg(trbsr)) {
+		err_str = "Trace buffer access not allowed";
+		goto out_fatal;
+	}
+
 	return TRBE_FAULT_ACT_SPURIOUS;
 
 out_fatal:
