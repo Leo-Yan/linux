@@ -312,8 +312,9 @@ static void trbe_stop_and_truncate_event(struct perf_output_handle *handle)
 	 */
 	trbe_drain_and_disable_local(buf->cpudata);
 	perf_aux_output_flag(handle, PERF_AUX_FLAG_TRUNCATED);
-	perf_aux_output_end(handle, 0);
+	/* Disconnect the IRQ handle before dropping the AUX reference. */
 	*this_cpu_ptr(buf->cpudata->drvdata->handle) = NULL;
+	perf_aux_output_end(handle, 0);
 }
 
 /*
@@ -1139,6 +1140,7 @@ static int trbe_handle_overflow(struct perf_output_handle *handle)
 {
 	struct perf_event *event = handle->event;
 	struct trbe_buf *buf = etm_perf_sink_config(handle);
+	struct trbe_cpudata *cpudata = buf->cpudata;
 	unsigned long size;
 	struct etm_event_data *event_data;
 
@@ -1154,6 +1156,8 @@ static int trbe_handle_overflow(struct perf_output_handle *handle)
 		handle->head += size;
 
 	trbe_report_wrap_event(handle);
+	/* The old buffer may be freed after the AUX reference is dropped. */
+	*this_cpu_ptr(buf->cpudata->drvdata->handle) = NULL;
 	perf_aux_output_end(handle, size);
 	event_data = perf_aux_output_begin(handle, event);
 	if (!event_data) {
@@ -1163,8 +1167,7 @@ static int trbe_handle_overflow(struct perf_output_handle *handle)
 		 * is able to detect this with a disconnected handle
 		 * (handle->event = NULL).
 		 */
-		trbe_drain_and_disable_local(buf->cpudata);
-		*this_cpu_ptr(buf->cpudata->drvdata->handle) = NULL;
+		trbe_drain_and_disable_local(cpudata);
 		return -EINVAL;
 	}
 
