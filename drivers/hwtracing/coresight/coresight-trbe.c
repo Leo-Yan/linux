@@ -913,6 +913,7 @@ static unsigned long arm_trbe_update_buffer(struct coresight_device *csdev,
 		 * errors and as such buffer is empty.
 		 */
 		if (act != TRBE_FAULT_ACT_WRAP) {
+			perf_aux_output_flag(handle, PERF_AUX_FLAG_TRUNCATED);
 			size = 0;
 			goto done;
 		}
