@@ -708,6 +708,14 @@ static enum trbe_fault_action trbe_get_fault_act(struct perf_output_handle *hand
 		goto out_fatal;
 	}
 
+	/* An access not allowed stop can leave WRAP and TRG unchanged. */
+	if (is_trbe_irq(trbsr) && !is_trbe_running(trbsr) &&
+	    ec == TRBSR_EL1_EC_OTHER &&
+	    bsc == TRBSR_EL1_BSC_NOT_STOPPED) {
+		err_str = "Trace buffer access not allowed";
+		goto out_fatal;
+	}
+
 	if (is_trbe_wrap(trbsr))
 		return TRBE_FAULT_ACT_WRAP;
 
