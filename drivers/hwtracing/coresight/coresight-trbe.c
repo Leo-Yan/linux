@@ -1162,6 +1162,20 @@ static int trbe_handle_overflow(struct trbe_cpudata *cpudata)
 	if (!event_data)
 		return -EINVAL;
 
+	/*
+	 * Reload the buffer after perf_aux_output_begin() so it matches the
+	 * handle. A race with PERF_EVENT_IOC_SET_OUTPUT may select a buffer
+	 * that has not been installed on this CPU and has no valid cpudata.
+	 * If the buffer is missing or its CPU association does not match,
+	 * truncate the trace to stop the event. A subsequent normal restart
+	 * installs the buffer and its CPU association through sink enable.
+	 */
+	buf = etm_perf_sink_config(handle);
+	if (!buf || buf->cpudata != cpudata) {
+		trbe_truncate_event(handle);
+		return -EINVAL;
+	}
+
 	return __arm_trbe_enable(buf, handle);
 }
 
