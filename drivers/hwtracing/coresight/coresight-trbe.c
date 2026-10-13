@@ -69,6 +69,7 @@ struct trbe_buf {
 	int nr_pages;
 	void **pages;
 	bool snapshot;
+	/* CPU used to configure this buffer. */
 	struct trbe_cpudata *cpudata;
 };
 
@@ -137,6 +138,7 @@ struct trbe_save_state {
  * @trbe_align		- Software alignment used for the TRBPTR_EL1.
  * @cpu			- CPU this TRBE belongs to.
  * @mode		- Mode of current operation. (perf/disabled)
+ * @buf			- Buffer configuration retained for the enabled session.
  * @drvdata		- TRBE specific drvdata
  * @errata		- Bit map for the errata on this TRBE.
  */
@@ -1033,17 +1035,24 @@ static int arm_trbe_enable(struct coresight_device *csdev, enum cs_mode mode,
 	struct trbe_cpudata *cpudata = dev_get_drvdata(&csdev->dev);
 	struct perf_output_handle *handle = path->handle;
 	struct trbe_buf *buf = etm_perf_sink_config(handle);
+	int ret;
 
 	WARN_ON(cpudata->cpu != smp_processor_id());
 	WARN_ON(cpudata->drvdata != drvdata);
 	if (mode != CS_MODE_PERF)
 		return -EINVAL;
 
+	/* Buffer helpers need the CPU association while setting up tracing. */
+	buf->cpudata = cpudata;
+	ret = __arm_trbe_enable(buf, handle);
+	if (ret) {
+		buf->cpudata = NULL;
+		return ret;
+	}
+
 	cpudata->buf = buf;
 	cpudata->mode = mode;
-	buf->cpudata = cpudata;
-
-	return __arm_trbe_enable(buf, handle);
+	return 0;
 }
 
 static int arm_trbe_disable(struct coresight_device *csdev)
