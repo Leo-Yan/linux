@@ -1111,9 +1111,15 @@ static int trbe_handle_overflow(struct perf_output_handle *handle)
 static bool is_perf_trbe(struct perf_output_handle *handle)
 {
 	struct trbe_buf *buf = etm_perf_sink_config(handle);
-	struct trbe_cpudata *cpudata = buf->cpudata;
-	struct trbe_drvdata *drvdata = cpudata->drvdata;
+	struct trbe_cpudata *cpudata;
+	struct trbe_drvdata *drvdata;
 	int cpu = smp_processor_id();
+
+	if (!buf || !buf->cpudata)
+		return false;
+
+	cpudata = buf->cpudata;
+	drvdata = cpudata->drvdata;
 
 	WARN_ON(buf->trbe_hw_base != get_trbe_base_pointer());
 	WARN_ON(buf->trbe_limit != get_trbe_limit_pointer());
