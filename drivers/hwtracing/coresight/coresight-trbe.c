@@ -303,11 +303,8 @@ static void trbe_report_wrap_event(struct perf_output_handle *handle)
 
 static void trbe_truncate_event(struct perf_output_handle *handle)
 {
-	struct trbe_buf *buf = etm_perf_sink_config(handle);
-
 	perf_aux_output_flag(handle, PERF_AUX_FLAG_TRUNCATED);
 	perf_aux_output_end(handle, 0);
-	*this_cpu_ptr(buf->cpudata->drvdata->handle) = NULL;
 }
 
 /*
@@ -1012,7 +1009,6 @@ static int __arm_trbe_enable(struct trbe_buf *buf,
 	if (ret)
 		goto err;
 
-	*this_cpu_ptr(buf->cpudata->drvdata->handle) = handle;
 	trbe_enable_hw(buf);
 	return 0;
 err:
@@ -1042,6 +1038,7 @@ static int arm_trbe_enable(struct coresight_device *csdev, enum cs_mode mode,
 		return ret;
 	}
 
+	*this_cpu_ptr(drvdata->handle) = handle;
 	cpudata->buf = buf;
 	cpudata->mode = mode;
 	return 0;
@@ -1062,6 +1059,7 @@ static int arm_trbe_disable(struct coresight_device *csdev)
 	trbe_drain_and_disable_local(cpudata);
 	clr_trbe_status();
 
+	*this_cpu_ptr(drvdata->handle) = NULL;
 	buf->cpudata = NULL;
 	cpudata->buf = NULL;
 	cpudata->mode = CS_MODE_DISABLED;
@@ -1102,16 +1100,12 @@ static int trbe_handle_overflow(struct perf_output_handle *handle)
 	trbe_report_wrap_event(handle);
 	perf_aux_output_end(handle, size);
 	event_data = perf_aux_output_begin(handle, event);
-	if (!event_data) {
-		/*
-		 * We are unable to restart the trace collection,
-		 * thus leave the TRBE disabled. The etm-perf driver
-		 * is able to detect this with a disconnected handle
-		 * (handle->event = NULL).
-		 */
-		*this_cpu_ptr(buf->cpudata->drvdata->handle) = NULL;
+	/*
+	 * If trace collection cannot be restarted, leave TRBE disabled.
+	 * The etm-perf driver detects this through handle->event == NULL.
+	 */
+	if (!event_data)
 		return -EINVAL;
-	}
 
 	return __arm_trbe_enable(buf, handle);
 }
