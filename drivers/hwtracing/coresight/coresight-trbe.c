@@ -139,6 +139,7 @@ struct trbe_save_state {
  * @cpu			- CPU this TRBE belongs to.
  * @mode		- Mode of current operation. (perf/disabled)
  * @buf			- Buffer configuration retained for the enabled session.
+ * @handle		- Perf output handle from successful enable until disable.
  * @drvdata		- TRBE specific drvdata
  * @errata		- Bit map for the errata on this TRBE.
  */
@@ -149,6 +150,7 @@ struct trbe_cpudata {
 	int cpu;
 	enum cs_mode mode;
 	struct trbe_buf *buf;
+	struct perf_output_handle *handle;
 	struct trbe_drvdata *drvdata;
 	struct trbe_save_state save_state;
 	DECLARE_BITMAP(errata, TRBE_ERRATA_MAX);
@@ -156,7 +158,6 @@ struct trbe_cpudata {
 
 struct trbe_drvdata {
 	struct trbe_cpudata __percpu *cpudata;
-	struct perf_output_handle * __percpu *handle;
 	struct hlist_node hotplug_node;
 	int irq;
 	cpumask_t supported_cpus;
@@ -1092,7 +1093,7 @@ static int arm_trbe_enable(struct coresight_device *csdev, enum cs_mode mode,
 		return ret;
 	}
 
-	*this_cpu_ptr(drvdata->handle) = handle;
+	cpudata->handle = handle;
 	cpudata->buf = buf;
 	cpudata->mode = mode;
 	return 0;
@@ -1113,16 +1114,15 @@ static int arm_trbe_disable(struct coresight_device *csdev)
 	trbe_drain_and_disable_local(cpudata);
 	clr_trbe_status();
 
-	*this_cpu_ptr(drvdata->handle) = NULL;
 	buf->cpudata = NULL;
+	cpudata->handle = NULL;
 	cpudata->buf = NULL;
 	cpudata->mode = CS_MODE_DISABLED;
 	return 0;
 }
 
-static void trbe_handle_spurious(struct perf_output_handle *handle)
+static void trbe_handle_spurious(struct trbe_cpudata *cpudata)
 {
-	struct trbe_buf *buf = etm_perf_sink_config(handle);
 	u64 trblimitr = read_sysreg_s(SYS_TRBLIMITR_EL1);
 
 	/*
@@ -1130,11 +1130,12 @@ static void trbe_handle_spurious(struct perf_output_handle *handle)
 	 * back without modifying the buffer parameters to
 	 * retain the trace collected so far.
 	 */
-	set_trbe_enabled(buf->cpudata, trblimitr);
+	set_trbe_enabled(cpudata, trblimitr);
 }
 
-static int trbe_handle_overflow(struct perf_output_handle *handle)
+static int trbe_handle_overflow(struct trbe_cpudata *cpudata)
 {
+	struct perf_output_handle *handle = cpudata->handle;
 	struct perf_event *event = handle->event;
 	struct trbe_buf *buf = etm_perf_sink_config(handle);
 	unsigned long size;
@@ -1204,9 +1205,8 @@ static u64 cpu_prohibit_trace(void)
 
 static irqreturn_t arm_trbe_irq_handler(int irq, void *dev)
 {
-	struct perf_output_handle **handle_ptr = dev;
-	struct perf_output_handle *handle = *handle_ptr;
-	struct trbe_buf *buf;
+	struct trbe_cpudata *cpudata = dev;
+	struct perf_output_handle *handle = cpudata->handle;
 	enum trbe_fault_action act;
 	u64 status;
 	bool truncated = false;
@@ -1233,18 +1233,17 @@ static irqreturn_t arm_trbe_irq_handler(int irq, void *dev)
 	 * Ensure the trace is visible to the CPUs and
 	 * any external aborts have been resolved.
 	 */
-	buf = etm_perf_sink_config(handle);
-	trbe_drain_and_disable_local(buf->cpudata);
+	trbe_drain_and_disable_local(cpudata);
 	clr_trbe_irq();
 	isb();
 
 	act = trbe_get_fault_act(handle, status);
 	switch (act) {
 	case TRBE_FAULT_ACT_WRAP:
-		truncated = !!trbe_handle_overflow(handle);
+		truncated = !!trbe_handle_overflow(cpudata);
 		break;
 	case TRBE_FAULT_ACT_SPURIOUS:
-		trbe_handle_spurious(handle);
+		trbe_handle_spurious(cpudata);
 		break;
 	case TRBE_FAULT_ACT_FATAL:
 		trbe_truncate_event(handle);
@@ -1508,10 +1507,6 @@ static int arm_trbe_probe_coresight(struct trbe_drvdata *drvdata)
 {
 	int cpu;
 
-	drvdata->cpudata = alloc_percpu(typeof(*drvdata->cpudata));
-	if (!drvdata->cpudata)
-		return -ENOMEM;
-
 	for_each_cpu(cpu, &drvdata->supported_cpus) {
 		/* If we fail to probe the CPU, let us defer it to hotplug callbacks */
 		if (smp_call_function_single(cpu, arm_trbe_probe_cpu, drvdata, 1))
@@ -1532,7 +1527,6 @@ static int arm_trbe_remove_coresight(struct trbe_drvdata *drvdata)
 		smp_call_function_single(cpu, arm_trbe_disable_cpu, drvdata, 1);
 		arm_trbe_remove_coresight_cpu(drvdata, cpu);
 	}
-	free_percpu(drvdata->cpudata);
 	return 0;
 }
 
@@ -1619,14 +1613,14 @@ static int arm_trbe_probe_irq(struct platform_device *pdev,
 
 	cpumask_copy(&drvdata->supported_cpus, affinity);
 
-	drvdata->handle = alloc_percpu(struct perf_output_handle *);
-	if (!drvdata->handle)
+	drvdata->cpudata = alloc_percpu(typeof(*drvdata->cpudata));
+	if (!drvdata->cpudata)
 		return -ENOMEM;
 
 	ret = request_percpu_irq_affinity(drvdata->irq, arm_trbe_irq_handler, DRVNAME,
-					  affinity, drvdata->handle);
+					  affinity, drvdata->cpudata);
 	if (ret) {
-		free_percpu(drvdata->handle);
+		free_percpu(drvdata->cpudata);
 		return ret;
 	}
 	return 0;
@@ -1634,8 +1628,8 @@ static int arm_trbe_probe_irq(struct platform_device *pdev,
 
 static void arm_trbe_remove_irq(struct trbe_drvdata *drvdata)
 {
-	free_percpu_irq(drvdata->irq, drvdata->handle);
-	free_percpu(drvdata->handle);
+	free_percpu_irq(drvdata->irq, drvdata->cpudata);
+	free_percpu(drvdata->cpudata);
 }
 
 static int arm_trbe_device_probe(struct platform_device *pdev)
