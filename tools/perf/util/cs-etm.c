@@ -123,6 +123,9 @@ struct cs_etm_queue {
 	u8 pending_timestamp_chan_id;
 	enum cs_etm_format format;
 	u64 offset;
+	/* Expected logical AUX offset after the last fetched buffer. */
+	u64 next_aux_offset;
+	bool have_aux_offset;
 	const unsigned char *buf;
 	size_t buf_len, buf_used;
 	/* Conversion between traceID and index in traceid_queues array */
@@ -1495,6 +1498,21 @@ cs_etm__get_trace(struct cs_etm_queue *etmq)
 	    (old_buffer->cpu.cpu == -1 || aux_buffer->cpu.cpu == -1 ||
 	     old_buffer->cpu.cpu != aux_buffer->cpu.cpu))
 		etmq->reset_decoder = true;
+
+	/*
+	 * Snapshot clipping or missing AUX records can leave a gap between
+	 * fragments. Check logical AUX offsets, as etmq->offset only counts
+	 * bytes submitted to the decoder. Internally split buffers retain
+	 * the original offset and mark subsequent pieces as consecutive.
+	 */
+	if (etmq->have_aux_offset && !aux_buffer->consecutive &&
+	    aux_buffer->offset != etmq->next_aux_offset)
+		etmq->reset_decoder = true;
+
+	if (!etmq->have_aux_offset || !aux_buffer->consecutive)
+		etmq->next_aux_offset = aux_buffer->offset;
+	etmq->next_aux_offset += aux_buffer->size;
+	etmq->have_aux_offset = true;
 
 	return 0;
 }
