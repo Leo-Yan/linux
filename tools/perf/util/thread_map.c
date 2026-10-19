@@ -336,28 +336,54 @@ void thread_map__read_comms(struct perf_thread_map *threads)
 		comm_init(threads, i);
 }
 
-static void thread_map__copy_event(struct perf_thread_map *threads,
-				   struct perf_record_thread_map *event)
+int thread_map__append_event(struct perf_thread_map **map,
+			    const struct perf_record_thread_map *event)
 {
-	unsigned i;
+	struct perf_thread_map *threads = *map;
+	bool new_map = !threads;
+	int old_nr = threads ? threads->nr : 0;
+	int nr, i;
 
-	threads->nr = (int) event->nr;
+	/*
+	 * Trust event->nr to describe chunks of a valid thread map, whose total
+	 * count and allocation size are representable without overflow.
+	 */
+	nr = old_nr + event->nr;
 
-	for (i = 0; i < event->nr; i++) {
-		perf_thread_map__set_pid(threads, i, (pid_t) event->entries[i].pid);
-		threads->map[i].comm = strndup(event->entries[i].comm, 16);
+	threads = perf_thread_map__realloc(threads, nr);
+	if (!threads)
+		return -ENOMEM;
+	if (new_map) {
+		threads->nr = 0;
+		refcount_set(&threads->refcnt, 1);
 	}
+	*map = threads;
 
-	refcount_set(&threads->refcnt, 1);
+	for (i = 0; i < nr - old_nr; i++) {
+		struct thread_map_data *entry = &threads->map[old_nr + i];
+
+		entry->pid = (pid_t)event->entries[i].pid;
+		entry->comm = strndup(event->entries[i].comm, sizeof(event->entries[i].comm));
+		if (!entry->comm)
+			goto out_free;
+	}
+	threads->nr = nr;
+	return 0;
+
+out_free:
+	while (i--)
+		zfree(&threads->map[old_nr + i].comm);
+	return -ENOMEM;
 }
 
 struct perf_thread_map *thread_map__new_event(struct perf_record_thread_map *event)
 {
-	struct perf_thread_map *threads;
+	struct perf_thread_map *threads = NULL;
 
-	threads = thread_map__alloc(event->nr);
-	if (threads)
-		thread_map__copy_event(threads, event);
+	if (thread_map__append_event(&threads, event)) {
+		perf_thread_map__put(threads);
+		return NULL;
+	}
 
 	return threads;
 }

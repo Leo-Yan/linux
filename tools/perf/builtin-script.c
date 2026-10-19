@@ -162,6 +162,7 @@ struct perf_script {
 	bool			show_cgroup_events;
 	bool			show_text_poke_events;
 	bool			allocated;
+	bool			threads_is_appending;
 	bool			per_event_dump;
 	bool			stitch_lbr;
 	struct evswitch		evswitch;
@@ -3416,6 +3417,10 @@ static int __cmd_script(struct perf_script *script)
 	}
 
 	ret = perf_session__process_events(script->session);
+	if (!ret && !session_done() && script->threads_is_appending) {
+		pr_err("Incomplete thread map: missing final record.\n");
+		ret = -EINVAL;
+	}
 
 	if (script->per_event_dump)
 		perf_script__exit_per_event_dump_stats(script);
@@ -3975,6 +3980,10 @@ static int set_maps(struct perf_script *script)
 {
 	struct evlist *evlist = script->session->evlist;
 
+	/* Appending can move the map, so share it only after the final record. */
+	if (script->threads_is_appending)
+		return 0;
+
 	if (!script->cpus || !script->threads)
 		return 0;
 
@@ -3996,18 +4005,20 @@ int process_thread_map_event(const struct perf_tool *tool,
 			     union perf_event *event)
 {
 	struct perf_script *script = container_of(tool, struct perf_script, tool);
+	int ret;
 
 	if (dump_trace)
 		perf_event__fprintf_thread_map(event, stdout);
 
-	if (script->threads) {
+	if (script->threads && !script->threads_is_appending) {
 		pr_warning("Extra thread map event, ignoring.\n");
 		return 0;
 	}
 
-	script->threads = thread_map__new_event(&event->thread_map);
-	if (!script->threads)
-		return -ENOMEM;
+	ret = thread_map__append_event(&script->threads, &event->thread_map);
+	if (ret)
+		return ret;
+	script->threads_is_appending = event->header.misc & PERF_RECORD_MISC_THREAD_MAP_MORE;
 
 	return set_maps(script);
 }

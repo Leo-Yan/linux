@@ -13,6 +13,9 @@ struct perf_thread_map *thread_map__new_by_pid(pid_t pid);
 struct perf_thread_map *thread_map__new_by_tid(pid_t tid);
 struct perf_thread_map *thread_map__new(pid_t pid, pid_t tid);
 struct perf_thread_map *thread_map__new_event(struct perf_record_thread_map *event);
+/* Only append to a private map that has not been shared with an evlist. */
+int thread_map__append_event(struct perf_thread_map **map,
+			    const struct perf_record_thread_map *event);
 
 struct perf_thread_map *thread_map__new_str(const char *pid,
 		const char *tid, bool all_threads);
