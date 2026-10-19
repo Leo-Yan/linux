@@ -147,6 +147,7 @@ struct perf_stat {
 	u64			 bytes_written;
 	struct perf_tool	 tool;
 	bool			 maps_allocated;
+	bool			 threads_is_appending;
 	struct perf_cpu_map	*cpus;
 	struct perf_thread_map *threads;
 	enum aggr_mode		 aggr_mode;
@@ -2280,6 +2281,10 @@ int process_stat_config_event(const struct perf_tool *tool,
 
 static int set_maps(struct perf_stat *st)
 {
+	/* Appending can move the map, so share it only after the final record. */
+	if (st->threads_is_appending)
+		return 0;
+
 	if (!st->cpus || !st->threads)
 		return 0;
 
@@ -2301,15 +2306,17 @@ int process_thread_map_event(const struct perf_tool *tool,
 			     union perf_event *event)
 {
 	struct perf_stat *st = container_of(tool, struct perf_stat, tool);
+	int ret;
 
-	if (st->threads) {
+	if (st->threads && !st->threads_is_appending) {
 		pr_warning("Extra thread map event, ignoring.\n");
 		return 0;
 	}
 
-	st->threads = thread_map__new_event(&event->thread_map);
-	if (!st->threads)
-		return -ENOMEM;
+	ret = thread_map__append_event(&st->threads, &event->thread_map);
+	if (ret)
+		return ret;
+	st->threads_is_appending = event->header.misc & PERF_RECORD_MISC_THREAD_MAP_MORE;
 
 	return set_maps(st);
 }
@@ -2405,11 +2412,19 @@ static int __cmd_report(int argc, const char **argv)
 	evsel_list         = session->evlist;
 
 	ret = perf_session__process_events(session);
-	if (ret)
-		return ret;
+	if (!ret && !session_done() && perf_stat.threads_is_appending) {
+		pr_err("Incomplete thread map: missing final record.\n");
+		ret = -EINVAL;
+	}
 
+	perf_thread_map__put(perf_stat.threads);
+	perf_cpu_map__put(perf_stat.cpus);
+	perf_stat.threads = NULL;
+	perf_stat.threads_is_appending = false;
+	perf_stat.cpus = NULL;
+	perf_stat.maps_allocated = false;
 	perf_session__delete(session);
-	return 0;
+	return ret;
 }
 
 static void setup_system_wide(int forks)
