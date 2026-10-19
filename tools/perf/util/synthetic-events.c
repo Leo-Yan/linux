@@ -1326,16 +1326,18 @@ int perf_event__synthesize_kernel_mmap(const struct perf_tool *tool,
 	return perf_event__synthesize_extra_kmaps(tool, process, machine);
 }
 
-int perf_event__synthesize_thread_map2(const struct perf_tool *tool,
-				      struct perf_thread_map *threads,
-				      perf_event__handler_t process,
-				      struct machine *machine)
+static int __perf_event__synthesize_thread_map2(const struct perf_tool *tool,
+					       struct perf_thread_map *threads,
+					       perf_event__handler_t process,
+					       struct machine *machine,
+					       int offset, int nr)
 {
 	union perf_event *event;
-	int i, err, size;
+	int i, err;
+	size_t size;
 
 	size  = sizeof(event->thread_map);
-	size +=	threads->nr * sizeof(event->thread_map.entries[0]);
+	size += nr * sizeof(event->thread_map.entries[0]);
 
 	event = zalloc(size);
 	if (!event)
@@ -1343,16 +1345,18 @@ int perf_event__synthesize_thread_map2(const struct perf_tool *tool,
 
 	event->header.type = PERF_RECORD_THREAD_MAP;
 	event->header.size = size;
-	event->thread_map.nr = threads->nr;
+	event->header.misc = offset + nr < threads->nr ?
+			     PERF_RECORD_MISC_THREAD_MAP_MORE : 0;
+	event->thread_map.nr = nr;
 
-	for (i = 0; i < threads->nr; i++) {
+	for (i = 0; i < nr; i++) {
 		struct perf_record_thread_map_entry *entry = &event->thread_map.entries[i];
-		char *comm = perf_thread_map__comm(threads, i);
+		char *comm = perf_thread_map__comm(threads, offset + i);
 
 		if (!comm)
 			comm = (char *) "";
 
-		entry->pid = perf_thread_map__pid(threads, i);
+		entry->pid = perf_thread_map__pid(threads, offset + i);
 		strncpy((char *) &entry->comm, comm, sizeof(entry->comm));
 	}
 
@@ -1360,6 +1364,28 @@ int perf_event__synthesize_thread_map2(const struct perf_tool *tool,
 
 	free(event);
 	return err;
+}
+
+int perf_event__synthesize_thread_map2(const struct perf_tool *tool,
+				      struct perf_thread_map *threads,
+				      perf_event__handler_t process,
+				      struct machine *machine)
+{
+	const int max_nr = (UINT16_MAX - sizeof(struct perf_record_thread_map)) /
+			   sizeof(struct perf_record_thread_map_entry);
+	int offset = 0;
+	int nr, err;
+
+	do {
+		nr = min(threads->nr - offset, max_nr);
+		err = __perf_event__synthesize_thread_map2(tool, threads, process, machine,
+							 offset, nr);
+		if (err)
+			return err;
+		offset += nr;
+	} while (offset < threads->nr);
+
+	return 0;
 }
 
 struct synthesize_cpu_map_data {

@@ -406,6 +406,14 @@ struct perf_record_thread_map_entry {
 	char			 comm[16];
 };
 
+/*
+ * PERF_RECORD_MISC_THREAD_MAP_MORE means another THREAD_MAP record follows
+ * for the same map. A clear bit marks the final record.
+ * Each nr counts only that record's entries; concatenate records in order.
+ * A map fitting in one record has the bit clear.
+ */
+#define PERF_RECORD_MISC_THREAD_MAP_MORE (1U << 0)
+
 struct perf_record_thread_map {
 	struct perf_event_header		 header;
 	__u64					 nr;
