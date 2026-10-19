@@ -651,6 +651,31 @@ struct auxtrace_error_event {
 	char msg[MAX_AUXTRACE_ERROR_MSG];
 };
 
+	PERF_RECORD_THREAD_MAP			= 73,
+
+Describes threads by their position in the thread map. PERF_RECORD_STAT
+records refer to these positions through their thread field.
+
+struct thread_map_entry {
+	uint64_t pid;
+	char comm[16];
+};
+
+struct thread_map_event {
+	struct perf_event_header header;
+	uint64_t nr;
+	struct thread_map_entry entries[nr];
+};
+
+Large maps are split into records that fit in the 16-bit header.size field.
+PERF_RECORD_MISC_THREAD_MAP_MORE (1 << 0) in header.misc is set when another
+record follows and clear for the final record. Each record's nr counts only
+its own entries. Concatenate entries in record order, preserving their
+positions, until a record with MORE clear completes the map. Consumers must
+assemble the complete map before allocating per-thread counters or processing
+statistics. Split maps require readers that support this convention; maps
+that fit in one record are unchanged.
+
 	PERF_RECORD_HEADER_FEATURE		= 80,
 
 Describes a header feature. These are records used in pipe-mode that
